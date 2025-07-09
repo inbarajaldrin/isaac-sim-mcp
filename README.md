@@ -14,8 +14,8 @@ The MCP Server and its extension leverage the Model Context Protocol (MCP) frame
 
 - NVIDIA Isaac Sim 4.2.0 or higher
 - Python 3.9+
-- Cursor AI editor for MCP integration
-
+- Claude Ai desktop version on Ubuntu - [https://github.com/aaddrick/claude-desktop-debian](https://github.com/aaddrick/claude-desktop-debian)
+  
 ## **Mandatory** Pre-requisite
 
 - Install uv/uvx: [https://github.com/astral-sh/uv](https://github.com/astral-sh/uv)
@@ -68,16 +68,19 @@ The extension should be listening at **localhost:8766** by default.
    uv pip install "mcp[cli]"
    uv run /home/ubuntu/Documents/isaac-sim-mcp/isaac_mcp/server.py
    ```
-2. Start Cursor and open the folder `~/Documents/isaac-sim-mcp`
-3. Go to Cursor preferences, choose MCP and add a global MCP server:
+2. Start Claude and go to file-settings-developer-edit_config to locate the claude_desktop_config.json file
+3. Add the following:
 
 ```json
 {
-    "mcpServers": {
-        "isaac-sim": {
-            "command": "uv run /home/ubuntu/Documents/isaac-sim-mcp/isaac_mcp/server.py"
-        }
+  "mcpServers": {
+    "isaac-sim": {
+      "command": "/home/ubuntu/Documents/isaac-sim-mcp/mcp_venv/bin/python",
+      "args": [
+        "/home/ubuntu/Documents/isaac-sim-mcp/isaac_mcp/server.py"
+      ]
     }
+  }
 }
 ```
 
