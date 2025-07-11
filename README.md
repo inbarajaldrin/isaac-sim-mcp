@@ -2,7 +2,7 @@
 
 The MCP Server and its extension leverage the Model Context Protocol (MCP) framework to enable natural language control of NVIDIA Isaac Sim, transforming conversational AI inputs into precise simulation manipulation. This expansion bridges the MCP ecosystem with embodied intelligence applications.
 
-[Youtube tutorial](https://youtu.be/2QzYPUcHGPE)
+[Youtube tutorial](https://youtu.be/8LsHCGvJaek)
 
 ## Features
 
