@@ -27,7 +27,7 @@ The MCP Server and its extension leverage the Model Context Protocol (MCP) frame
 
 ```bash
 cd ~/Documents
-git clone https://github.com/inbarajaldrin/isaac-sim-mcp
+git clone https://github.com/omni-mcp/isaac-sim-mcp
 ```
 
 ### Install and Enable Extension
