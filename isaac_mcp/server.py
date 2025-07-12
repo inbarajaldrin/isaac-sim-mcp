@@ -276,109 +276,6 @@ def get_scene_info(ctx: Context) -> str:
         # return f"Error getting scene info: {str(e)}"
         return {"status": "error", "error": str(e), "message": "Error getting scene info"}
 
-# @mcp.tool()
-# def get_object_info(ctx: Context, object_name: str) -> str:
-#     """
-#     Get detailed information about a specific object in the Isaac scene.
-    
-#     Parameters:
-#     - object_name: The name of the object to get information about
-#     """
-#     try:
-#         isaac = get_isaac_connection()
-#         result = isaac.send_command("get_object_info", {"name": object_name})
-        
-#         # Just return the JSON representation of what Isaac sent us
-#         return json.dumps(result, indent=2)
-#     except Exception as e:
-#         logger.error(f"Error getting object info from Isaac: {str(e)}")
-#         return f"Error getting object info: {str(e)}"
-
-@mcp.tool("create_physics_scene")
-def create_physics_scene(
-    objects: List[Dict[str, Any]] = [],
-    floor: bool = True,
-    gravity: List[float] = [0,  -0.981, 0],
-    scene_name: str = "physics_scene"
-) -> Dict[str, Any]:
-    """Create a physics scene with multiple objects. Before create physics scene, you need to call get_scene_info() first to verify availability of connection.
-    
-    Args:
-        objects: List of objects to create. Each object should have at least 'type' and 'position'. 
-        objects  = [
-        {"path": "/World/Cube", "type": "Cube", "size": 20, "position": [0, 100, 0]},
-        {"path": "/World/Sphere", "type": "Sphere", "radius": 5, "position": [5, 200, 0]},
-        {"path": "/World/Cone", "type": "Cone", "height": 8, "radius": 3, "position": [-5, 150, 0]}
-         ]
-        floor: Whether to create a floor. deafult is True
-        gravity: The gravity vector. Default is [0, 0, -981.0] (cm/s^2).
-        scene_name: The name of the scene. deafult is "physics_scene"
-        
-    Returns:
-        Dictionary with result information.
-    """
-    params = {"objects": objects, "floor": floor}
-    
-    if gravity is not None:
-        params["gravity"] = gravity
-    if scene_name is not None:
-        params["scene_name"] = scene_name
-    try:
-        # Get the global connection
-        isaac = get_isaac_connection()
-        
-        result = isaac.send_command("create_physics_scene", params)
-        return f"create_physics_scene successfully: {result.get('result', '')}, {result.get('message', '')}"
-    except Exception as e:
-        logger.error(f"Error create_physics_scene: {str(e)}")
-        # return f"Error create_physics_scene: {str(e)}"
-        return {"status": "error", "error": str(e), "message": "Error create_physics_scene"}
-    
-@mcp.tool("create_robot")
-def create_robot(robot_type: str = "g1", position: List[float] = [0, 0, 0]) -> str:
-    """Create a robot in the Isaac scene. Directly create robot prim in stage at the right position. For any creation of robot, you need to call create_physics_scene() first. call create_robot() as first attmpt beofre call execute_script().
-    
-    Args:
-        robot_type: The type of robot to create. Available options:
-            - "franka": Franka Emika Panda robot
-            - "jetbot": NVIDIA JetBot robot
-            - "carter": Carter delivery robot
-            - "g1": Unitree G1 quadruped robot (default)
-            - "go1": Unitree Go1 quadruped robot
-        
-    Returns:
-        String with result information.
-    """
-    isaac = get_isaac_connection()
-    result = isaac.send_command("create_robot", {"robot_type": robot_type, "position": position})
-    return f"create_robot successfully: {result.get('result', '')}, {result.get('message', '')}"
-
-@mcp.tool("omni_kit_command")
-def omni_kit_command(command: str = "CreatePrim", prim_type: str = "Sphere") -> str:
-    """Execute an Omni Kit command.
-    
-    Args:
-        command: The Omni Kit command to execute.
-        prim_type: The primitive type for the command.
-        
-    Returns:
-        String with result information.
-    """
-    try:
-        # Get the global connection
-        isaac = get_isaac_connection()
-        
-        result = isaac.send_command("omini_kit_command", {
-            "command": command,
-            "prim_type": prim_type
-        })
-        return f"Omni Kit command executed successfully: {result.get('message', '')}"
-    except Exception as e:
-        logger.error(f"Error executing Omni Kit command: {str(e)}")
-        # return f"Error executing Omni Kit command: {str(e)}"
-        return {"status": "error", "error": str(e), "message": "Error executing Omni Kit command"}
-
-
 @mcp.tool()
 def execute_script(ctx: Context, code: str) -> str:
     """
@@ -451,304 +348,306 @@ simulation_context.stop()
         logger.error(f"Error executing code: {str(e)}")
         # return f"Error executing code: {str(e)}"
         return {"status": "error", "error": str(e), "message": "Error executing code"}
+
+    
+@mcp.tool()
+def list_prims() -> str:
+    """
+    List all prim paths in the current USD scene.
+    Useful for discovering available objects before moving, reading poses, or other operations.
+    
+    Example:
+        list_prims()
+    """
+    try:
+        isaac = get_isaac_connection()
+        result = isaac.send_command("list_prims")
+        
+        if result.get("status") == "success":
+            prims = result.get("prims", [])
+            
+            response = f"Prims in scene ({len(prims)}):\n\n"
+            
+            for prim in prims:
+                path = prim['path']
+                name = prim['name']
+                prim_type = prim['type']
                 
-@mcp.prompt()
-def asset_creation_strategy() -> str:
-    """Defines the preferred strategy for creating assets in Isaac Sim"""
-    return """
-    0. Before anything, always check the scene from get_scene_info(), retrive rool path of assset through return value of assets_root_path.
-    1. If the scene is empty, create a physics scene with create_physics_scene()
-    2. if execute script due to communication error, then retry 3 times at most
-
-    3. For Franka robot simulation, the code should be like this:
-from omni.isaac.core import SimulationContext
-from omni.isaac.core.utils.prims import create_prim
-from omni.isaac.core.utils.stage import add_reference_to_stage, is_stage_loading
-from omni.isaac.nucleus import get_assets_root_path
-
-assets_root_path = get_assets_root_path()
-asset_path = assets_root_path + "/Isaac/Robots/Franka/franka_alt_fingers.usd"
-add_reference_to_stage(asset_path, "/Franka")
-#create_prim("/DistantLight", "DistantLight")
+                # Format: path (type) or path [name] (type) if name differs
+                if name and name != path.split('/')[-1]:
+                    response += f"{path} [{name}] ({prim_type})\n"
+                else:
+                    response += f"{path} ({prim_type})\n"
+            
+            return response
+        else:
+            return f"Error listing prims: {result.get('message', 'Unknown error')}"
+            
+    except Exception as e:
+        logger.error(f"Error listing prims: {str(e)}")
+        return f"Error listing prims: {str(e)}"
 
 
-# need to initialize physics getting any articulation..etc
-simulation_context = SimulationContext()
-simulation_context.initialize_physics()
-simulation_context.play()
-
-for i in range(1000):
-    simulation_context.step(render=True)
-
-simulation_context.stop()
-
-    4. For Franka robot control, the code should be like this:
-    
-from omni.isaac.core import SimulationContext
-from omni.isaac.core.utils.prims import create_prim
-from omni.isaac.core.utils.stage import add_reference_to_stage, is_stage_loading
-from omni.isaac.nucleus import get_assets_root_path
-from pxr import UsdPhysics
-
-def create_physics_scene(stage, scene_path="/World/PhysicsScene"):
-    if not stage.GetPrimAtPath(scene_path):
-        UsdPhysics.Scene.Define(stage, scene_path)
-    
-    return stage.GetPrimAtPath(scene_path)
-
-stage = omni.usd.get_context().get_stage()
-physics_scene = create_physics_scene(stage)
-if not physics_scene:
-    raise RuntimeError("Failed to create or find physics scene")
-import omni.physics.tensors as physx
-
-def create_simulation_view(stage):
-    sim_view = physx.create_simulation_view(stage)
-    if not sim_view:
-        carb.log_error("Failed to create simulation view")
-        return None
-    
-    return sim_view
-
-sim_view = create_simulation_view(stage)
-if not sim_view:
-    raise RuntimeError("Failed to create simulation view")
-
-simulation_context = SimulationContext()
-assets_root_path = get_assets_root_path()
-asset_path = assets_root_path + "/Isaac/Robots/Franka/franka_alt_fingers.usd"
-add_reference_to_stage(asset_path, "/Franka")
-#create_prim("/DistantLight", "DistantLight")
-
-# need to initialize physics getting any articulation..etc
-simulation_context.initialize_physics()
-art = Articulation("/Franka")
-art.initialize()
-dof_ptr = art.get_dof_index("panda_joint2")
-
-simulation_context.play()
-# NOTE: before interacting with dc directly you need to step physics for one step at least
-# simulation_context.step(render=True) which happens inside .play()
-for i in range(1000):
-    art.set_joint_positions([-1.5], [dof_ptr])
-    simulation_context.step(render=True)
-
-simulation_context.stop()
-
-    5. For Jetbot simulation, the code should be like this:
-import carb
-import numpy as np
-from omni.isaac.core import World
-from omni.isaac.core import SimulationContext
-from omni.isaac.core.utils.prims import create_prim
-from omni.isaac.nucleus import get_assets_root_path
-from omni.isaac.wheeled_robots.controllers.differential_controller import DifferentialController
-from omni.isaac.wheeled_robots.robots import WheeledRobot
-
-simulation_context = SimulationContext()
-simulation_context.initialize_physics()
-
-my_world = World(stage_units_in_meters=1.0)
-
-assets_root_path = get_assets_root_path()
-if assets_root_path is None:
-    carb.log_error("Could not find Isaac Sim assets folder")
-jetbot_asset_path = assets_root_path + "/Isaac/Robots/Jetbot/jetbot.usd"
-my_jetbot = my_world.scene.add(
-    WheeledRobot(
-        prim_path="/World/Jetbot",
-        name="my_jetbot",
-        wheel_dof_names=["left_wheel_joint", "right_wheel_joint"],
-        create_robot=True,
-        usd_path=jetbot_asset_path,
-        position=np.array([0, 0.0, 2.0]),
-    )
-)
-
-
-create_prim("/DistantLight", "DistantLight")
-# need to initialize physics getting any articulation..etc
-
-
-my_world.scene.add_default_ground_plane()
-my_controller = DifferentialController(name="simple_control", wheel_radius=0.03, wheel_base=0.1125)
-my_world.reset()
-
-simulation_context.play()
-for i in range(10):
-    simulation_context.step(render=True) 
-
-i = 0
-reset_needed = False
-while i < 2000:
-    my_world.step(render=True)
-    if my_world.is_stopped() and not reset_needed:
-        reset_needed = True
-    if my_world.is_playing():
-        if reset_needed:
-            my_world.reset()
-            my_controller.reset()
-            reset_needed = False
-        if i >= 0 and i < 1000:
-            # forward
-            my_jetbot.apply_wheel_actions(my_controller.forward(command=[0.05, 0]))
-            print(my_jetbot.get_linear_velocity())
-        elif i >= 1000 and i < 1300:
-            # rotate
-            my_jetbot.apply_wheel_actions(my_controller.forward(command=[0.0, np.pi / 12]))
-            print(my_jetbot.get_angular_velocity())
-        elif i >= 1300 and i < 2000:
-            # forward
-            my_jetbot.apply_wheel_actions(my_controller.forward(command=[0.05, 0]))
-        elif i == 2000:
-            i = 0
-        i += 1
-simulation_context.stop()
-
-6. For G1 simulation, the code should be like this see g1_ok.py
-
-
+@mcp.tool()
+def import_isaac_robot(robot_name: str = None, isaac_version: str = "4.5", 
+                      position: list = None, orientation: list = None,
+                      orientation_format: str = "degrees", list_all: bool = False) -> str:
     """
-
-
-def _process_bbox(original_bbox: list[float] | list[int] | None) -> list[int] | None:
-    if original_bbox is None:
-        return None
-    if all(isinstance(i, int) for i in original_bbox):
-        return original_bbox
-    if any(i<=0 for i in original_bbox):
-        raise ValueError("Incorrect number range: bbox must be bigger than zero!")
-    return [int(float(i) / max(original_bbox) * 100) for i in original_bbox] if original_bbox else None
-
-
-#@mcp.tool()
-def get_beaver3d_status(ctx: Context) -> str:
-    """
-    TODO: Get the status of Beaver3D.
-    """
-    return "Beaver3D service is Available"
-
-
-
-@mcp.tool("generate_3d_from_text_or_image")
-def generate_3d_from_text_or_image(
-    ctx: Context,
-    text_prompt: str = None,
-    image_url: str = None,
-    position: List[float] = [0, 0, 50],
-    scale: List[float] = [10, 10, 10]
-) -> str:
-    """
-    Generate a 3D model from text or image, load it into the scene and transform it.
+    Import a robot from Isaac Sim assets or list available robots.
     
     Args:
-        text_prompt (str, optional): Text prompt for 3D generation
-        image_url (str, optional): URL of image for 3D generation
-        position (list, optional): Position to place the model [x, y, z]
-        scale (list, optional): Scale of the model [x, y, z]
-        
-    Returns:
-        String with the task_id and prim_path information
-    """
-    if not (text_prompt or image_url):
-        return "Error: Either text_prompt or image_url must be provided"
+        robot_name: Name of the robot to import (optional, will list available if not provided)
+        isaac_version: Isaac Sim version to use (default: "4.5", options: "4.1", "4.2", "4.5")
+        position: [x, y, z] position coordinates (optional, defaults to [0, 0, 0])
+        orientation: Orientation values (optional, defaults to no rotation)
+        orientation_format: "degrees", "radians", or "quaternion" (default: degrees)
+        list_all: If True, just list all available robots without importing
     
-    try:
-        # Get the global connection
-        isaac = get_isaac_connection()
+    Examples:
+        # List all available robots in Isaac 4.5
+        import_isaac_robot(list_all=True)
         
-        result = isaac.send_command("generate_3d_from_text_or_image", {
-            "text_prompt": text_prompt,
-            "image_url": image_url,
+        # List all available robots in Isaac 4.2
+        import_isaac_robot(isaac_version="4.2", list_all=True)
+        
+        # Import UR5e robot at default position
+        import_isaac_robot("ur5e")
+        
+        # Import Franka robot at specific position and orientation
+        import_isaac_robot("franka", position=[1.0, 0.0, 0.5], orientation=[0, 0, 45])
+        
+        # Import robot from different Isaac version
+        import_isaac_robot("ur10e", isaac_version="4.2", position=[2.0, 0.0, 0.0])
+    """
+    try:
+        isaac = get_isaac_connection()
+        result = isaac.send_command("import_isaac_robot", {
+            "robot_name": robot_name,
+            "isaac_version": isaac_version,
             "position": position,
-            "scale": scale
+            "orientation": orientation,
+            "orientation_format": orientation_format,
+            "list_all": list_all
         })
         
         if result.get("status") == "success":
-            task_id = result.get("task_id")
-            prim_path = result.get("prim_path")
-            return f"Successfully generated 3D model with task ID: {task_id}, loaded at prim path: {prim_path}"
-        else:
-            return f"Error generating 3D model: {result.get('message', 'Unknown error')}"
-    except Exception as e:
-        logger.error(f"Error generating 3D model: {str(e)}")
-        return f"Error generating 3D model: {str(e)}"
-    
-@mcp.tool("search_3d_usd_by_text")
-def search_3d_usd_by_text(
-    ctx: Context,
-    text_prompt: str = None,
-    target_path: str = "/World/my_usd",
-    position: List[float] = [0, 0, 50],
-    scale: List[float] = [10, 10, 10]
-) -> str:
-    """
-    Search for a 3D model using text prompt in USD libraries, then load and position it in the scene.
-    
-    Args:
-        text_prompt (str): Text description to search for matching 3D models
-        target_path (str, optional): Path where the USD model will be placed in the scene
-        position (list, optional): Position coordinates [x, y, z] for placing the model
-        scale (list, optional): Scale factors [x, y, z] to resize the model
-        
-    Returns:
-        String with search results including task_id and prim_path of the loaded model
-    """
-    if not text_prompt:
-        return "Error: Either text_prompt or image_url must be provided"
-    
-    try:
-        # Get the global connection
-        isaac = get_isaac_connection()
-        params = {"text_prompt": text_prompt, 
-                  "target_path": target_path}
+            available_robots = result.get("available_robots", [])
+            robot_imported = result.get("robot_imported")
             
-        result = isaac.send_command("search_3d_usd_by_text", params)
-        if result.get("status") == "success":
-            task_id = result.get("task_id")
-            prim_path = result.get("prim_path")
-            return f"Successfully generated 3D model with task ID: {task_id}, loaded at prim path: {prim_path}"
+            response = f"Isaac Sim {result.get('isaac_version')} Robot Assets:\n\n"
+            
+            if robot_imported:
+                # Robot was imported
+                import_details = result.get("import_details", {})
+                response += f"Successfully imported robot!\n\n"
+                response += f"Robot Details:\n"
+                response += f"  Name: {robot_imported['name']}\n"
+                response += f"  Path: {robot_imported['path']}\n"
+                response += f"  Prim Path: {import_details.get('prim_path', 'Unknown')}\n"
+                response += f"  Position: {import_details.get('position', [0,0,0])}\n"
+                if import_details.get('orientation'):
+                    response += f"  Orientation: {import_details.get('orientation')} ({import_details.get('orientation_format', 'degrees')})\n"
+            
+            if available_robots:
+                # Show available robots
+                response += f"\nAvailable Robots ({len(available_robots)}):\n"
+                
+                # Group by manufacturer/folder
+                by_folder = {}
+                for robot in available_robots:
+                    folder = robot["folder"]
+                    if folder not in by_folder:
+                        by_folder[folder] = []
+                    by_folder[folder].append(robot)
+                
+                for folder, robots in by_folder.items():
+                    if folder != "root" and robots:
+                        response += f"\n{folder}:\n"
+                        for robot in robots:
+                            response += f"  • {robot['name']}\n"
+                
+                if not robot_imported:
+                    response += f"\nTo import a robot, use:\n"
+                    response += f"import_isaac_robot('robot_name', position=[x,y,z])"
+            
+            return response
         else:
-            return f"Error generating 3D model: {result.get('message', 'Unknown error')}"
+            return f"Error: {result.get('message', 'Unknown error occurred')}"
+            
     except Exception as e:
-        logger.error(f"Error generating 3D model: {str(e)}")
-        return f"Error generating 3D model: {str(e)}"
+        logger.error(f"Error importing Isaac robot: {str(e)}")
+        return f"Error importing Isaac robot: {str(e)}"
 
-@mcp.tool("transform")
-def transform(
-    ctx: Context,
-    prim_path: str,
-    position: List[float] = [0, 0, 50],
-    scale: List[float] = [10, 10, 10]
-) -> str:
+@mcp.tool()
+def import_usd(usd_path: str, prim_path: str = None, position: list = None, orientation: list = None, orientation_format: str = "degrees") -> str:
     """
-    Transform a USD model by applying position and scale.
+    Import a USD file as a prim into the Isaac Sim stage with flexible orientation input.
     
     Args:
-        prim_path (str): Path to the USD prim to transform
-        position (list, optional): The position to set [x, y, z]
-        scale (list, optional): The scale to set [x, y, z]
-        
-    Returns:
-        String with transformation result
+        usd_path: Path to the USD file (local or Omniverse path)
+        prim_path: Target prim path (optional, auto-generated if not provided)
+        position: [x, y, z] position coordinates (optional, defaults to [0, 0, 0])
+        orientation: Orientation values (optional, defaults to [0, 0, 0])
+        orientation_format: Format of orientation input - "degrees", "radians", or "quaternion"
+    
+    Examples:
+        import_usd("omniverse://localhost/Library/Aruco/objs/base_0.usd")
+        import_usd("omniverse://localhost/Library/Aruco/objs/base_0.usd", position=[1.0, 2.0, 0.0], orientation=[0, 0, 45], orientation_format="degrees")
+        import_usd("omniverse://localhost/Library/Aruco/objs/base_0.usd", orientation=[0, 0, 0.785], orientation_format="radians")  
+        import_usd("omniverse://localhost/Library/Aruco/objs/base_0.usd", orientation=[1, 0, 0, 0], orientation_format="quaternion")
     """
     try:
-        # Get the global connection
+        # Use the existing connection pattern like other tools
         isaac = get_isaac_connection()
         
-        result = isaac.send_command("transform", {
+        result = isaac.send_command("import_usd", {
+            "usd_path": usd_path,
             "prim_path": prim_path,
             "position": position,
-            "scale": scale
+            "orientation": orientation,
+            "orientation_format": orientation_format
+        })
+        
+        return f"Successfully imported USD: {result.get('message', '')}, prim path: {result.get('prim_path', '')}, position: {result.get('position', [0, 0, 0])}, orientation: {result.get('orientation', [0, 0, 0])} ({result.get('orientation_format', 'degrees')})"
+        
+    except Exception as e:
+        logger.error(f"Error importing USD: {str(e)}")
+        return f"Error importing USD: {str(e)}"
+
+@mcp.tool()
+def load_scene() -> str:
+    """
+    Load a basic scene with world and ground plane in Isaac Sim.
+    This initializes the simulation context and adds a default ground plane.
+    
+    Example:
+        load_scene()
+    """
+    try:
+        # Use the existing connection pattern
+        isaac = get_isaac_connection()
+        
+        result = isaac.send_command("load_scene")
+        
+        return f"Successfully loaded scene: {result.get('message', '')}"
+        
+    except Exception as e:
+        logger.error(f"Error loading scene: {str(e)}")
+        return f"Error loading scene: {str(e)}"
+
+
+@mcp.tool()
+def get_object_info(prim_path: str) -> str:
+    """
+    Get comprehensive information about an object including its pose in all formats.
+    
+    Args:
+        prim_path: Path to the prim/object (use list_prims() to find available paths)
+    
+    Example:
+        get_object_info("/World/UR5e")
+    """
+    try:
+        isaac = get_isaac_connection()
+        result = isaac.send_command("get_object_info", {"prim_path": prim_path})
+        
+        if result.get("status") == "success":
+            prim_info = result.get("prim_info", {})
+            position = result.get("position", [])
+            quat = result.get("rotation_quaternion", [])
+            rad = result.get("rotation_radians", [])
+            deg = result.get("rotation_degrees", [])
+            scale = result.get("scale", [])
+            
+            response = f"Object Info for {prim_path}:\n\n"
+            
+            # Basic info
+            response += f"Basic Properties:\n"
+            response += f"  Name: {prim_info.get('name', 'N/A')}\n"
+            response += f"  Type: {prim_info.get('type', 'N/A')}\n"
+            response += f"  Active: {prim_info.get('is_active', False)}\n"
+            response += f"  Has Children: {prim_info.get('has_children', False)}\n\n"
+            
+            # Transform info
+            response += f"Transform:\n"
+            response += f"  Position: [{position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f}]\n\n"
+            response += f"  Rotation:\n"
+            response += f"    Degrees (r,p,y): [{deg[0]:.3f}, {deg[1]:.3f}, {deg[2]:.3f}]\n"
+            response += f"    Radians (r,p,y): [{rad[0]:.3f}, {rad[1]:.3f}, {rad[2]:.3f}]\n"
+            response += f"    Quaternion (w,x,y,z): [{quat[0]:.3f}, {quat[1]:.3f}, {quat[2]:.3f}, {quat[3]:.3f}]\n\n"
+            response += f"  Scale: [{scale[0]:.3f}, {scale[1]:.3f}, {scale[2]:.3f}]"
+            
+            return response
+        else:
+            return f"Error getting object info: {result.get('message', 'Unknown error')}"
+            
+    except Exception as e:
+        logger.error(f"Error getting object info: {str(e)}")
+        return f"Error getting object info: {str(e)}"
+
+
+@mcp.tool()
+def move_prim(prim_path: str, position: list = None, orientation: list = None, 
+              orientation_format: str = "degrees") -> str:
+    """
+    Move a prim to a new pose with flexible orientation input.
+    Reads current pose and allows selective updates to position and orientation.
+    
+    Args:
+        prim_path: Path to the prim/object (use list_prims() to find available paths)
+        position: [x, y, z] new position (optional, keeps current if not specified)
+        orientation: New orientation values (optional, keeps current if not specified)
+        orientation_format: "degrees", "radians", or "quaternion" (default: degrees)
+    
+    Examples:
+        # Move to new position only
+        move_prim("/World/trial", position=[1.0, 2.0, 0.5])
+        
+        # Move with rotation in degrees
+        move_prim("/World/trial", position=[1.0, 2.0, 0.5], orientation=[0, 0, 45])
+        
+        # Move with rotation in radians
+        move_prim("/World/trial", position=[1.0, 2.0, 0.5], orientation=[0, 0, 0.785], orientation_format="radians")
+        
+        # Move with quaternion
+        move_prim("/World/trial", position=[1.0, 2.0, 0.5], orientation=[0.924, 0, 0, 0.383], orientation_format="quaternion")
+        
+        # Just rotate, keep current position
+        move_prim("/World/trial", orientation=[90, 0, 0])
+    """
+    try:
+        isaac = get_isaac_connection()
+        result = isaac.send_command("move_prim", {
+            "prim_path": prim_path,
+            "position": position,
+            "orientation": orientation,
+            "orientation_format": orientation_format
         })
         
         if result.get("status") == "success":
-            return f"Successfully transformed model at {prim_path} to position {position} and scale {scale}"
+            prev_pos = result.get("previous_position", [])
+            prev_quat = result.get("previous_quaternion", [])
+            new_pos = result.get("new_position", [])
+            new_quat = result.get("new_quaternion", [])
+            
+            response = f"Successfully moved {prim_path}:\n\n"
+            
+            response += f"Previous Pose:\n"
+            response += f"  Position: [{prev_pos[0]:.3f}, {prev_pos[1]:.3f}, {prev_pos[2]:.3f}]\n"
+            response += f"  Quaternion: [{prev_quat[0]:.3f}, {prev_quat[1]:.3f}, {prev_quat[2]:.3f}, {prev_quat[3]:.3f}]\n\n"
+            
+            response += f"New Pose:\n"
+            response += f"  Position: [{new_pos[0]:.3f}, {new_pos[1]:.3f}, {new_pos[2]:.3f}]\n"
+            response += f"  Quaternion: [{new_quat[0]:.3f}, {new_quat[1]:.3f}, {new_quat[2]:.3f}, {new_quat[3]:.3f}]\n"
+            response += f"  Orientation Format: {result.get('orientation_format', 'degrees')}"
+            
+            return response
         else:
-            return f"Error transforming model: {result.get('message', 'Unknown error')}"
+            return f"Error moving prim: {result.get('message', 'Unknown error')}"
+            
     except Exception as e:
-        logger.error(f"Error transforming model: {str(e)}")
-        return f"Error transforming model: {str(e)}"
+        logger.error(f"Error moving prim: {str(e)}")
+        return f"Error moving prim: {str(e)}"
 
 # Main execution
 
