@@ -638,6 +638,200 @@ def control_gripper(ctx: Context, command: str) -> str:
     except Exception as e:
         logger.error(f"Error controlling gripper: {str(e)}")
         return f"✗ Error controlling gripper: {str(e)}"
+
+@mcp.tool()
+def perform_ik(ctx: Context, robot_prim_path: str, target_position: list, target_rpy: list, 
+               custom_lib_path: str = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries") -> str:
+    """
+    Perform inverse kinematics on the robot and move it to the target pose.
+    
+    Args:
+        robot_prim_path: Path to the robot prim (e.g., "/World/UR5e")
+        target_position: [x, y, z] target position in meters (e.g., [0.4, 0.2, 0.3])
+        target_rpy: [roll, pitch, yaw] target orientation in degrees (e.g., [0, 90, 0])
+        custom_lib_path: Path to custom IK solver library (optional, defaults to your ur_asu path)
+        
+    Examples:
+        perform_ik("/World/UR5e", [0.4, 0.2, 0.3], [0, 90, 0])
+        perform_ik("/World/UR5e", [0.5, -0.1, 0.4], [45, 0, -30])
+        perform_ik("/World/UR5e", [0.3, 0.0, 0.5], [0, 0, 180])
+        
+    Note: 
+        - Position is in meters relative to robot base
+        - RPY is in degrees (roll, pitch, yaw)
+        - Robot must exist in scene (use list_prims() to check)
+        - Custom IK solver must be available at the specified path
+    """
+    try:
+        isaac = get_isaac_connection()
+        
+        result = isaac.send_command("perform_ik", {
+            "robot_prim_path": robot_prim_path,
+            "target_position": target_position,
+            "target_rpy": target_rpy,
+            "custom_lib_path": custom_lib_path
+        })
+        
+        if result.get("status") == "success":
+            target_pos = result.get("target_position", [])
+            target_rot = result.get("target_rpy", [])
+            joint_rad = result.get("joint_angles_rad", [])
+            joint_deg = result.get("joint_angles_deg", [])
+            prev_rad = result.get("previous_joints_rad", [])
+            prev_deg = result.get("previous_joints_deg", [])
+            
+            response = f"✓ IK solved and robot moved successfully!\n\n"
+            
+            response += f"Target Pose:\n"
+            response += f"  Position: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}] m\n"
+            response += f"  RPY: [{target_rot[0]:.1f}, {target_rot[1]:.1f}, {target_rot[2]:.1f}] deg\n\n"
+            
+            if prev_rad:
+                response += f"Previous Joint Angles:\n"
+                response += f"  Radians: {[f'{j:.3f}' for j in prev_rad]}\n"
+                response += f"  Degrees: {[f'{j:.1f}' for j in prev_deg]}\n\n"
+            
+            response += f"New Joint Angles:\n"
+            response += f"  Radians: {[f'{j:.3f}' for j in joint_rad]}\n"
+            response += f"  Degrees: {[f'{j:.1f}' for j in joint_deg]}\n\n"
+            
+            response += f"Robot: {result.get('robot_prim_path')}"
+            
+            return response
+            
+        else:
+            error_msg = result.get("message", "Unknown error")
+            response = f"✗ IK failed: {error_msg}\n\n"
+            
+            # Add helpful info if available
+            if "target_position" in result:
+                response += f"Target position: {result['target_position']}\n"
+            if "target_rpy" in result:
+                response += f"Target RPY: {result['target_rpy']}\n"
+            if "current_joints_rad" in result and result["current_joints_rad"]:
+                response += f"Current joints (rad): {[f'{j:.3f}' for j in result['current_joints_rad']]}\n"
+            
+            # Common troubleshooting tips
+            if "not found" in error_msg.lower():
+                response += "\n💡 Tips:\n"
+                response += "- Use list_prims() to see available objects\n"
+                response += "- Make sure robot is loaded in the scene\n"
+            elif "import" in error_msg.lower():
+                response += "\n💡 Tips:\n"
+                response += "- Check if ik_solver.py exists in custom_lib_path\n"
+                response += "- Verify the custom library path is correct\n"
+            elif "solution" in error_msg.lower():
+                response += "\n💡 Tips:\n"
+                response += "- Try a different target position (closer to robot)\n"
+                response += "- Check if target is within robot's reach\n"
+                response += "- Verify orientation values are reasonable\n"
+            
+            return response
+            
+    except Exception as e:
+        logger.error(f"Error performing IK: {str(e)}")
+        return f"✗ Error performing IK: {str(e)}"
+        
+@mcp.tool()
+def get_ee_pose(ctx: Context, robot_prim_path: str, joint_angles: list = None,
+                custom_lib_path: str = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries") -> str:
+    """
+    Get end-effector pose using forward kinematics from current or specified joint angles.
+    
+    Args:
+        robot_prim_path: Path to the robot prim (e.g., "/World/UR5e")
+        joint_angles: Optional joint angles in radians [j1, j2, j3, j4, j5, j6]. If None, uses current robot state
+        custom_lib_path: Path to custom IK solver library (optional)
+        
+    Examples:
+        # Get current end-effector pose
+        get_ee_pose("/World/UR5e")
+        
+        # Get end-effector pose for specific joint angles (in radians)
+        get_ee_pose("/World/UR5e", [0.0, -1.57, 1.57, -1.57, -1.57, 0.0])
+        
+        # Get pose for joint angles in a known configuration
+        get_ee_pose("/World/UR5e", [1.48, -1.40, 1.57, -1.57, -1.57, 0.0])
+        
+    Note:
+        - If joint_angles not provided, reads current robot joint positions
+        - Joint angles should be in radians
+        - Uses the same forward kinematics as your IK solver
+        - Returns position in meters and orientation in multiple formats
+    """
+    try:
+        isaac = get_isaac_connection()
+        
+        result = isaac.send_command("get_ee_pose", {
+            "robot_prim_path": robot_prim_path,
+            "joint_angles": joint_angles,
+            "custom_lib_path": custom_lib_path
+        })
+        
+        if result.get("status") == "success":
+            source = result.get("joint_angles_source", "unknown")
+            joint_rad = result.get("joint_angles_rad", [])
+            joint_deg = result.get("joint_angles_deg", [])
+            ee_pos = result.get("ee_position", [])
+            ee_rpy_rad = result.get("ee_rpy_rad", [])
+            ee_rpy_deg = result.get("ee_rpy_deg", [])
+            ee_quat = result.get("ee_quaternion_xyzw", [])
+            
+            response = f"✓ End-effector pose computed successfully!\n\n"
+            
+            response += f"Robot: {result.get('robot_prim_path')}\n"
+            response += f"Joint angles source: {source.replace('_', ' ')}\n\n"
+            
+            response += f"Joint Angles:\n"
+            response += f"  Radians: {[f'{j:.3f}' for j in joint_rad]}\n"
+            response += f"  Degrees: {[f'{j:.1f}' for j in joint_deg]}\n\n"
+            
+            response += f"End-Effector Position:\n"
+            response += f"  X: {ee_pos[0]:.4f} m\n"
+            response += f"  Y: {ee_pos[1]:.4f} m\n"
+            response += f"  Z: {ee_pos[2]:.4f} m\n\n"
+            
+            response += f"End-Effector Orientation:\n"
+            response += f"  RPY (deg): [{ee_rpy_deg[0]:.1f}, {ee_rpy_deg[1]:.1f}, {ee_rpy_deg[2]:.1f}]\n"
+            response += f"  RPY (rad): [{ee_rpy_rad[0]:.3f}, {ee_rpy_rad[1]:.3f}, {ee_rpy_rad[2]:.3f}]\n"
+            response += f"  Quaternion (x,y,z,w): [{ee_quat[0]:.3f}, {ee_quat[1]:.3f}, {ee_quat[2]:.3f}, {ee_quat[3]:.3f}]\n\n"
+            
+            # Add a summary line for quick reference
+            response += f"📍 Summary: Position [{ee_pos[0]:.3f}, {ee_pos[1]:.3f}, {ee_pos[2]:.3f}] m, "
+            response += f"RPY [{ee_rpy_deg[0]:.1f}, {ee_rpy_deg[1]:.1f}, {ee_rpy_deg[2]:.1f}] deg"
+            
+            return response
+            
+        else:
+            error_msg = result.get("message", "Unknown error")
+            response = f"✗ Forward kinematics failed: {error_msg}\n\n"
+            
+            # Add helpful info if available
+            if "joint_angles_rad" in result:
+                response += f"Joint angles used (rad): {[f'{j:.3f}' for j in result['joint_angles_rad']]}\n"
+            if "joint_angles_deg" in result:
+                response += f"Joint angles used (deg): {[f'{j:.1f}' for j in result['joint_angles_deg']]}\n"
+            
+            # Common troubleshooting tips
+            if "not found" in error_msg.lower():
+                response += "\n💡 Tips:\n"
+                response += "- Use list_prims() to see available objects\n"
+                response += "- Make sure robot is loaded in the scene\n"
+            elif "import" in error_msg.lower():
+                response += "\n💡 Tips:\n"
+                response += "- Check if ik_solver.py exists in custom_lib_path\n"
+                response += "- Verify the custom library path is correct\n"
+            elif "joint positions" in error_msg.lower():
+                response += "\n💡 Tips:\n"
+                response += "- Robot may not be properly initialized\n"
+                response += "- Try providing joint_angles explicitly\n"
+                response += "- Ensure robot articulation is set up correctly\n"
+            
+            return response
+            
+    except Exception as e:
+        logger.error(f"Error getting end-effector pose: {str(e)}")
+        return f"✗ Error getting end-effector pose: {str(e)}"
         
 # Main execution
 
