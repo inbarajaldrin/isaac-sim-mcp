@@ -291,7 +291,7 @@ class MCPExtension(omni.ext.IExt):
         handlers = {
             "execute_script": self.execute_script,
             "list_prims": self.list_prims,
-            "import_isaac_robot": self.import_isaac_robot,
+            "open_usd": self.open_usd,
             "import_usd": self.import_usd,
             "load_scene": self.load_scene,
             "get_object_info": self.get_object_info,
@@ -406,152 +406,30 @@ class MCPExtension(omni.ext.IExt):
                 "message": f"Failed to list prims: {str(e)}"
             }
 
-    def import_isaac_robot(self, robot_name: str = None, isaac_version: str = "4.5", 
-                        position: List[float] = None, orientation: List[float] = None,
-                        orientation_format: str = "degrees", list_all: bool = False) -> Dict[str, Any]:
-        """Import a robot from Isaac Sim assets or list available robots."""
+    def open_usd(self, usd_path: str) -> Dict[str, Any]:
+        """Open a USD file as the main stage in Isaac Sim."""
         try:
-            import omni.client
-            import asyncio
+            from omni.isaac.core.utils.stage import open_stage
             
-            # Default position if not specified
-            if position is None:
-                position = [0.0, 0.0, 0.0]
+            # Open the USD file as the main stage
+            open_stage(usd_path=usd_path)
+            print(f"Opened USD stage: {usd_path}")
             
-            base_robots_path = f"omniverse://localhost/NVIDIA/Assets/Isaac/{isaac_version}/Isaac/Robots/"
-            
-            async def find_robots():
-                """Find all available robots."""
-                robots_found = []
-                
-                async def search_folder(path, depth=0):
-                    if depth > 5:  # Prevent infinite recursion
-                        return
-                    
-                    try:
-                        result = await omni.client.list_async(path)
-                        if result[0] == omni.client.Result.OK:
-                            for entry in result[1]:
-                                item_path = f"{path.rstrip('/')}/{entry.relative_path}"
-                                
-                                # Check if it's a folder
-                                is_folder = ('.' not in entry.relative_path) or entry.relative_path.endswith('/')
-                                
-                                if is_folder:
-                                    await search_folder(item_path, depth + 1)
-                                elif entry.relative_path.lower().endswith('.usd'):
-                                    robot_info = {
-                                        "name": entry.relative_path.replace('.usd', ''),
-                                        "file": entry.relative_path,
-                                        "path": item_path,
-                                        "folder": path.split('/')[-1] if depth > 0 else "root"
-                                    }
-                                    robots_found.append(robot_info)
-                    except Exception as e:
-                        print(f"Error searching {path}: {e}")
-                
-                await search_folder(base_robots_path)
-                return robots_found
-            
-            # Find all available robots
-            print(f"Searching for robots in Isaac {isaac_version}...")
-            loop = asyncio.get_event_loop()
-            available_robots = loop.run_until_complete(find_robots())
-            
-            if not available_robots:
-                return {
-                    "status": "error",
-                    "message": f"No robots found in Isaac {isaac_version}. Check if path exists: {base_robots_path}",
-                    "isaac_version": isaac_version,
-                    "available_robots": []
-                }
-            
-            # If list_all is True, just return the list
-            if list_all:
-                return {
-                    "status": "success",
-                    "message": f"Found {len(available_robots)} robots in Isaac {isaac_version}",
-                    "isaac_version": isaac_version,
-                    "available_robots": available_robots,
-                    "robot_imported": None
-                }
-            
-            # If no robot name specified, return list and ask user to choose
-            if not robot_name:
-                return {
-                    "status": "success",
-                    "message": f"Found {len(available_robots)} robots. Please specify robot_name.",
-                    "isaac_version": isaac_version,
-                    "available_robots": available_robots,
-                    "robot_imported": None
-                }
-            
-            # Find the requested robot (fuzzy matching)
-            target_robot = None
-            robot_name_lower = robot_name.lower()
-            
-            # Exact match first
-            for robot in available_robots:
-                if robot["name"].lower() == robot_name_lower:
-                    target_robot = robot
-                    break
-            
-            # Partial match if no exact match
-            if not target_robot:
-                for robot in available_robots:
-                    if robot_name_lower in robot["name"].lower():
-                        target_robot = robot
-                        break
-            
-            if not target_robot:
-                return {
-                    "status": "error",
-                    "message": f"Robot '{robot_name}' not found in Isaac {isaac_version}",
-                    "isaac_version": isaac_version,
-                    "available_robots": available_robots,
-                    "robot_imported": None
-                }
-            
-            # Use existing import_usd method to import the robot
-            print(f"Importing robot: {target_robot['name']}")
-            print(f"From: {target_robot['path']}")
-            
-            import_result = self.import_usd(
-                usd_path=target_robot["path"],
-                prim_path=None,  # Auto-generate
-                auto_name=True,
-                position=position,
-                orientation=orientation,
-                orientation_format=orientation_format
-            )
-            
-            if import_result.get("status") == "success":
-                return {
-                    "status": "success",
-                    "message": f"Successfully imported robot '{target_robot['name']}' from Isaac {isaac_version}",
-                    "isaac_version": isaac_version,
-                    "robot_imported": target_robot,
-                    "import_details": import_result,
-                    "available_robots": available_robots
-                }
-            else:
-                return {
-                    "status": "error",
-                    "message": f"Failed to import robot: {import_result.get('message')}",
-                    "isaac_version": isaac_version,
-                    "robot_imported": target_robot,
-                    "import_error": import_result,
-                    "available_robots": available_robots
-                }
+            return {
+                "status": "success",
+                "message": f"Successfully opened USD stage: {usd_path}",
+                "usd_path": usd_path
+            }
             
         except Exception as e:
             import traceback
             return {
                 "status": "error",
-                "message": f"Failed to import Isaac robot: {str(e)}",
+                "message": f"Failed to open USD stage: {str(e)}",
+                "usd_path": usd_path,
                 "traceback": traceback.format_exc()
             }
-
+            
     def import_usd(self, usd_path: str, prim_path: str = None, position: List[float] = None, orientation: List[float] = None, orientation_format: str = "degrees") -> Dict[str, Any]:
         """Import a USD file as a prim into the Isaac Sim stage with flexible orientation input."""
         try:

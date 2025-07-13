@@ -387,96 +387,28 @@ def list_prims() -> str:
         logger.error(f"Error listing prims: {str(e)}")
         return f"Error listing prims: {str(e)}"
 
-
 @mcp.tool()
-def import_isaac_robot(robot_name: str = None, isaac_version: str = "4.5", 
-                      position: list = None, orientation: list = None,
-                      orientation_format: str = "degrees", list_all: bool = False) -> str:
+def open_usd(usd_path: str) -> str:
     """
-    Import a robot from Isaac Sim assets or list available robots.
+    Open a USD file in the Isaac Sim stage.
     
     Args:
-        robot_name: Name of the robot to import (optional, will list available if not provided)
-        isaac_version: Isaac Sim version to use (default: "4.5", options: "4.1", "4.2", "4.5")
-        position: [x, y, z] position coordinates (optional, defaults to [0, 0, 0])
-        orientation: Orientation values (optional, defaults to no rotation)
-        orientation_format: "degrees", "radians", or "quaternion" (default: degrees)
-        list_all: If True, just list all available robots without importing
+        usd_path: Path to the USD file (local or Omniverse path)
     
     Examples:
-        # List all available robots in Isaac 4.5
-        import_isaac_robot(list_all=True)
-        
-        # List all available robots in Isaac 4.2
-        import_isaac_robot(isaac_version="4.2", list_all=True)
-        
-        # Import UR5e robot at default position
-        import_isaac_robot("ur5e")
-        
-        # Import Franka robot at specific position and orientation
-        import_isaac_robot("franka", position=[1.0, 0.0, 0.5], orientation=[0, 0, 45])
-        
-        # Import robot from different Isaac version
-        import_isaac_robot("ur10e", isaac_version="4.2", position=[2.0, 0.0, 0.0])
+        open_usd("omniverse://localhost/Library/Aruco/DT.usd")
+        open_usd("/path/to/your/file.usd")
     """
     try:
+        # Use the existing connection pattern like other tools
         isaac = get_isaac_connection()
-        result = isaac.send_command("import_isaac_robot", {
-            "robot_name": robot_name,
-            "isaac_version": isaac_version,
-            "position": position,
-            "orientation": orientation,
-            "orientation_format": orientation_format,
-            "list_all": list_all
+        result = isaac.send_command("open_usd", {
+            "usd_path": usd_path
         })
-        
-        if result.get("status") == "success":
-            available_robots = result.get("available_robots", [])
-            robot_imported = result.get("robot_imported")
-            
-            response = f"Isaac Sim {result.get('isaac_version')} Robot Assets:\n\n"
-            
-            if robot_imported:
-                # Robot was imported
-                import_details = result.get("import_details", {})
-                response += f"Successfully imported robot!\n\n"
-                response += f"Robot Details:\n"
-                response += f"  Name: {robot_imported['name']}\n"
-                response += f"  Path: {robot_imported['path']}\n"
-                response += f"  Prim Path: {import_details.get('prim_path', 'Unknown')}\n"
-                response += f"  Position: {import_details.get('position', [0,0,0])}\n"
-                if import_details.get('orientation'):
-                    response += f"  Orientation: {import_details.get('orientation')} ({import_details.get('orientation_format', 'degrees')})\n"
-            
-            if available_robots:
-                # Show available robots
-                response += f"\nAvailable Robots ({len(available_robots)}):\n"
-                
-                # Group by manufacturer/folder
-                by_folder = {}
-                for robot in available_robots:
-                    folder = robot["folder"]
-                    if folder not in by_folder:
-                        by_folder[folder] = []
-                    by_folder[folder].append(robot)
-                
-                for folder, robots in by_folder.items():
-                    if folder != "root" and robots:
-                        response += f"\n{folder}:\n"
-                        for robot in robots:
-                            response += f"  • {robot['name']}\n"
-                
-                if not robot_imported:
-                    response += f"\nTo import a robot, use:\n"
-                    response += f"import_isaac_robot('robot_name', position=[x,y,z])"
-            
-            return response
-        else:
-            return f"Error: {result.get('message', 'Unknown error occurred')}"
-            
+        return f"Successfully opened USD stage: {result.get('message', '')}"
     except Exception as e:
-        logger.error(f"Error importing Isaac robot: {str(e)}")
-        return f"Error importing Isaac robot: {str(e)}"
+        logger.error(f"Error opening USD: {str(e)}")
+        return f"Error opening USD: {str(e)}"
 
 @mcp.tool()
 def import_usd(usd_path: str, prim_path: str = None, position: list = None, orientation: list = None, orientation_format: str = "degrees") -> str:
