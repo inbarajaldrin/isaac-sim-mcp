@@ -29,6 +29,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+mcp_venv/
 
 # IDE - VSCode
 .vscode/*
@@ -74,3 +75,7 @@ local_cache/
 
 # MCP specific
 mcp_cache/
+
+# System files
+isaac_mcp/archive
+isaac.sim.mcp_extension/isaac_sim_mcp_extension/archive
