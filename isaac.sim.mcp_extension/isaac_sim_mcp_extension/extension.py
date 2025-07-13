@@ -295,7 +295,8 @@ class MCPExtension(omni.ext.IExt):
             "import_usd": self.import_usd,
             "load_scene": self.load_scene,
             "get_object_info": self.get_object_info,
-            "move_prim": self.move_prim,  
+            "move_prim": self.move_prim,
+            "control_gripper": self.control_gripper,  
         }
         
         handler = handlers.get(cmd_type)
@@ -756,5 +757,106 @@ class MCPExtension(omni.ext.IExt):
                 "status": "error",
                 "message": f"Failed to move prim: {str(e)}",
                 "prim_path": prim_path,
+                "traceback": traceback.format_exc()
+            }
+
+
+    def control_gripper(self, command: Union[str, int, float]) -> Dict[str, Any]:
+        """
+        Control gripper with flexible input - string commands or numeric values.
+        
+        Args:
+            command: Can be:
+                    - String: "open", "close" 
+                    - Numeric: 0-1100 (0=closed/0cm, 1100=open/11cm)
+                    
+        Returns:
+            Dictionary with execution result.
+        """
+        try:
+            import subprocess
+            import os
+            
+            # Convert command to appropriate ROS2 message
+            if isinstance(command, str):
+                if command.lower() == "open":
+                    ros_command = "open"
+                    numeric_value = 1100
+                    width_cm = 11.0
+                elif command.lower() == "close":
+                    ros_command = "close" 
+                    numeric_value = 0
+                    width_cm = 0.0
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"Invalid string command '{command}'. Use 'open' or 'close'."
+                    }
+            else:
+                # Numeric input
+                try:
+                    numeric_value = float(command)
+                    if not (0 <= numeric_value <= 1100):
+                        return {
+                            "status": "error",
+                            "message": f"Numeric value {numeric_value} out of range. Use 0-1100."
+                        }
+                    
+                    # Convert to ROS command string and width
+                    ros_command = str(int(numeric_value))
+                    width_cm = numeric_value / 100.0  # Convert to cm (1100 -> 11cm)
+                    
+                except (ValueError, TypeError):
+                    return {
+                        "status": "error",
+                        "message": f"Invalid numeric command '{command}'. Use number 0-1100."
+                    }
+            
+            # Construct and execute ROS2 command
+            ros2_cmd = [
+                'ros2', 'topic', 'pub', '--once',
+                '/gripper_command',
+                'std_msgs/String', 
+                f"{{data: '{ros_command}'}}"
+            ]
+            
+            try:
+                result = subprocess.run(ros2_cmd, 
+                                    capture_output=True, 
+                                    text=True, 
+                                    timeout=5)
+                
+                if result.returncode == 0:
+                    return {
+                        "status": "success",
+                        "message": f"Gripper command sent successfully",
+                        "command_sent": ros_command,
+                        "numeric_value": numeric_value,
+                        "width_cm": width_cm,
+                        "ros_output": result.stdout.strip() if result.stdout else None
+                    }
+                else:
+                    return {
+                        "status": "error", 
+                        "message": f"ROS2 command failed: {result.stderr.strip()}",
+                        "command_attempted": ros_command
+                    }
+                    
+            except subprocess.TimeoutExpired:
+                return {
+                    "status": "error",
+                    "message": "ROS2 command timed out (5 seconds)"
+                }
+            except FileNotFoundError:
+                return {
+                    "status": "error", 
+                    "message": "ros2 command not found. Make sure ROS2 is properly installed and sourced."
+                }
+                
+        except Exception as e:
+            import traceback
+            return {
+                "status": "error",
+                "message": f"Unexpected error in gripper control: {str(e)}",
                 "traceback": traceback.format_exc()
             }

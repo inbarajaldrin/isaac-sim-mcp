@@ -581,6 +581,64 @@ def move_prim(prim_path: str, position: list = None, orientation: list = None,
         logger.error(f"Error moving prim: {str(e)}")
         return f"Error moving prim: {str(e)}"
 
+@mcp.tool()
+def control_gripper(ctx: Context, command: str) -> str:
+    """
+    Control gripper with flexible input commands.
+    
+    Args:
+        command: Gripper control command. Can be:
+                - String commands: "open", "close"
+                - Numeric values: "0" to "1100" (representing 0cm to 11cm gripper width)
+                
+    Value meanings:
+        - "open" or "1100" = Fully open (11cm width)
+        - "close" or "0" = Fully closed (0cm width)  
+        - Any value "0"-"1100" = Proportional opening (e.g., "550" = 5.5cm width)
+    
+    Examples:
+        control_gripper("open")          # Fully open gripper
+        control_gripper("close")         # Fully close gripper
+        control_gripper("550")           # Half open (5.5cm width)
+        control_gripper("1100")          # Fully open (same as "open")
+        control_gripper("0")             # Fully closed (same as "close")
+    """
+    try:
+        isaac = get_isaac_connection()
+        
+        # Try to convert to numeric if it's a string number
+        if command.isdigit() or (command.replace('.', '').isdigit()):
+            # It's a numeric string, convert to float for validation
+            try:
+                numeric_command = float(command)
+                result = isaac.send_command("control_gripper", {"command": numeric_command})
+            except ValueError:
+                result = isaac.send_command("control_gripper", {"command": command})
+        else:
+            # It's a string command like "open" or "close"
+            result = isaac.send_command("control_gripper", {"command": command})
+        
+        if result.get("status") == "success":
+            command_sent = result.get("command_sent", "unknown")
+            numeric_value = result.get("numeric_value", 0)
+            width_cm = result.get("width_cm", 0.0)
+            
+            response = f"✓ Gripper control successful!\n\n"
+            response += f"Command sent: '{command_sent}'\n"
+            response += f"Numeric value: {numeric_value}\n"
+            response += f"Gripper width: {width_cm:.1f} cm\n"
+            
+            if result.get("ros_output"):
+                response += f"ROS output: {result.get('ros_output')}"
+                
+            return response
+        else:
+            return f"✗ Gripper control failed: {result.get('message', 'Unknown error')}"
+            
+    except Exception as e:
+        logger.error(f"Error controlling gripper: {str(e)}")
+        return f"✗ Error controlling gripper: {str(e)}"
+        
 # Main execution
 
 def main():
