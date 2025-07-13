@@ -297,6 +297,8 @@ class MCPExtension(omni.ext.IExt):
             "get_object_info": self.get_object_info,
             "move_prim": self.move_prim,
             "control_gripper": self.control_gripper,  
+            "perform_ik": self.perform_ik,
+            "get_ee_pose": self.get_ee_pose,
         }
         
         handler = handlers.get(cmd_type)
@@ -858,5 +860,246 @@ class MCPExtension(omni.ext.IExt):
             return {
                 "status": "error",
                 "message": f"Unexpected error in gripper control: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    def perform_ik(self, robot_prim_path: str, target_position: List[float], target_rpy: List[float], 
+                custom_lib_path: str = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries") -> Dict[str, Any]:
+        """
+        Perform inverse kinematics on the robot and move it to the target pose.
+        
+        Args:
+            robot_prim_path: Path to the robot prim (e.g., "/World/UR5e")
+            target_position: [x, y, z] target position in meters
+            target_rpy: [roll, pitch, yaw] target orientation in degrees
+            custom_lib_path: Path to your custom IK solver library
+            
+        Returns:
+            Dictionary with execution result including joint angles and success status.
+        """
+        try:
+            import sys
+            import numpy as np
+            from omni.isaac.core.articulations import Articulation
+            import omni.usd
+            
+            # Add custom libraries to Python path if not already there
+            if custom_lib_path not in sys.path:
+                sys.path.append(custom_lib_path)
+                print(f"Added {custom_lib_path} to Python path")
+            
+            # Import the IK solver
+            try:
+                from ik_solver import compute_ik
+                print("Successfully imported compute_ik from ik_solver")
+            except ImportError as e:
+                return {
+                    "status": "error",
+                    "message": f"Failed to import ik_solver: {str(e)}. Check if {custom_lib_path}/ik_solver.py exists."
+                }
+            
+            # Check if robot exists in scene
+            stage = omni.usd.get_context().get_stage()
+            robot_prim = stage.GetPrimAtPath(robot_prim_path)
+            if not robot_prim.IsValid():
+                return {
+                    "status": "error",
+                    "message": f"Robot prim at {robot_prim_path} not found. Use list_prims() to see available objects."
+                }
+            
+            # Load and initialize robot articulation
+            try:
+                robot = Articulation(robot_prim_path)
+                robot.initialize()
+                print(f"Robot articulation initialized at {robot_prim_path}")
+            except Exception as e:
+                return {
+                    "status": "error", 
+                    "message": f"Failed to initialize robot articulation: {str(e)}"
+                }
+            
+            # Get current joint positions for reference
+            try:
+                current_joints = robot.get_joint_positions()
+                current_joints_deg = np.degrees(current_joints) if current_joints is not None else None
+                print(f"Current joint positions (rad): {current_joints}")
+            except Exception as e:
+                print(f"Warning: Could not get current joint positions: {str(e)}")
+                current_joints = None
+                current_joints_deg = None
+            
+            # Solve IK
+            print(f"Computing IK for position: {target_position}, RPY: {target_rpy}")
+            joint_angles = compute_ik(position=target_position, rpy=target_rpy)
+            
+            if joint_angles is not None:
+                print(f"IK solution found: {joint_angles} (rad)")
+                joint_angles_deg = np.degrees(joint_angles)
+                print(f"IK solution (deg): {joint_angles_deg}")
+                
+                # Apply joint angles to robot
+                try:
+                    robot.set_joint_positions(joint_angles)
+                    print("Joint angles applied to robot successfully")
+                    
+                    return {
+                        "status": "success",
+                        "message": "IK solved and robot moved successfully",
+                        "robot_prim_path": robot_prim_path,
+                        "target_position": target_position,
+                        "target_rpy": target_rpy,
+                        "joint_angles_rad": joint_angles.tolist(),
+                        "joint_angles_deg": joint_angles_deg.tolist(),
+                        "previous_joints_rad": current_joints.tolist() if current_joints is not None else None,
+                        "previous_joints_deg": current_joints_deg.tolist() if current_joints_deg is not None else None
+                    }
+                    
+                except Exception as e:
+                    return {
+                        "status": "error",
+                        "message": f"IK solved but failed to apply joint angles: {str(e)}",
+                        "joint_angles_rad": joint_angles.tolist(),
+                        "joint_angles_deg": joint_angles_deg.tolist()
+                    }
+            else:
+                return {
+                    "status": "error",
+                    "message": "IK solver failed to find a solution for the given target pose",
+                    "robot_prim_path": robot_prim_path,
+                    "target_position": target_position,
+                    "target_rpy": target_rpy,
+                    "current_joints_rad": current_joints.tolist() if current_joints is not None else None
+                }
+                
+        except Exception as e:
+            import traceback
+            return {
+                "status": "error",
+                "message": f"Unexpected error in IK computation: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    def get_ee_pose(self, robot_prim_path: str, joint_angles: List[float] = None,
+                    custom_lib_path: str = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries") -> Dict[str, Any]:
+        """
+        Get end-effector pose using forward kinematics from current or specified joint angles.
+        
+        Args:
+            robot_prim_path: Path to the robot prim (e.g., "/World/UR5e")
+            joint_angles: Optional joint angles in radians. If None, uses current robot joint positions
+            custom_lib_path: Path to your custom IK solver library
+            
+        Returns:
+            Dictionary with end-effector position, orientation, and joint angles used.
+        """
+        try:
+            import sys
+            import numpy as np
+            from omni.isaac.core.articulations import Articulation
+            from scipy.spatial.transform import Rotation as R
+            import omni.usd
+            
+            # Add custom libraries to Python path if not already there
+            if custom_lib_path not in sys.path:
+                sys.path.append(custom_lib_path)
+                print(f"Added {custom_lib_path} to Python path")
+            
+            # Import the IK solver module (which contains forward_kinematics)
+            try:
+                from ik_solver import forward_kinematics, dh_params
+                print("Successfully imported forward_kinematics and dh_params from ik_solver")
+            except ImportError as e:
+                return {
+                    "status": "error",
+                    "message": f"Failed to import from ik_solver: {str(e)}. Check if {custom_lib_path}/ik_solver.py exists."
+                }
+            
+            # Check if robot exists in scene
+            stage = omni.usd.get_context().get_stage()
+            robot_prim = stage.GetPrimAtPath(robot_prim_path)
+            if not robot_prim.IsValid():
+                return {
+                    "status": "error",
+                    "message": f"Robot prim at {robot_prim_path} not found. Use list_prims() to see available objects."
+                }
+            
+            # Get joint angles (either provided or current)
+            if joint_angles is None:
+                # Load and initialize robot articulation to get current joint positions
+                try:
+                    robot = Articulation(robot_prim_path)
+                    robot.initialize()
+                    current_joints = robot.get_joint_positions()
+                    
+                    if current_joints is None:
+                        return {
+                            "status": "error",
+                            "message": "Failed to get current joint positions from robot"
+                        }
+                    
+                    joint_angles = current_joints
+                    source = "current_robot_state"
+                    print(f"Using current robot joint positions: {joint_angles}")
+                    
+                except Exception as e:
+                    return {
+                        "status": "error", 
+                        "message": f"Failed to get current joint positions: {str(e)}"
+                    }
+            else:
+                # Use provided joint angles
+                joint_angles = np.array(joint_angles)
+                source = "provided_joint_angles"
+                print(f"Using provided joint angles: {joint_angles}")
+            
+            # Compute forward kinematics using your existing function
+            try:
+                T_ee = forward_kinematics(dh_params, joint_angles)
+                print(f"Forward kinematics computed successfully")
+                
+                # Extract position (translation part)
+                ee_position = T_ee[:3, 3]
+                
+                # Extract rotation matrix and convert to RPY
+                ee_rotation_matrix = T_ee[:3, :3]
+                
+                # Convert rotation matrix to RPY (roll, pitch, yaw) in degrees
+                rotation = R.from_matrix(ee_rotation_matrix)
+                ee_rpy_rad = rotation.as_euler('xyz', degrees=False)
+                ee_rpy_deg = rotation.as_euler('xyz', degrees=True)
+                
+                # Convert to quaternion as well
+                ee_quaternion = rotation.as_quat()  # [x, y, z, w] format
+                
+                # Convert joint angles to degrees for display
+                joint_angles_deg = np.degrees(joint_angles)
+                
+                return {
+                    "status": "success",
+                    "message": "Forward kinematics computed successfully",
+                    "robot_prim_path": robot_prim_path,
+                    "joint_angles_source": source,
+                    "joint_angles_rad": joint_angles.tolist(),
+                    "joint_angles_deg": joint_angles_deg.tolist(),
+                    "ee_position": ee_position.tolist(),  # [x, y, z] in meters
+                    "ee_rpy_rad": ee_rpy_rad.tolist(),   # [roll, pitch, yaw] in radians
+                    "ee_rpy_deg": ee_rpy_deg.tolist(),   # [roll, pitch, yaw] in degrees
+                    "ee_quaternion_xyzw": ee_quaternion.tolist(),  # [x, y, z, w]
+                    "transformation_matrix": T_ee.tolist()  # Full 4x4 transformation matrix
+                }
+                
+            except Exception as e:
+                return {
+                    "status": "error",
+                    "message": f"Failed to compute forward kinematics: {str(e)}",
+                    "joint_angles_rad": joint_angles.tolist(),
+                    "joint_angles_deg": np.degrees(joint_angles).tolist()
+                }
+                
+        except Exception as e:
+            import traceback
+            return {
+                "status": "error",
+                "message": f"Unexpected error in forward kinematics computation: {str(e)}",
                 "traceback": traceback.format_exc()
             }
