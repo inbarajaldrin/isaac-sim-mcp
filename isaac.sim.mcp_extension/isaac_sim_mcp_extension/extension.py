@@ -298,6 +298,7 @@ class MCPExtension(omni.ext.IExt):
             "move_prim": self.move_prim,
             "control_gripper": self.control_gripper,  
             "perform_ik": self.perform_ik,
+            "execute_joint_trajectory": self.execute_joint_trajectory,
             "get_ee_pose": self.get_ee_pose,
         }
         
@@ -319,8 +320,6 @@ class MCPExtension(omni.ext.IExt):
         else:
             return {"status": "error", "message": f"Unknown command type: {cmd_type}"}
         
-
-    
 
     def execute_script(self, code: str) :
         """Execute a Python script within the Isaac Sim context.
@@ -864,18 +863,19 @@ class MCPExtension(omni.ext.IExt):
             }
 
     def perform_ik(self, robot_prim_path: str, target_position: List[float], target_rpy: List[float], 
-                custom_lib_path: str = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries") -> Dict[str, Any]:
+                duration: float = 3.0, custom_lib_path: str = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries") -> Dict[str, Any]:
         """
-        Perform inverse kinematics on the robot and move it to the target pose.
+        Perform inverse kinematics on the robot and execute smooth trajectory movement.
         
         Args:
             robot_prim_path: Path to the robot prim (e.g., "/World/UR5e")
             target_position: [x, y, z] target position in meters
             target_rpy: [roll, pitch, yaw] target orientation in degrees
+            duration: Time to complete the movement in seconds (default: 3.0)
             custom_lib_path: Path to your custom IK solver library
             
         Returns:
-            Dictionary with execution result including joint angles and success status.
+            Dictionary with execution result including joint angles and trajectory execution status.
         """
         try:
             import sys
@@ -937,29 +937,55 @@ class MCPExtension(omni.ext.IExt):
                 joint_angles_deg = np.degrees(joint_angles)
                 print(f"IK solution (deg): {joint_angles_deg}")
                 
-                # Apply joint angles to robot
+                # Execute joint trajectory instead of direct setting
                 try:
-                    robot.set_joint_positions(joint_angles)
-                    print("Joint angles applied to robot successfully")
+                    trajectory_result = self.execute_joint_trajectory(joint_angles.tolist(), duration)
                     
+                    if trajectory_result.get("status") == "success":
+                        print("Joint trajectory executed successfully")
+                        
+                        return {
+                            "status": "success",
+                            "message": "IK solved and trajectory executed successfully",
+                            "robot_prim_path": robot_prim_path,
+                            "target_position": target_position,
+                            "target_rpy": target_rpy,
+                            "joint_angles_rad": joint_angles.tolist(),
+                            "joint_angles_deg": joint_angles_deg.tolist(),
+                            "previous_joints_rad": current_joints.tolist() if current_joints is not None else None,
+                            "previous_joints_deg": current_joints_deg.tolist() if current_joints_deg is not None else None,
+                            "duration": duration,
+                            "trajectory_status": "executed",
+                            "ros_output": trajectory_result.get("ros_output")
+                        }
+                    else:
+                        # IK succeeded but trajectory failed - still return the joint angles
+                        return {
+                            "status": "partial_success",
+                            "message": f"IK solved but trajectory execution failed: {trajectory_result.get('message', 'Unknown trajectory error')}",
+                            "robot_prim_path": robot_prim_path,
+                            "target_position": target_position,
+                            "target_rpy": target_rpy,
+                            "joint_angles_rad": joint_angles.tolist(),
+                            "joint_angles_deg": joint_angles_deg.tolist(),
+                            "previous_joints_rad": current_joints.tolist() if current_joints is not None else None,
+                            "previous_joints_deg": current_joints_deg.tolist() if current_joints_deg is not None else None,
+                            "duration": duration,
+                            "trajectory_status": "failed",
+                            "trajectory_error": trajectory_result.get("message", "Unknown error")
+                        }
+                        
+                except Exception as e:
                     return {
-                        "status": "success",
-                        "message": "IK solved and robot moved successfully",
-                        "robot_prim_path": robot_prim_path,
-                        "target_position": target_position,
-                        "target_rpy": target_rpy,
+                        "status": "partial_success",
+                        "message": f"IK solved but trajectory execution error: {str(e)}",
                         "joint_angles_rad": joint_angles.tolist(),
                         "joint_angles_deg": joint_angles_deg.tolist(),
                         "previous_joints_rad": current_joints.tolist() if current_joints is not None else None,
-                        "previous_joints_deg": current_joints_deg.tolist() if current_joints_deg is not None else None
-                    }
-                    
-                except Exception as e:
-                    return {
-                        "status": "error",
-                        "message": f"IK solved but failed to apply joint angles: {str(e)}",
-                        "joint_angles_rad": joint_angles.tolist(),
-                        "joint_angles_deg": joint_angles_deg.tolist()
+                        "previous_joints_deg": current_joints_deg.tolist() if current_joints_deg is not None else None,
+                        "duration": duration,
+                        "trajectory_status": "error",
+                        "trajectory_error": str(e)
                     }
             else:
                 return {
@@ -968,7 +994,8 @@ class MCPExtension(omni.ext.IExt):
                     "robot_prim_path": robot_prim_path,
                     "target_position": target_position,
                     "target_rpy": target_rpy,
-                    "current_joints_rad": current_joints.tolist() if current_joints is not None else None
+                    "current_joints_rad": current_joints.tolist() if current_joints is not None else None,
+                    "duration": duration
                 }
                 
         except Exception as e:
@@ -979,6 +1006,83 @@ class MCPExtension(omni.ext.IExt):
                 "traceback": traceback.format_exc()
             }
 
+    def execute_joint_trajectory(self, joint_angles: List[float], duration: float = 3.0, 
+                                joint_names: List[str] = None) -> Dict[str, Any]:
+        """
+        Execute joint trajectory using the simplest possible method (like gripper).
+        
+        Args:
+            joint_angles: Target joint angles in radians [j1, j2, j3, j4, j5, j6]
+            duration: Time to complete the movement in seconds (default: 3.0)
+            joint_names: Custom joint names (optional, uses UR5e defaults)
+            
+        Returns:
+            Dictionary with execution result.
+        """
+        try:
+            import subprocess
+            
+            # Validate inputs
+            if len(joint_angles) != 6:
+                return {
+                    "status": "error",
+                    "message": f"Expected 6 joint angles, got {len(joint_angles)}"
+                }
+            
+            # Format joint angles as simple comma-separated string (exactly like gripper)
+            joint_command = ",".join([f"{angle:.6f}" for angle in joint_angles])
+            
+            # Send to a topic using std_msgs/String (same as gripper command)
+            ros2_cmd = [
+                'ros2', 'topic', 'pub', '--once',
+                '/robot_joint_command',  # Simple topic name
+                'std_msgs/String',       # Same message type as gripper
+                f"{{data: '{joint_command}'}}"
+            ]
+            
+            try:
+                result = subprocess.run(ros2_cmd, 
+                                    capture_output=True, 
+                                    text=True, 
+                                    timeout=5)
+                
+                if result.returncode == 0:
+                    return {
+                        "status": "success",
+                        "message": "Joint command sent successfully",
+                        "joint_angles": joint_angles,
+                        "duration": duration,
+                        "command_sent": joint_command,
+                        "ros_output": result.stdout.strip() if result.stdout else None
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"ROS2 command failed: {result.stderr.strip()}",
+                        "joint_angles": joint_angles,
+                        "command_attempted": joint_command,
+                        "ros_output": result.stdout.strip() if result.stdout else None
+                    }
+                    
+            except subprocess.TimeoutExpired:
+                return {
+                    "status": "error",
+                    "message": "ROS2 command timed out (5 seconds)"
+                }
+            except FileNotFoundError:
+                return {
+                    "status": "error", 
+                    "message": "ros2 command not found. Make sure ROS2 is properly installed and sourced."
+                }
+                
+        except Exception as e:
+            import traceback
+            return {
+                "status": "error",
+                "message": f"Unexpected error in joint command: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+                            
     def get_ee_pose(self, robot_prim_path: str, joint_angles: List[float] = None,
                     custom_lib_path: str = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries") -> Dict[str, Any]:
         """
