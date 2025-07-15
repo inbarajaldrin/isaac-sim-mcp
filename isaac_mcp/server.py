@@ -641,26 +641,28 @@ def control_gripper(ctx: Context, command: str) -> str:
 
 @mcp.tool()
 def perform_ik(ctx: Context, robot_prim_path: str, target_position: list, target_rpy: list, 
-               custom_lib_path: str = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries") -> str:
+               duration: float = 3.0, custom_lib_path: str = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries") -> str:
     """
-    Perform inverse kinematics on the robot and move it to the target pose.
+    Perform inverse kinematics on the robot and execute smooth trajectory movement.
     
     Args:
         robot_prim_path: Path to the robot prim (e.g., "/World/UR5e")
         target_position: [x, y, z] target position in meters (e.g., [0.4, 0.2, 0.3])
         target_rpy: [roll, pitch, yaw] target orientation in degrees (e.g., [0, 90, 0])
+        duration: Time to complete the movement in seconds (default: 3.0)
         custom_lib_path: Path to custom IK solver library (optional, defaults to your ur_asu path)
         
     Examples:
         perform_ik("/World/UR5e", [0.4, 0.2, 0.3], [0, 90, 0])
-        perform_ik("/World/UR5e", [0.5, -0.1, 0.4], [45, 0, -30])
-        perform_ik("/World/UR5e", [0.3, 0.0, 0.5], [0, 0, 180])
+        perform_ik("/World/UR5e", [0.5, -0.1, 0.4], [45, 0, -30], duration=5.0)
+        perform_ik("/World/UR5e", [0.3, 0.0, 0.5], [0, 0, 180], duration=2.0)
         
     Note: 
         - Position is in meters relative to robot base
         - RPY is in degrees (roll, pitch, yaw)
         - Robot must exist in scene (use list_prims() to check)
         - Custom IK solver must be available at the specified path
+        - Now executes smooth trajectory movement via ROS2 action client
     """
     try:
         isaac = get_isaac_connection()
@@ -669,6 +671,7 @@ def perform_ik(ctx: Context, robot_prim_path: str, target_position: list, target
             "robot_prim_path": robot_prim_path,
             "target_position": target_position,
             "target_rpy": target_rpy,
+            "duration": duration,
             "custom_lib_path": custom_lib_path
         })
         
@@ -679,8 +682,9 @@ def perform_ik(ctx: Context, robot_prim_path: str, target_position: list, target
             joint_deg = result.get("joint_angles_deg", [])
             prev_rad = result.get("previous_joints_rad", [])
             prev_deg = result.get("previous_joints_deg", [])
+            duration_used = result.get("duration", 3.0)
             
-            response = f"✓ IK solved and robot moved successfully!\n\n"
+            response = f"✅ IK solved and trajectory executed successfully!\n\n"
             
             response += f"Target Pose:\n"
             response += f"  Position: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}] m\n"
@@ -691,15 +695,66 @@ def perform_ik(ctx: Context, robot_prim_path: str, target_position: list, target
                 response += f"  Radians: {[f'{j:.3f}' for j in prev_rad]}\n"
                 response += f"  Degrees: {[f'{j:.1f}' for j in prev_deg]}\n\n"
             
-            response += f"New Joint Angles:\n"
+            response += f"Target Joint Angles:\n"
             response += f"  Radians: {[f'{j:.3f}' for j in joint_rad]}\n"
             response += f"  Degrees: {[f'{j:.1f}' for j in joint_deg]}\n\n"
             
-            response += f"Robot: {result.get('robot_prim_path')}"
+            response += f"Movement Duration: {duration_used:.1f} seconds\n"
+            response += f"Robot: {result.get('robot_prim_path')}\n\n"
+            
+            response += "🎬 Robot is moving smoothly to the target pose!"
+            
+            if result.get("ros_output"):
+                response += f"\n\nROS Output: {result.get('ros_output')}"
+            
+            return response
+            
+        elif result.get("status") == "partial_success":
+            # IK succeeded but trajectory failed
+            target_pos = result.get("target_position", [])
+            target_rot = result.get("target_rpy", [])
+            joint_rad = result.get("joint_angles_rad", [])
+            joint_deg = result.get("joint_angles_deg", [])
+            duration_used = result.get("duration", 3.0)
+            traj_error = result.get("trajectory_error", "Unknown trajectory error")
+            
+            response = f"⚠️ IK succeeded but trajectory execution failed!\n\n"
+            
+            response += f"✓ IK Solution Found:\n"
+            response += f"  Target: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}] m, "
+            response += f"[{target_rot[0]:.1f}, {target_rot[1]:.1f}, {target_rot[2]:.1f}] deg\n"
+            response += f"  Joint angles: {[f'{j:.1f}°' for j in joint_deg]}\n"
+            response += f"  Duration: {duration_used:.1f}s\n\n"
+            
+            response += f"✗ Trajectory Execution Failed: {traj_error}\n\n"
+            
+            # Troubleshooting tips based on error type
+            if "server not available" in traj_error.lower():
+                response += "💡 Troubleshooting:\n"
+                response += "- Make sure the UR robot controller is running\n"
+                response += "- Check if ROS2 action server is active:\n"
+                response += "  ros2 action list | grep follow_joint_trajectory\n"
+                response += "- Verify ROS2 connection to robot\n"
+            elif "timeout" in traj_error.lower():
+                response += "💡 Troubleshooting:\n"
+                response += "- Try reducing the duration\n"
+                response += "- Check if robot is responding\n"
+                response += "- Ensure no emergency stops triggered\n"
+            elif "rejected" in traj_error.lower():
+                response += "💡 Troubleshooting:\n"
+                response += "- Joint angles may be out of limits\n"
+                response += "- Check if robot is in a safe state\n"
+                response += "- Verify joint angle values are reasonable\n"
+            else:
+                response += "💡 Alternatives:\n"
+                response += "- Try execute_joint_trajectory() manually\n"
+                response += "- Check ROS2 connection and robot status\n"
+                response += "- Use smaller duration or different target pose\n"
             
             return response
             
         else:
+            # IK failed
             error_msg = result.get("message", "Unknown error")
             response = f"✗ IK failed: {error_msg}\n\n"
             
@@ -710,6 +765,8 @@ def perform_ik(ctx: Context, robot_prim_path: str, target_position: list, target
                 response += f"Target RPY: {result['target_rpy']}\n"
             if "current_joints_rad" in result and result["current_joints_rad"]:
                 response += f"Current joints (rad): {[f'{j:.3f}' for j in result['current_joints_rad']]}\n"
+            if "duration" in result:
+                response += f"Duration: {result['duration']}s\n"
             
             # Common troubleshooting tips
             if "not found" in error_msg.lower():
@@ -832,7 +889,7 @@ def get_ee_pose(ctx: Context, robot_prim_path: str, joint_angles: list = None,
     except Exception as e:
         logger.error(f"Error getting end-effector pose: {str(e)}")
         return f"✗ Error getting end-effector pose: {str(e)}"
-        
+
 # Main execution
 
 def main():
