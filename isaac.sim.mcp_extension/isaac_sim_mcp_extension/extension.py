@@ -431,7 +431,7 @@ class MCPExtension(omni.ext.IExt):
                 "usd_path": usd_path,
                 "traceback": traceback.format_exc()
             }
-            
+
     def import_usd(self, usd_path: str, prim_path: str = None, position: List[float] = None, orientation: List[float] = None, orientation_format: str = "degrees") -> Dict[str, Any]:
         """Import a USD file as a prim into the Isaac Sim stage with flexible orientation input."""
         try:
@@ -520,7 +520,7 @@ class MCPExtension(omni.ext.IExt):
                 "prim_path": prim_path,
                 "traceback": traceback.format_exc()
             }
-
+            
     def load_scene(self) -> Dict[str, Any]:
         """Load a basic scene with world and ground plane."""
         try:
@@ -610,7 +610,7 @@ class MCPExtension(omni.ext.IExt):
                 rotation_degrees = [0.0, 0.0, 0.0]
             else:
                 # Convert w,x,y,z to x,y,z,w format for Isaac function
-                quat_xyzw = np.array([quaternion[1], quaternion[2], quaternion[3], quaternion[0]])
+                quat_xyzw = np.array([quaternion[0], quaternion[1], quaternion[2], quaternion[3]])
                 rpy_rad = quats_to_euler_angles(quat_xyzw.reshape(1, 4))[0]
                 rpy_deg = np.rad2deg(rpy_rad)
                 rotation_radians = [float(rpy_rad[0]), float(rpy_rad[1]), float(rpy_rad[2])]
