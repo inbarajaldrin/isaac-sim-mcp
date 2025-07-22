@@ -47,7 +47,7 @@ class MCPClient:
                         params = tool_call.get("params", tool_call.get("arguments", {}))
                         
                         if tool_name in self.available_tools:
-                            print(f"   ⚙️  Calling {tool_name} with {params}")
+                            print(f"     Calling {tool_name} with {params}")
                             
                             try:
                                 result = await session.call_tool(tool_name, params)
@@ -61,3 +61,20 @@ class MCPClient:
                             print(f"   Tool '{tool_name}' not available")
                 else:
                     print("   No tools to execute")
+
+    async def get_available_tools(self):
+            """Quick connection to get available tools"""
+            try:
+                server_params = StdioServerParameters(
+                    command="python3",
+                    args=[self.server_script]
+                )
+                
+                async with stdio_client(server_params) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        tools_result = await session.list_tools()
+                        self.available_tools = [tool.name for tool in tools_result.tools]
+            except Exception as e:
+                print(f"Could not get tools: {e}")
+                self.available_tools = []
