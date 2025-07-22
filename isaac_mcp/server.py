@@ -684,7 +684,7 @@ def perform_ik(ctx: Context, robot_prim_path: str, target_position: list, target
             prev_deg = result.get("previous_joints_deg", [])
             duration_used = result.get("duration", 3.0)
             
-            response = f"✅ IK solved and trajectory executed successfully!\n\n"
+            response = f" IK solved and trajectory executed successfully!\n\n"
             
             response += f"Target Pose:\n"
             response += f"  Position: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}] m\n"
@@ -702,7 +702,7 @@ def perform_ik(ctx: Context, robot_prim_path: str, target_position: list, target
             response += f"Movement Duration: {duration_used:.1f} seconds\n"
             response += f"Robot: {result.get('robot_prim_path')}\n\n"
             
-            response += "🎬 Robot is moving smoothly to the target pose!"
+            response += " Robot is moving smoothly to the target pose!"
             
             if result.get("ros_output"):
                 response += f"\n\nROS Output: {result.get('ros_output')}"
@@ -718,35 +718,35 @@ def perform_ik(ctx: Context, robot_prim_path: str, target_position: list, target
             duration_used = result.get("duration", 3.0)
             traj_error = result.get("trajectory_error", "Unknown trajectory error")
             
-            response = f"⚠️ IK succeeded but trajectory execution failed!\n\n"
+            response = f" IK succeeded but trajectory execution failed!\n\n"
             
-            response += f"✓ IK Solution Found:\n"
+            response += f" IK Solution Found:\n"
             response += f"  Target: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}] m, "
             response += f"[{target_rot[0]:.1f}, {target_rot[1]:.1f}, {target_rot[2]:.1f}] deg\n"
             response += f"  Joint angles: {[f'{j:.1f}°' for j in joint_deg]}\n"
             response += f"  Duration: {duration_used:.1f}s\n\n"
             
-            response += f"✗ Trajectory Execution Failed: {traj_error}\n\n"
+            response += f" Trajectory Execution Failed: {traj_error}\n\n"
             
             # Troubleshooting tips based on error type
             if "server not available" in traj_error.lower():
-                response += "💡 Troubleshooting:\n"
+                response += " Troubleshooting:\n"
                 response += "- Make sure the UR robot controller is running\n"
                 response += "- Check if ROS2 action server is active:\n"
                 response += "  ros2 action list | grep follow_joint_trajectory\n"
                 response += "- Verify ROS2 connection to robot\n"
             elif "timeout" in traj_error.lower():
-                response += "💡 Troubleshooting:\n"
+                response += " Troubleshooting:\n"
                 response += "- Try reducing the duration\n"
                 response += "- Check if robot is responding\n"
                 response += "- Ensure no emergency stops triggered\n"
             elif "rejected" in traj_error.lower():
-                response += "💡 Troubleshooting:\n"
+                response += " Troubleshooting:\n"
                 response += "- Joint angles may be out of limits\n"
                 response += "- Check if robot is in a safe state\n"
                 response += "- Verify joint angle values are reasonable\n"
             else:
-                response += "💡 Alternatives:\n"
+                response += " Alternatives:\n"
                 response += "- Try execute_joint_trajectory() manually\n"
                 response += "- Check ROS2 connection and robot status\n"
                 response += "- Use smaller duration or different target pose\n"
@@ -756,7 +756,7 @@ def perform_ik(ctx: Context, robot_prim_path: str, target_position: list, target
         else:
             # IK failed
             error_msg = result.get("message", "Unknown error")
-            response = f"✗ IK failed: {error_msg}\n\n"
+            response = f" IK failed: {error_msg}\n\n"
             
             # Add helpful info if available
             if "target_position" in result:
@@ -770,15 +770,15 @@ def perform_ik(ctx: Context, robot_prim_path: str, target_position: list, target
             
             # Common troubleshooting tips
             if "not found" in error_msg.lower():
-                response += "\n💡 Tips:\n"
+                response += "\n Tips:\n"
                 response += "- Use list_prims() to see available objects\n"
                 response += "- Make sure robot is loaded in the scene\n"
             elif "import" in error_msg.lower():
-                response += "\n💡 Tips:\n"
+                response += "\n Tips:\n"
                 response += "- Check if ik_solver.py exists in custom_lib_path\n"
                 response += "- Verify the custom library path is correct\n"
             elif "solution" in error_msg.lower():
-                response += "\n💡 Tips:\n"
+                response += "\n Tips:\n"
                 response += "- Try a different target position (closer to robot)\n"
                 response += "- Check if target is within robot's reach\n"
                 response += "- Verify orientation values are reasonable\n"
@@ -834,7 +834,7 @@ def get_ee_pose(ctx: Context, robot_prim_path: str, joint_angles: list = None,
             ee_rpy_deg = result.get("ee_rpy_deg", [])
             ee_quat = result.get("ee_quaternion_xyzw", [])
             
-            response = f"✓ End-effector pose computed successfully!\n\n"
+            response = f" End-effector pose computed successfully!\n\n"
             
             response += f"Robot: {result.get('robot_prim_path')}\n"
             response += f"Joint angles source: {source.replace('_', ' ')}\n\n"
@@ -854,14 +854,14 @@ def get_ee_pose(ctx: Context, robot_prim_path: str, joint_angles: list = None,
             response += f"  Quaternion (x,y,z,w): [{ee_quat[0]:.3f}, {ee_quat[1]:.3f}, {ee_quat[2]:.3f}, {ee_quat[3]:.3f}]\n\n"
             
             # Add a summary line for quick reference
-            response += f"📍 Summary: Position [{ee_pos[0]:.3f}, {ee_pos[1]:.3f}, {ee_pos[2]:.3f}] m, "
+            response += f" Summary: Position [{ee_pos[0]:.3f}, {ee_pos[1]:.3f}, {ee_pos[2]:.3f}] m, "
             response += f"RPY [{ee_rpy_deg[0]:.1f}, {ee_rpy_deg[1]:.1f}, {ee_rpy_deg[2]:.1f}] deg"
             
             return response
             
         else:
             error_msg = result.get("message", "Unknown error")
-            response = f"✗ Forward kinematics failed: {error_msg}\n\n"
+            response = f" Forward kinematics failed: {error_msg}\n\n"
             
             # Add helpful info if available
             if "joint_angles_rad" in result:
@@ -871,15 +871,15 @@ def get_ee_pose(ctx: Context, robot_prim_path: str, joint_angles: list = None,
             
             # Common troubleshooting tips
             if "not found" in error_msg.lower():
-                response += "\n💡 Tips:\n"
+                response += "\n Tips:\n"
                 response += "- Use list_prims() to see available objects\n"
                 response += "- Make sure robot is loaded in the scene\n"
             elif "import" in error_msg.lower():
-                response += "\n💡 Tips:\n"
+                response += "\n Tips:\n"
                 response += "- Check if ik_solver.py exists in custom_lib_path\n"
                 response += "- Verify the custom library path is correct\n"
             elif "joint positions" in error_msg.lower():
-                response += "\n💡 Tips:\n"
+                response += "\n Tips:\n"
                 response += "- Robot may not be properly initialized\n"
                 response += "- Try providing joint_angles explicitly\n"
                 response += "- Ensure robot articulation is set up correctly\n"

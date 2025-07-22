@@ -77,5 +77,4 @@ local_cache/
 mcp_cache/
 
 # System files
-isaac_mcp/archive
 isaac.sim.mcp_extension/isaac_sim_mcp_extension/archive
