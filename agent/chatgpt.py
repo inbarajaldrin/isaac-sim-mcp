@@ -1,8 +1,7 @@
-import asyncio
 import json
 import os
 import sys
-from anthropic import AsyncAnthropic
+from openai import OpenAI
 from dotenv import load_dotenv
 
 # Fix the import path - don't duplicate the directory
@@ -11,16 +10,16 @@ from client import MCPClient
 
 load_dotenv()
 
-class ClaudeAgent:
+class ChatGPTAgent:
     def __init__(self):
-        # Claude
-        api_key = os.getenv("ANTHROPIC_API_KEY")
+        # OpenAI API
+        api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
-            raise ValueError("Set ANTHROPIC_API_KEY")
+            raise ValueError("Set OPENAI_API_KEY in your environment variables")
         
-        self.claude = AsyncAnthropic(api_key=api_key)
+        self.client = OpenAI(api_key=api_key)
         
-        # MCP Client - fix the path to server.py
+        # MCP Client - fix the path to server.py (same as Claude agent)
         # Get the absolute path to server.py
         current_dir = os.path.dirname(os.path.abspath(__file__))
         parent_dir = os.path.dirname(current_dir)
@@ -35,17 +34,17 @@ class ClaudeAgent:
             # First, get available tools by doing a quick connection
             await self.get_available_tools()
             
-            # Ask Claude what to do
-            print("Asking Claude...")
-            claude_response = await self.ask_claude(user_input, history)
+            # Ask ChatGPT what to do
+            print("Asking ChatGPT...")
+            chatgpt_response = await self.ask_chatgpt(user_input, history)
             
-            # Show Claude's reasoning
-            reasoning = claude_response.split("TOOLS:")[0].strip()
+            # Show ChatGPT's reasoning
+            reasoning = chatgpt_response.split("TOOLS:")[0].strip()
             if reasoning:
-                print(f"Claude's plan: {reasoning}")
+                print(f"ChatGPT's plan: {reasoning}")
             
             # Extract tool calls
-            tool_calls = self.extract_tools(claude_response)
+            tool_calls = self.extract_tools(chatgpt_response)
             
             # Execute tools via MCP client if any found
             if tool_calls:
@@ -55,11 +54,11 @@ class ClaudeAgent:
                 # Return reasoning + execution confirmation
                 return f"{reasoning}\n\nExecuted {len(tool_calls)} Isaac Sim command(s) successfully!"
             else:
-                # No tools to execute, just return Claude's response
-                return claude_response
+                # No tools to execute, just return ChatGPT's response
+                return chatgpt_response
                 
         except Exception as e:
-            error_msg = f"Claude agent error: {e}"
+            error_msg = f"ChatGPT agent error: {e}"
             print(error_msg)
             return error_msg
     
@@ -83,8 +82,8 @@ class ClaudeAgent:
             print(f"Could not get tools: {e}")
             self.mcp_client.available_tools = []
     
-    async def ask_claude(self, user_input: str, history: list = None) -> str:
-        """Ask Claude what tools to use - enhanced with history support"""
+    async def ask_chatgpt(self, user_input: str, history: list = None) -> str:
+        """Ask ChatGPT what tools to use - enhanced with history support"""
         
         tools_list = ", ".join(self.mcp_client.available_tools)
         
@@ -119,7 +118,7 @@ If no tools are needed (for general questions), just respond normally without TO
 
         try:
             # Build messages with history for context
-            messages = []
+            messages = [{"role": "system", "content": system_prompt}]
             
             # Add previous conversation history if provided (for Gradio integration)
             if history:
@@ -130,25 +129,25 @@ If no tools are needed (for general questions), just respond normally without TO
             # Add current user input
             messages.append({"role": "user", "content": user_input})
             
-            response = await self.claude.messages.create(
-                model="claude-3-5-sonnet-20241022",
+            response = self.client.chat.completions.create(
+                model="gpt-4",
+                messages=messages,
                 max_tokens=1500,
-                system=system_prompt,
-                messages=messages
+                temperature=0.3  # Lower temperature for more consistent tool calling
             )
             
-            return response.content[0].text
+            return response.choices[0].message.content
             
         except Exception as e:
-            return f"Claude error: {e}"
+            return f"ChatGPT error: {e}"
     
-    def extract_tools(self, claude_response: str):
-        """Extract tool calls from Claude response"""
+    def extract_tools(self, chatgpt_response: str):
+        """Extract tool calls from ChatGPT response"""
         try:
-            if "TOOLS:" in claude_response:
+            if "TOOLS:" in chatgpt_response:
                 # Find the start of the JSON array
-                start = claude_response.find("TOOLS:") + 6
-                json_start = claude_response.find("[", start)
+                start = chatgpt_response.find("TOOLS:") + 6
+                json_start = chatgpt_response.find("[", start)
                 
                 if json_start == -1:
                     return []
@@ -157,7 +156,7 @@ If no tools are needed (for general questions), just respond normally without TO
                 bracket_count = 0
                 json_end = json_start
                 
-                for i, char in enumerate(claude_response[json_start:], json_start):
+                for i, char in enumerate(chatgpt_response[json_start:], json_start):
                     if char == '[':
                         bracket_count += 1
                     elif char == ']':
@@ -167,7 +166,7 @@ If no tools are needed (for general questions), just respond normally without TO
                             break
                 
                 # Extract the JSON string
-                json_str = claude_response[json_start:json_end]
+                json_str = chatgpt_response[json_start:json_end]
                 
                 # Clean up the JSON string - remove extra whitespace and newlines
                 json_str = json_str.replace('\n', ' ').replace('\r', '')
@@ -178,6 +177,6 @@ If no tools are needed (for general questions), just respond normally without TO
                 
         except Exception as e:
             print(f"Could not parse tools: {e}")
-            print(f"Debug - Raw response: {claude_response[:500]}...")
+            print(f"Debug - Raw response: {chatgpt_response[:500]}...")
         
         return []
