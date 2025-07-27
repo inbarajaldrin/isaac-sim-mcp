@@ -40,7 +40,7 @@ class MCPClient:
                 
                 # Execute tool calls
                 if tool_calls:
-                    print(f"🔧 Executing {len(tool_calls)} tool(s)...")
+                    print(f" Executing {len(tool_calls)} tool(s)...")
                     
                     for tool_call in tool_calls:
                         tool_name = tool_call.get("tool", tool_call.get("name"))
