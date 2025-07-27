@@ -441,78 +441,154 @@ class MCPExtension(omni.ext.IExt):
             import numpy as np
             from omni.isaac.core.utils.numpy.rotations import euler_angles_to_quats
             import omni.usd
+            import time
             
             # Auto-generate prim path from filename if not provided
             if prim_path is None:
                 filename = os.path.splitext(os.path.basename(usd_path))[0]
                 prim_path = f"/World/{filename}"
+                
+                # Make sure prim path is unique
+                stage = omni.usd.get_context().get_stage()
+                counter = 1
+                original_path = prim_path
+                while stage.GetPrimAtPath(prim_path).IsValid():
+                    prim_path = f"{original_path}_{counter}"
+                    counter += 1
             
-            # Import USD file
+            # Import USD file first
+            print(f"Importing USD from {usd_path} to {prim_path}")
             add_reference_to_stage(usd_path=usd_path, prim_path=prim_path)
-            print(f"Prim imported at {prim_path}")
             
-            # Apply positioning if specified, otherwise default to [0, 0, 0]
+            # Wait for the prim to be fully created
+            max_attempts = 10
+            attempt = 0
+            stage = omni.usd.get_context().get_stage()
+            prim = None
+            
+            while attempt < max_attempts:
+                prim = stage.GetPrimAtPath(prim_path)
+                if prim.IsValid():
+                    print(f"Prim found at {prim_path} after {attempt} attempts")
+                    break
+                print(f"Waiting for prim creation, attempt {attempt + 1}")
+                time.sleep(0.1)
+                attempt += 1
+            
+            if not prim or not prim.IsValid():
+                return {
+                    "status": "error",
+                    "message": f"Prim at {prim_path} not found after import. Import may have failed."
+                }
+            
+            # Apply default values if not provided
             if position is None:
                 position = [0.0, 0.0, 0.0]
             
-            # Apply orientation if specified, otherwise default to [0, 0, 0]
             if orientation is None:
                 orientation = [0.0, 0.0, 0.0]
                 orientation_format = "degrees"
             
-            # Apply transformation
-            stage = omni.usd.get_context().get_stage()
-            prim = stage.GetPrimAtPath(prim_path)
-            if not prim.IsValid():
-                raise RuntimeError(f"Prim at {prim_path} not found after import.")
+            # Make sure prim is transformable
+            if not prim.IsA(UsdGeom.Xformable):
+                xform = UsdGeom.Xform.Define(stage, prim_path)
+                print(f"Converted prim to Xformable")
+            else:
+                xform = UsdGeom.Xform(prim)
             
-            xform = UsdGeom.Xform(prim)
+            # CRITICAL: Detect existing orient operation precision BEFORE clearing (same as move_prim)
+            existing_orient_precision = None
+            existing_ops = xform.GetOrderedXformOps()
+            for op in existing_ops:
+                if op.GetOpType() == UsdGeom.XformOp.TypeOrient:
+                    # Get the precision from existing operation
+                    if "quatd" in str(op.GetAttr().GetTypeName()):
+                        existing_orient_precision = UsdGeom.XformOp.PrecisionDouble
+                        print("Detected existing double precision quaternion")
+                    elif "quatf" in str(op.GetAttr().GetTypeName()):
+                        existing_orient_precision = UsdGeom.XformOp.PrecisionFloat
+                        print("Detected existing float precision quaternion")
+                    break
+            
+            # Clear and recreate with matching precision (same as move_prim)
             xform.ClearXformOpOrder()
             
-            # Translation
+            # Apply translation (always double precision for position)
             position_vec = Gf.Vec3d(position[0], position[1], position[2])
             xform.AddTranslateOp().Set(position_vec)
             
-            # Handle different orientation input formats
+            # Handle orientation conversion (same logic as move_prim)
             if orientation_format.lower() == "quaternion" and len(orientation) == 4:
-                # Input is already quaternion [w, x, y, z] or [x, y, z, w]
-                # Assume [w, x, y, z] format (scalar first)
-                quat = Gf.Quatd(orientation[0], orientation[1], orientation[2], orientation[3])
-                print(f"Applied quaternion orientation: {orientation}")
-            
+                final_quaternion = orientation
+                print(f"Using quaternion orientation: {orientation}")
             elif orientation_format.lower() == "radians" and len(orientation) == 3:
-                # Input is RPY in radians
                 rpy_rad = np.array(orientation)
                 quat_xyzw = euler_angles_to_quats(rpy_rad)
-                quat = Gf.Quatd(quat_xyzw[0], quat_xyzw[1], quat_xyzw[2], quat_xyzw[3])
-                print(f"Applied radian orientation {orientation} rad")
-            
+                final_quaternion = [quat_xyzw[0], quat_xyzw[1], quat_xyzw[2], quat_xyzw[3]]  # w,x,y,z
+                print(f"Converted radian orientation {orientation} to quaternion {final_quaternion}")
             else:
                 # Default: Input is RPY in degrees
                 rpy_deg = np.array(orientation)
                 rpy_rad = np.deg2rad(rpy_deg)
                 quat_xyzw = euler_angles_to_quats(rpy_rad)
-                quat = Gf.Quatd(quat_xyzw[0], quat_xyzw[1], quat_xyzw[2], quat_xyzw[3])
-                print(f"Applied degree orientation {orientation} degrees")
+                final_quaternion = [quat_xyzw[0], quat_xyzw[1], quat_xyzw[2], quat_xyzw[3]]  # w,x,y,z
+                print(f"Converted degree orientation {orientation} to quaternion {final_quaternion}")
             
-            # Add orient op with matching precision
-            orient_op = xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble)
+            # Apply rotation with MATCHING precision (this is the key fix!)
+            if existing_orient_precision == UsdGeom.XformOp.PrecisionFloat:
+                quat = Gf.Quatf(final_quaternion[0], final_quaternion[1], final_quaternion[2], final_quaternion[3])
+                orient_op = xform.AddOrientOp(UsdGeom.XformOp.PrecisionFloat)
+                print("Using float precision for quaternion")
+            else:
+                quat = Gf.Quatd(final_quaternion[0], final_quaternion[1], final_quaternion[2], final_quaternion[3])
+                orient_op = xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble)
+                print("Using double precision for quaternion")
+            
             orient_op.Set(quat)
             
-            print(f"Applied translation {position} and rotation with double-precision quaternion.")
+            print(f"Successfully imported and positioned {prim_path}")
+            print(f"Final position: {position}")
+            print(f"Final orientation: {orientation} ({orientation_format})")
+            
+            # Verify the transform was applied by reading it back
+            try:
+                translate_attr = prim.GetAttribute("xformOp:translate")
+                orient_attr = prim.GetAttribute("xformOp:orient")
+                
+                actual_position = [0, 0, 0]
+                actual_quaternion = [1, 0, 0, 0]
+                
+                if translate_attr.IsValid():
+                    translate_value = translate_attr.Get()
+                    if translate_value:
+                        actual_position = [float(translate_value[0]), float(translate_value[1]), float(translate_value[2])]
+                
+                if orient_attr.IsValid():
+                    orient_value = orient_attr.Get()
+                    if orient_value:
+                        actual_quaternion = [float(orient_value.GetReal()), float(orient_value.GetImaginary()[0]), 
+                                        float(orient_value.GetImaginary()[1]), float(orient_value.GetImaginary()[2])]
+                
+                print(f"Verified - Actual position: {actual_position}")
+                print(f"Verified - Actual quaternion: {actual_quaternion}")
+                
+            except Exception as e:
+                print(f"Could not verify transform: {str(e)}")
             
             return {
                 "status": "success",
                 "message": f"Successfully imported USD file at {prim_path} with position {position} and orientation {orientation} ({orientation_format})",
                 "usd_path": usd_path,
                 "prim_path": prim_path,
-                "position": position,
-                "orientation": orientation,
+                "final_position": position,
+                "final_orientation": orientation,
                 "orientation_format": orientation_format
             }
             
         except Exception as e:
             import traceback
+            print(f"Error in import_usd: {str(e)}")
+            traceback.print_exc()
             return {
                 "status": "error",
                 "message": f"Failed to import USD file: {str(e)}",
@@ -520,7 +596,7 @@ class MCPExtension(omni.ext.IExt):
                 "prim_path": prim_path,
                 "traceback": traceback.format_exc()
             }
-            
+
     def load_scene(self) -> Dict[str, Any]:
         """Load a basic scene with world and ground plane."""
         try:
@@ -760,7 +836,6 @@ class MCPExtension(omni.ext.IExt):
                 "prim_path": prim_path,
                 "traceback": traceback.format_exc()
             }
-
 
     def control_gripper(self, command: Union[str, int, float]) -> Dict[str, Any]:
         """
