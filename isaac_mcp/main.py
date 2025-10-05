@@ -53,7 +53,6 @@ class IsaacSimTerminal:
         print("  • 'backends' - Show available backends")
         print("  • 'history' - Show conversation history")
         print("  • 'clear' - Clear conversation history")
-        print("  • 'help' - Show available Isaac Sim tools")
         print("  • 'test' - Test connection to Isaac Sim")
         print("  • 'quit' or 'exit' - Exit the application")
         print("=" * 50)
@@ -88,14 +87,6 @@ class IsaacSimTerminal:
                 # Check if it's a backend name
                 if choice in self.available_backends:
                     return choice
-                
-                # Handle common variations
-                if choice in ['gpt', 'chatgpt', 'openai', 'gpt4']:
-                    if 'chatgpt' in self.available_backends:
-                        return 'chatgpt'
-                elif choice in ['claude', 'anthropic']:
-                    if 'claude' in self.available_backends:
-                        return 'claude'
                 
                 print(f" Invalid choice. Available options: {', '.join(self.available_backends)}")
                 
@@ -192,25 +183,16 @@ class IsaacSimTerminal:
         """Show available Isaac Sim tools and examples"""
         print("\n  Available Isaac Sim Tools:")
         print("-" * 40)
-        print("• get_scene_info - Check what's in the scene")
-        print("• list_prims - List all objects in the scene")
-        print("• load_scene - Load a basic scene with ground plane")
-        print("• open_usd/import_usd - Load USD files")
-        print("• get_object_info - Get detailed object information")
-        print("• move_prim - Move objects to new positions")
-        print("• control_gripper - Open/close robot grippers")
-        print("• perform_ik - Robot inverse kinematics")
-        print("• get_ee_pose - Get robot end-effector pose")
-        print("• execute_script - Run custom Python code")
         
-        print("\n Example commands:")
-        print("• 'What objects are in the scene?'")
-        print("• 'Move the cube to position [1, 0, 0.5]'")
-        print("• 'Open the robot gripper'")
-        print("• 'What is the current end-effector position?'")
-        print("• 'Load a basic scene'")
-        print("• 'Get information about the robot'")
-        print("• 'Execute some Python code to check the scene'")
+        if self.host and hasattr(self.host.mcp_client, 'available_tools'):
+            if self.host.mcp_client.available_tools:
+                for tool in self.host.mcp_client.available_tools:
+                    print(f"• {tool}")
+            else:
+                print("• No tools available (connect to Isaac Sim first)")
+        else:
+            print("• Tools will be discovered when you connect to Isaac Sim")
+        
     
     async def test_connection(self):
         """Test connection to Isaac Sim"""
