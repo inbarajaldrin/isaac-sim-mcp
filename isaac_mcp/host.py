@@ -27,6 +27,12 @@ try:
 except ImportError:
     OPENAI_AVAILABLE = False
 
+try:
+    import ollama
+    OLLAMA_AVAILABLE = True
+except ImportError:
+    OLLAMA_AVAILABLE = False
+
 load_dotenv()
 
 class MCPHost:
@@ -74,6 +80,14 @@ class MCPHost:
                 raise ValueError("OPENAI_API_KEY not found in environment variables")
             
             self.llm_client = OpenAI(api_key=api_key)
+            
+        elif self.backend == "ollama":
+            if not OLLAMA_AVAILABLE:
+                raise ImportError("Ollama package not available. Install with: pip install ollama")
+            
+            # Set the model name for Ollama
+            self.model_name = "codellama:13b"
+            self.llm_client = ollama  # Use ollama module directly
             
         else:
             raise ValueError(f"Unsupported backend: {self.backend}")
@@ -161,6 +175,8 @@ If no tools are needed (for general questions), just respond normally without TO
                 return await self._ask_claude(system_prompt, user_input, history)
             elif self.backend == "chatgpt":
                 return await self._ask_chatgpt(system_prompt, user_input, history)
+            elif self.backend == "ollama":
+                return await self._ask_ollama(system_prompt, user_input, history)
             else:
                 return f"Unsupported backend: {self.backend}"
                 
@@ -215,6 +231,42 @@ If no tools are needed (for general questions), just respond normally without TO
         
         return response.choices[0].message.content
     
+    async def _ask_ollama(self, system_prompt: str, user_input: str, history: list = None) -> str:
+        """Ask Ollama specifically"""
+        
+        # Build the full prompt with system message and history
+        full_prompt = f"{system_prompt}\n\n"
+        
+        # Add previous conversation history if provided
+        if history:
+            for msg in history[-5:]:  # Keep last 5 messages for context
+                if isinstance(msg, dict) and msg.get("role") in ["user", "assistant"]:
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    if role == "user":
+                        full_prompt += f"User: {content}\n"
+                    elif role == "assistant":
+                        full_prompt += f"Assistant: {content}\n"
+        
+        # Add current user input
+        full_prompt += f"User: {user_input}\nAssistant:"
+        
+        try:
+            response = self.llm_client.generate(
+                model=self.model_name,
+                prompt=full_prompt,
+                options={
+                    'temperature': 0.3,  # Lower temperature for more consistent tool calling
+                    'top_p': 0.9,
+                    'num_predict': 1500  # Max tokens to generate
+                }
+            )
+            
+            return response['response']
+            
+        except Exception as e:
+            return f"Ollama error: {e}"
+    
     def _extract_tools(self, llm_response: str):
         """Extract tool calls from LLM response"""
         try:
@@ -264,6 +316,10 @@ async def create_chatgpt_host():
     """Create a ChatGPT-based MCP host"""
     return MCPHost("chatgpt")
 
+async def create_ollama_host():
+    """Create an Ollama-based MCP host"""
+    return MCPHost("ollama")
+
 def check_backend_availability():
     """Check which backends are available"""
     available_backends = []
@@ -275,5 +331,9 @@ def check_backend_availability():
     # Check ChatGPT availability
     if OPENAI_AVAILABLE and os.getenv("OPENAI_API_KEY"):
         available_backends.append("chatgpt")
+    
+    # Check Ollama availability
+    if OLLAMA_AVAILABLE:
+        available_backends.append("ollama")
     
     return available_backends
