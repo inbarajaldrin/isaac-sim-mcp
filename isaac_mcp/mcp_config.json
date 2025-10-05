@@ -17,6 +17,17 @@
       "args": [
         "/home/aaugus11/Documents/ros-mcp-server/server.py"
       ]
+    },
+    "Prompts": {
+      "command": "/snap/bin/uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "mcp",
+        "run",
+        "/home/aaugus11/Documents/mcp-server-example/prompt.py"
+      ]
     }
   }
 }
