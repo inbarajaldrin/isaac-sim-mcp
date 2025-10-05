@@ -260,23 +260,6 @@ def get_isaac_connection():
 
 
 @mcp.tool()
-def get_scene_info(ctx: Context) -> str:
-    """Ping status of Isaac Sim Extension Server"""
-    try:
-        isaac = get_isaac_connection()
-        result = isaac.send_command("get_scene_info")
-        print("result: ", result)
-        
-        # Just return the JSON representation of what Isaac sent us
-        return json.dumps(result, indent=2)
-        # return json.dumps(result)
-        # return result
-    except Exception as e:
-        logger.error(f"Error getting scene info from Isaac: {str(e)}")
-        # return f"Error getting scene info: {str(e)}"
-        return {"status": "error", "error": str(e), "message": "Error getting scene info"}
-
-@mcp.tool()
 def execute_script(ctx: Context, code: str) -> str:
     """
     Before execute script pls check prompt from asset_creation_strategy() to ensure the scene is properly initialized.
@@ -387,28 +370,6 @@ def list_prims() -> str:
         logger.error(f"Error listing prims: {str(e)}")
         return f"Error listing prims: {str(e)}"
 
-@mcp.tool()
-def open_usd(usd_path: str) -> str:
-    """
-    Open a USD file in the Isaac Sim stage.
-    
-    Args:
-        usd_path: Path to the USD file (local or Omniverse path)
-    
-    Examples:
-        open_usd("omniverse://localhost/Library/Aruco/DT.usd")
-        open_usd("/path/to/your/file.usd")
-    """
-    try:
-        # Use the existing connection pattern like other tools
-        isaac = get_isaac_connection()
-        result = isaac.send_command("open_usd", {
-            "usd_path": usd_path
-        })
-        return f"Successfully opened USD stage: {result.get('message', '')}"
-    except Exception as e:
-        logger.error(f"Error opening USD: {str(e)}")
-        return f"Error opening USD: {str(e)}"
 
 @mcp.tool()
 def import_usd(usd_path: str, prim_path: str = None, position: list = None, orientation: list = None, orientation_format: str = "degrees") -> str:
@@ -446,26 +407,6 @@ def import_usd(usd_path: str, prim_path: str = None, position: list = None, orie
         logger.error(f"Error importing USD: {str(e)}")
         return f"Error importing USD: {str(e)}"
 
-@mcp.tool()
-def load_scene() -> str:
-    """
-    Load a basic scene with world and ground plane in Isaac Sim.
-    This initializes the simulation context and adds a default ground plane.
-    
-    Example:
-        load_scene()
-    """
-    try:
-        # Use the existing connection pattern
-        isaac = get_isaac_connection()
-        
-        result = isaac.send_command("load_scene")
-        
-        return f"Successfully loaded scene: {result.get('message', '')}"
-        
-    except Exception as e:
-        logger.error(f"Error loading scene: {str(e)}")
-        return f"Error loading scene: {str(e)}"
 
 
 @mcp.tool()

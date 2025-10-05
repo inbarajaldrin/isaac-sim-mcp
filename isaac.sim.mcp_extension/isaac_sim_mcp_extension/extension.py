@@ -47,10 +47,6 @@ from omni.isaac.nucleus import get_assets_root_path
 from omni.isaac.core.prims import XFormPrim
 import numpy as np
 from omni.isaac.core import World
-# Import Beaver3d and USDLoader
-from isaac_sim_mcp_extension.gen3d import Beaver3d
-from isaac_sim_mcp_extension.usd import USDLoader
-from isaac_sim_mcp_extension.usd import USDSearch3d
 import requests
 
 # Extension Methods required by Omniverse Kit
@@ -291,9 +287,7 @@ class MCPExtension(omni.ext.IExt):
         handlers = {
             "execute_script": self.execute_script,
             "list_prims": self.list_prims,
-            "open_usd": self.open_usd,
             "import_usd": self.import_usd,
-            "load_scene": self.load_scene,
             "get_object_info": self.get_object_info,
             "move_prim": self.move_prim,
         }
@@ -362,12 +356,6 @@ class MCPExtension(omni.ext.IExt):
                 "traceback": traceback.format_exc()
             }
         
-    def get_scene_info(self):
-        self._stage = omni.usd.get_context().get_stage()
-        assert self._stage is not None
-        stage_path = self._stage.GetRootLayer().realPath
-        assets_root_path = get_assets_root_path()
-        return {"status": "success", "message": "pong", "assets_root_path": assets_root_path}
 
     def list_prims(self) -> Dict[str, Any]:
         """List all prim paths in the current USD scene."""
@@ -404,29 +392,6 @@ class MCPExtension(omni.ext.IExt):
                 "message": f"Failed to list prims: {str(e)}"
             }
 
-    def open_usd(self, usd_path: str) -> Dict[str, Any]:
-        """Open a USD file as the main stage in Isaac Sim."""
-        try:
-            from omni.isaac.core.utils.stage import open_stage
-            
-            # Open the USD file as the main stage
-            open_stage(usd_path=usd_path)
-            print(f"Opened USD stage: {usd_path}")
-            
-            return {
-                "status": "success",
-                "message": f"Successfully opened USD stage: {usd_path}",
-                "usd_path": usd_path
-            }
-            
-        except Exception as e:
-            import traceback
-            return {
-                "status": "error",
-                "message": f"Failed to open USD stage: {str(e)}",
-                "usd_path": usd_path,
-                "traceback": traceback.format_exc()
-            }
 
     def import_usd(self, usd_path: str, prim_path: str = None, position: List[float] = None, orientation: List[float] = None, orientation_format: str = "degrees") -> Dict[str, Any]:
         """Import a USD file as a prim into the Isaac Sim stage with flexible orientation input."""
@@ -593,34 +558,6 @@ class MCPExtension(omni.ext.IExt):
                 "traceback": traceback.format_exc()
             }
 
-    def load_scene(self) -> Dict[str, Any]:
-        """Load a basic scene with world and ground plane."""
-        try:
-            from omni.isaac.core import World
-            from omni.kit.async_engine import run_coroutine
-            
-            async def load_scene_async():
-                world = World()
-                await world.initialize_simulation_context_async()
-                world.scene.add_default_ground_plane()
-                print("Scene loaded successfully.")
-                return world
-            
-            # Run the async function
-            world = run_coroutine(load_scene_async())
-            
-            return {
-                "status": "success",
-                "message": "Scene loaded successfully with world and ground plane"
-            }
-            
-        except Exception as e:
-            import traceback
-            return {
-                "status": "error",
-                "message": f"Failed to load scene: {str(e)}",
-                "traceback": traceback.format_exc()
-            }
 
     def get_object_info(self, prim_path: str) -> Dict[str, Any]:
         """Get comprehensive object information including pose using direct USD attribute access."""
