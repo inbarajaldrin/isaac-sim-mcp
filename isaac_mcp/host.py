@@ -14,6 +14,9 @@ from dotenv import load_dotenv
 # Import your existing MCP client
 from client import MCPClient
 
+# Import prompts module
+from prompts import SystemPrompts
+
 # Import LLM clients
 try:
     from anthropic import AsyncAnthropic
@@ -42,19 +45,9 @@ class MCPHost:
         self.backend = backend.lower()
         self.llm_client = None
         
-        # Use your existing MCP client - fix path detection
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        
-        # Check if we're already in isaac_mcp directory
-        if os.path.basename(current_dir) == "isaac_mcp":
-            # We're inside isaac_mcp, server.py is in the same directory
-            server_path = os.path.join(current_dir, "server.py")
-        else:
-            # We're in parent directory, look for isaac_mcp/server.py
-            server_path = os.path.join(current_dir, "isaac_mcp", "server.py")
-        
-        print(f"Debug: Looking for server at: {server_path}")
-        self.mcp_client = MCPClient(server_path)
+        # Initialize MCP client (config-based)
+        self.mcp_client = MCPClient()
+        print("Using configuration-based MCP client")
         
         # Initialize the appropriate LLM client
         self._initialize_llm_client()
@@ -111,13 +104,13 @@ class MCPHost:
             # Extract tool calls
             tool_calls = self._extract_tools(llm_response)
             
-            # Execute tools via your existing MCP client if any found
+            # Execute tools via MCP client if any found
             if tool_calls:
                 print(f"🔧 Executing {len(tool_calls)} tool(s)...")
-                await self.mcp_client.run_with_isaac(tool_calls)
+                await self.mcp_client.run_tools(tool_calls)
                 
                 # Return reasoning + execution confirmation
-                return f"{reasoning}\n\nExecuted {len(tool_calls)} Isaac Sim command(s) successfully!"
+                return f"{reasoning}\n\nExecuted {len(tool_calls)} command(s) successfully!"
             else:
                 # No tools to execute, just return LLM's response
                 return llm_response
@@ -128,9 +121,9 @@ class MCPHost:
             return error_msg
     
     async def _get_available_tools(self):
-        """Get available tools using your existing MCP client"""
+        """Get available tools using MCP client"""
         try:
-            # Use the method from your existing MCPClient
+            # Use config-based client - get tools from ALL servers
             await self.mcp_client.get_available_tools()
         except Exception as e:
             print(f"Could not get tools: {e}")
@@ -141,34 +134,8 @@ class MCPHost:
         
         tools_list = ", ".join(self.mcp_client.available_tools)
         
-        system_prompt = f"""You control Isaac Sim using these MCP tools: {tools_list}
-
-Available tools:
-- get_scene_info: Check scene status (no params)
-- execute_script: Run Python code {{"code": "print('hello')"}}
-- list_prims: List all objects in scene
-- open_usd: Open USD file {{"usd_path": "path/to/file.usd"}}
-- import_usd: Import USD as prim {{"usd_path": "path", "prim_path": "/World/obj", "position": [0,0,0]}}
-- load_scene: Load basic scene with ground plane
-- get_object_info: Get detailed object information {{"prim_path": "/World/object"}}
-- move_prim: Move objects {{"prim_path": "/World/object", "position": [1, 2, 3], "orientation": [0, 0, 45]}}
-- control_gripper: Control robot gripper {{"command": "open"}} or {{"command": "close"}}
-- perform_ik: Robot inverse kinematics {{"robot_prim_path": "/World/UR5e", "target_position": [0.4, 0.2, 0.3], "target_rpy": [0, 90, 0]}}
-- get_ee_pose: Get end-effector pose {{"robot_prim_path": "/World/UR5e"}}
-
-IMPORTANT: When responding with tool calls, put them in a single line JSON array format.
-
-Respond with brief explanation then on a single line:
-TOOLS: [{{"tool": "tool_name", "params": {{"key": "value"}}}}]
-
-Example:
-I'll check the scene information for you.
-TOOLS: [{{"tool": "get_scene_info", "params": {{}}}}]
-
-For multiple tools:
-TOOLS: [{{"tool": "get_scene_info", "params": {{}}}}, {{"tool": "load_scene", "params": {{}}}}]
-
-If no tools are needed (for general questions), just respond normally without TOOLS: line."""
+        # Get system prompt from centralized prompts module
+        system_prompt = SystemPrompts.get_tool_calling_prompt(tools_list, self.backend)
 
         try:
             if self.backend == "claude":
