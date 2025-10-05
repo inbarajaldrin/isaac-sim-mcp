@@ -132,10 +132,15 @@ class MCPHost:
     async def _ask_llm(self, user_input: str, history: list = None) -> str:
         """Ask the LLM what tools to use"""
         
-        tools_list = ", ".join(self.mcp_client.available_tools)
+        # Extract tool names from the full tool schemas
+        if self.mcp_client.available_tools and isinstance(self.mcp_client.available_tools[0], dict):
+            tools_list = ", ".join([tool["name"] for tool in self.mcp_client.available_tools])
+        else:
+            tools_list = ", ".join(self.mcp_client.available_tools)
         
-        # Get system prompt from centralized prompts module
-        system_prompt = SystemPrompts.get_tool_calling_prompt(tools_list, self.backend)
+        # Get system prompt from centralized prompts module with tool schemas
+        tool_schemas = self.mcp_client.available_tools if isinstance(self.mcp_client.available_tools[0], dict) else None
+        system_prompt = SystemPrompts.get_tool_calling_prompt(tools_list, self.backend, tool_schemas)
 
         try:
             if self.backend == "claude":

@@ -130,12 +130,19 @@ class MCPClient:
                     async with ClientSession(read, write) as session:
                         await session.initialize()
                         tools_result = await session.list_tools()
-                        server_tools = [tool.name for tool in tools_result.tools]
-                        all_tools.extend(server_tools)
+                        # Send full tool schemas
+                        server_tools = []
+                        for tool in tools_result.tools:
+                            tool_info = {
+                                "name": tool.name,
+                                "description": tool.description,
+                                "parameters": tool.inputSchema if hasattr(tool, 'inputSchema') else {}
+                            }
+                            server_tools.append(tool_info)
+                            # Map tool name to server for routing
+                            self.tool_to_server[tool.name] = server
                         
-                        # Map each tool to its server
-                        for tool in server_tools:
-                            self.tool_to_server[tool] = server
+                        all_tools.extend(server_tools)
                         
                         print(f"Server '{server}' tools: {server_tools}")
                         

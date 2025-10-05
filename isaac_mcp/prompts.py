@@ -8,13 +8,14 @@ class SystemPrompts:
     """System-level prompts for LLM orchestration"""
     
     @staticmethod
-    def get_tool_calling_prompt(tools_list: str, backend: str = "claude") -> str:
+    def get_tool_calling_prompt(tools_list: str, backend: str = "claude", tool_schemas: list = None) -> str:
         """
         Get system prompt for tool calling with MCP tools
         
         Args:
             tools_list: Comma-separated list of available tool names
             backend: LLM backend name (claude, chatgpt, ollama)
+            tool_schemas: Full tool schemas with parameters (optional)
             
         Returns:
             Formatted system prompt string
@@ -30,16 +31,32 @@ TOOLS: [{{"tool": "get_scene_info", "params": {{}}}}]
 
 If no tools are needed, respond normally without TOOLS: line."""
         
-        # Backend-specific customizations can be added here
+        # Add detailed tool information for non-Claude models
+        if backend != "claude" and tool_schemas:
+            base_prompt += "\n\nIMPORTANT TOOL PARAMETERS:\n"
+            for tool in tool_schemas:
+                if isinstance(tool, dict) and "name" in tool and "parameters" in tool:
+                    tool_name = tool["name"]
+                    params = tool.get("parameters", {}).get("properties", {})
+                    required = tool.get("parameters", {}).get("required", [])
+                    
+                    if params:
+                        base_prompt += f"\n{tool_name}:\n"
+                        for param_name, param_info in params.items():
+                            param_type = param_info.get("type", "unknown")
+                            is_required = param_name in required
+                            base_prompt += f"  - {param_name} ({param_type}){' [REQUIRED]' if is_required else ' [optional]'}\n"
+        
+        # Backend-specific customizations
         if backend == "claude":
             # Claude-specific instructions
             base_prompt += "\n\nYou are an expert at Isaac Sim assembly tasks. Use tools efficiently and provide clear explanations."
         elif backend == "chatgpt":
-            # ChatGPT might benefit from more explicit instructions
-            base_prompt += "\n\nRemember: Always return JSON in a single line after TOOLS:"
+            # ChatGPT needs explicit parameter guidance
+            base_prompt += "\n\nCRITICAL: Use EXACT parameter names from the tool definitions above. Do not guess parameter names."
         elif backend == "ollama":
-            # Ollama models might need simpler instructions
-            base_prompt += "\n\nKeep your responses concise and focused on tool usage."
+            # Ollama needs very explicit instructions
+            base_prompt += "\n\nCRITICAL: Use EXACT parameter names from the tool definitions above. Do not guess parameter names. Follow the required parameters exactly."
             
         return base_prompt
     
