@@ -262,61 +262,35 @@ def get_isaac_connection():
 @mcp.tool()
 def execute_script(ctx: Context, code: str) -> str:
     """
-    Before execute script pls check prompt from asset_creation_strategy() to ensure the scene is properly initialized.
-    Execute arbitrary Python code in Isaac Sim. Before executing any code, first verify if get_scene_info() has been called to ensure the scene is properly initialized. Always print the formatted code into chat to confirm before execution to confirm its correctness. 
-    Before execute script pls check if create_physics_scene() has been called to ensure the physics scene is properly initialized.
-    When working with robots, always try using the create_robot() function first before resorting to execute_script(). The create_robot() function provides a simpler, more reliable way to add robots to your scene with proper initialization and positioning. Only use execute_script() for robot creation when you need custom configurations or behaviors not supported by create_robot().
+    SIMULATION CONTROL FUNCTIONS:
     
-    For physics simulation, avoid using simulation_context to run simulations in the main thread as this can cause blocking. Instead, use the World class with async methods for initializing physics and running simulations. For example, use my_world = World(physics_dt=1.0/60.0) and my_world.step_async() in a loop, which allows for better performance and responsiveness. If you need to wait for physics to stabilize, consider using my_world.play() followed by multiple step_async() calls.
-    To create an simulation of Franka robot, the code should be like this:
-from omni.isaac.core import SimulationContext
-from omni.isaac.core.utils.prims import create_prim
-from omni.isaac.core.utils.stage import add_reference_to_stage, is_stage_loading
-from omni.isaac.nucleus import get_assets_root_path
+    To stop the simulation:
+    import omni.timeline
+    def stop_simulation():
+        timeline = omni.timeline.get_timeline_interface()
+        if timeline.is_playing() or timeline.is_paused():
+            timeline.stop()
+            print("✓ Simulation stopped")
+        else:
+            print("⚠ Simulation is already stopped")
+    stop_simulation()
 
-assets_root_path = get_assets_root_path()
-asset_path = assets_root_path + "/Isaac/Robots/Franka/franka_alt_fingers.usd"
-simulation_context = SimulationContext()
-add_reference_to_stage(asset_path, "/Franka")
-#create_prim("/DistantLight", "DistantLight")
+    To play/start the simulation:
+    import omni.timeline
+    def play_simulation():
+        timeline = omni.timeline.get_timeline_interface()
+        if timeline.is_stopped():
+            timeline.play()
+            print("✓ Simulation started")
+        elif timeline.is_playing():
+            print("⚠ Simulation is already playing")
+        else:
+            print("⚠ Simulation is paused, resuming...")
+            timeline.play()
+    play_simulation()
 
-
-
-
-    To control the Franka robot, the code should be like this:
-
-from omni.isaac.core import SimulationContext
-from omni.isaac.core.articulations import Articulation
-from omni.isaac.core.utils.stage import add_reference_to_stage
-from omni.isaac.nucleus import get_assets_root_path
-
-my_world = World(stage_units_in_meters=1.0)
-
-assets_root_path = get_assets_root_path()
-asset_path = assets_root_path + "/Isaac/Robots/Franka/franka_alt_fingers.usd"
-
-simulation_context = SimulationContext()
-add_reference_to_stage(asset_path, "/Franka")
-
-# need to initialize physics getting any articulation..etc
-simulation_context.initialize_physics()
-art = Articulation("/Franka")
-art.initialize(my_world.physics_sim_view)
-dof_ptr = art.get_dof_index("panda_joint2")
-
-simulation_context.play()
-# NOTE: before interacting with dc directly you need to step physics for one step at least
-# simulation_context.step(render=True) which happens inside .play()
-for i in range(1000):
-    art.set_joint_positions([-1.5], [dof_ptr])
-    simulation_context.step(render=True)
-
-simulation_context.stop()
-
-
-    
     Parameters:
-    - code: The Python code to execute, e.g. "omni.kit.commands.execute("CreatePrim", prim_type="Sphere")"
+    - code: The Python code to execute, e.g. "omni.kit.commands.execute("CreatePrim", prim_type="Sphere"), play or stop simulation to reset the scene"
     """
     try:
         # Get the global connection
