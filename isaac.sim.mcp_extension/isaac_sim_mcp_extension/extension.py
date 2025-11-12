@@ -290,6 +290,11 @@ class MCPExtension(omni.ext.IExt):
             "import_usd": self.import_usd,
             "get_object_info": self.get_object_info,
             "move_prim": self.move_prim,
+            "stop_scene": self.stop_scene,
+            "play_scene": self.play_scene,
+            "save_scene_state": self.save_scene_state,
+            "restore_scene_state": self.restore_scene_state,
+            "read_scene_state": self.read_scene_state,
         }
         
         handler = handlers.get(cmd_type)
@@ -392,6 +397,80 @@ class MCPExtension(omni.ext.IExt):
                 "message": f"Failed to list prims: {str(e)}"
             }
 
+    def stop_scene(self) -> Dict[str, Any]:
+        """Stop the simulation timeline.
+        
+        Works exactly like the execute_script stop_simulation example.
+        
+        Returns:
+            Dictionary with execution result.
+        """
+        try:
+            timeline = omni.timeline.get_timeline_interface()
+            
+            if timeline.is_playing() or timeline.is_paused():
+                timeline.stop()
+                print("✓ Simulation stopped")
+                return {
+                    "status": "success",
+                    "message": "Simulation stopped"
+                }
+            else:
+                print("⚠ Simulation is already stopped")
+                return {
+                    "status": "success",
+                    "message": "Simulation is already stopped"
+                }
+        except Exception as e:
+            carb.log_error(f"Error stopping scene: {e}")
+            import traceback
+            carb.log_error(traceback.format_exc())
+            return {
+                "status": "error",
+                "message": f"Failed to stop scene: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    def play_scene(self) -> Dict[str, Any]:
+        """Start/resume the simulation timeline.
+        
+        Works exactly like the execute_script play_simulation example.
+        
+        Returns:
+            Dictionary with execution result.
+        """
+        try:
+            timeline = omni.timeline.get_timeline_interface()
+            
+            if timeline.is_stopped():
+                timeline.play()
+                print("✓ Simulation started")
+                return {
+                    "status": "success",
+                    "message": "Simulation started"
+                }
+            elif timeline.is_playing():
+                print("⚠ Simulation is already playing")
+                return {
+                    "status": "success",
+                    "message": "Simulation is already playing"
+                }
+            else:
+                print("⚠ Simulation is paused, resuming...")
+                timeline.play()
+                return {
+                    "status": "success",
+                    "message": "Simulation resumed"
+                }
+        except Exception as e:
+            carb.log_error(f"Error playing scene: {e}")
+            import traceback
+            carb.log_error(traceback.format_exc())
+            return {
+                "status": "error",
+                "message": f"Failed to play scene: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
 
     def import_usd(self, usd_path: str, prim_path: str = None, position: List[float] = None, orientation: List[float] = None, orientation_format: str = "degrees") -> Dict[str, Any]:
         """Import a USD file as a prim into the Isaac Sim stage with flexible orientation input."""
@@ -767,6 +846,303 @@ class MCPExtension(omni.ext.IExt):
                 "status": "error",
                 "message": f"Failed to move prim: {str(e)}",
                 "prim_path": prim_path,
+                "traceback": traceback.format_exc()
+            }
+
+    def _read_prim_pose(self, prim_path: str) -> Dict[str, Any]:
+        """Helper method to read pose (position, quaternion, scale) from a prim."""
+        try:
+            import omni.usd
+            from pxr import UsdGeom, Gf
+            
+            stage = omni.usd.get_context().get_stage()
+            prim = stage.GetPrimAtPath(prim_path)
+            
+            if not prim.IsValid():
+                return None
+            
+            # Read attributes
+            translate_attr = prim.GetAttribute("xformOp:translate")
+            orient_attr = prim.GetAttribute("xformOp:orient")
+            scale_attr = prim.GetAttribute("xformOp:scale")
+            
+            # Get values
+            position = [0.0, 0.0, 0.0]
+            quaternion = [1.0, 0.0, 0.0, 0.0]  # Identity quaternion [w, x, y, z]
+            scale = [1.0, 1.0, 1.0]
+            
+            if translate_attr.IsValid():
+                translate_value = translate_attr.Get()
+                if translate_value:
+                    position = [float(translate_value[0]), float(translate_value[1]), float(translate_value[2])]
+            
+            if orient_attr.IsValid():
+                orient_value = orient_attr.Get()
+                if orient_value:
+                    quaternion = [
+                        float(orient_value.GetReal()),
+                        float(orient_value.GetImaginary()[0]),
+                        float(orient_value.GetImaginary()[1]),
+                        float(orient_value.GetImaginary()[2])
+                    ]
+            
+            if scale_attr.IsValid():
+                scale_value = scale_attr.Get()
+                if scale_value:
+                    scale = [float(scale_value[0]), float(scale_value[1]), float(scale_value[2])]
+            
+            return {
+                "position": position,
+                "quaternion": quaternion,  # [w, x, y, z]
+                "scale": scale
+            }
+        except Exception as e:
+            carb.log_error(f"Error reading pose for {prim_path}: {e}")
+            return None
+
+    def _write_prim_pose(self, prim_path: str, pose_data: Dict[str, Any]) -> bool:
+        """Helper method to write pose (position, quaternion, scale) to a prim.
+        Uses the same approach as read_write_pose.py - directly setting properties with ChangeProperty."""
+        try:
+            import omni.usd
+            from pxr import Gf
+            
+            position = pose_data.get("position", [0.0, 0.0, 0.0])
+            quaternion = pose_data.get("quaternion", [1.0, 0.0, 0.0, 0.0])  # [w, x, y, z]
+            scale = pose_data.get("scale", [1.0, 1.0, 1.0])
+            
+            # Set translate (same as read_write_pose.py)
+            omni.kit.commands.execute('ChangeProperty',
+                                     prop_path=f"{prim_path}.xformOp:translate",
+                                     value=Gf.Vec3d(position[0], position[1], position[2]),
+                                     prev=None)
+            
+            # Set orientation using quaternion - USE GfQuatf (float) instead of GfQuatd (double)
+            # Same as read_write_pose.py
+            quat_gf = Gf.Quatf(quaternion[0], quaternion[1], quaternion[2], quaternion[3])  # w, x, y, z
+            omni.kit.commands.execute('ChangeProperty',
+                                     prop_path=f"{prim_path}.xformOp:orient",
+                                     value=quat_gf,
+                                     prev=None)
+            
+            # Set scale (same as read_write_pose.py)
+            omni.kit.commands.execute('ChangeProperty',
+                                     prop_path=f"{prim_path}.xformOp:scale",
+                                     value=Gf.Vec3d(scale[0], scale[1], scale[2]),
+                                     prev=None)
+            
+            return True
+        except Exception as e:
+            carb.log_error(f"Error writing pose for {prim_path}: {e}")
+            import traceback
+            carb.log_error(traceback.format_exc())
+            return False
+
+    def _get_prim_path(self, object_name: str) -> str:
+        """Get the full prim path for an object name (same pattern as read_write_pose.py)"""
+        return f"/World/Objects/{object_name}/{object_name}/{object_name}"
+
+    def save_scene_state(self, object_names: List[str], json_file_path: str = None) -> Dict[str, Any]:
+        """Save scene state (object poses) to a JSON file.
+        
+        Args:
+            object_names: List of object names (e.g., ["fork_orange", "line_red", "base"])
+            json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
+            
+        Returns:
+            Dictionary with execution result.
+        """
+        try:
+            import os
+            
+            # Default JSON file path if not provided
+            if json_file_path is None:
+                json_file_path = "object_poses.json"
+            
+            # Save current poses to JSON
+            poses = {}
+            saved_count = 0
+            failed_names = []
+            
+            for object_name in object_names:
+                prim_path = self._get_prim_path(object_name)
+                pose = self._read_prim_pose(prim_path)
+                if pose:
+                    poses[object_name] = pose
+                    saved_count += 1
+                    print(f"✓ Saved pose for {object_name} ({prim_path})")
+                else:
+                    failed_names.append(object_name)
+                    print(f"⚠ Failed to read pose for {object_name} ({prim_path})")
+            
+            # Write to JSON file
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(json_file_path) if os.path.dirname(json_file_path) else ".", exist_ok=True)
+            
+            with open(json_file_path, 'w') as f:
+                json.dump(poses, f, indent=4)
+            
+            message = f"Saved {saved_count} object pose(s) to {json_file_path}"
+            if failed_names:
+                message += f". Failed to save {len(failed_names)} object(s): {failed_names}"
+            
+            return {
+                "status": "success",
+                "message": message,
+                "saved_count": saved_count,
+                "failed_names": failed_names,
+                "json_file_path": json_file_path
+            }
+                
+        except Exception as e:
+            carb.log_error(f"Error in save_scene_state: {e}")
+            import traceback
+            carb.log_error(traceback.format_exc())
+            return {
+                "status": "error",
+                "message": f"Failed to save scene state: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    def restore_scene_state(self, object_names: List[str], json_file_path: str = None) -> Dict[str, Any]:
+        """Restore scene state (object poses) from a JSON file.
+        
+        Args:
+            object_names: List of object names to restore (e.g., ["fork_orange", "line_red", "base"])
+            json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
+            
+        Returns:
+            Dictionary with execution result.
+        """
+        try:
+            import os
+            
+            # Default JSON file path if not provided
+            if json_file_path is None:
+                json_file_path = "object_poses.json"
+            
+            # Restore poses from JSON
+            if not os.path.exists(json_file_path):
+                return {
+                    "status": "error",
+                    "message": f"JSON file not found: {json_file_path}"
+                }
+            
+            try:
+                with open(json_file_path, 'r') as f:
+                    poses = json.load(f)
+            except json.JSONDecodeError as e:
+                return {
+                    "status": "error",
+                    "message": f"Invalid JSON file: {str(e)}"
+                }
+            
+            restored_count = 0
+            failed_names = []
+            
+            for object_name in object_names:
+                prim_path = self._get_prim_path(object_name)
+                if object_name in poses:
+                    pose_data = poses[object_name]
+                    if self._write_prim_pose(prim_path, pose_data):
+                        restored_count += 1
+                        print(f"✓ Restored pose for {object_name} ({prim_path})")
+                    else:
+                        failed_names.append(object_name)
+                        print(f"⚠ Failed to restore pose for {object_name} ({prim_path})")
+                else:
+                    failed_names.append(object_name)
+                    print(f"⚠ No saved pose found for {object_name} in JSON file")
+            
+            message = f"Restored {restored_count} object pose(s) from {json_file_path}"
+            if failed_names:
+                message += f". Failed to restore {len(failed_names)} object(s): {failed_names}"
+            
+            return {
+                "status": "success",
+                "message": message,
+                "restored_count": restored_count,
+                "failed_names": failed_names,
+                "json_file_path": json_file_path
+            }
+                
+        except Exception as e:
+            carb.log_error(f"Error in restore_scene_state: {e}")
+            import traceback
+            carb.log_error(traceback.format_exc())
+            return {
+                "status": "error",
+                "message": f"Failed to restore scene state: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    def read_scene_state(self, json_file_path: str = None) -> Dict[str, Any]:
+        """Read scene state (object poses) from a JSON file without applying them.
+        
+        Args:
+            json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
+            
+        Returns:
+            Dictionary with the saved poses data.
+        """
+        try:
+            import os
+            
+            # Default JSON file path if not provided
+            if json_file_path is None:
+                json_file_path = "object_poses.json"
+            
+            # Check if file exists
+            if not os.path.exists(json_file_path):
+                return {
+                    "status": "error",
+                    "message": f"JSON file not found: {json_file_path}"
+                }
+            
+            # Read the JSON file
+            try:
+                with open(json_file_path, 'r') as f:
+                    poses = json.load(f)
+            except json.JSONDecodeError as e:
+                return {
+                    "status": "error",
+                    "message": f"Invalid JSON file: {str(e)}"
+                }
+            
+            # Format the response
+            object_count = len(poses)
+            object_names = list(poses.keys())
+            
+            # Create a formatted summary
+            summary = []
+            for object_name, pose_data in poses.items():
+                position = pose_data.get("position", [0, 0, 0])
+                quaternion = pose_data.get("quaternion", [1, 0, 0, 0])
+                scale = pose_data.get("scale", [1, 1, 1])
+                summary.append({
+                    "object_name": object_name,
+                    "position": position,
+                    "quaternion": quaternion,
+                    "scale": scale
+                })
+            
+            return {
+                "status": "success",
+                "message": f"Read {object_count} object pose(s) from {json_file_path}",
+                "json_file_path": json_file_path,
+                "object_count": object_count,
+                "object_names": object_names,
+                "poses": poses,
+                "summary": summary
+            }
+                
+        except Exception as e:
+            carb.log_error(f"Error in read_scene_state: {e}")
+            import traceback
+            carb.log_error(traceback.format_exc())
+            return {
+                "status": "error",
+                "message": f"Failed to read scene state: {str(e)}",
                 "traceback": traceback.format_exc()
             }
 

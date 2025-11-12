@@ -346,6 +346,201 @@ def list_prims() -> str:
 
 
 @mcp.tool()
+def stop_scene() -> str:
+    """
+    Stop the simulation timeline.
+    Works exactly like the execute_script stop_simulation example.
+    
+    Example:
+        stop_scene()
+    """
+    try:
+        isaac = get_isaac_connection()
+        result = isaac.send_command("stop_scene")
+        
+        if result.get("status") == "success":
+            return result.get("message", "Simulation stopped")
+        else:
+            return f"Error stopping scene: {result.get('message', 'Unknown error')}"
+            
+    except Exception as e:
+        logger.error(f"Error stopping scene: {str(e)}")
+        return f"Error stopping scene: {str(e)}"
+
+
+@mcp.tool()
+def play_scene() -> str:
+    """
+    Start/resume the simulation timeline.
+    Works exactly like the execute_script play_simulation example.
+    
+    Example:
+        play_scene()
+    """
+    try:
+        isaac = get_isaac_connection()
+        result = isaac.send_command("play_scene")
+        
+        if result.get("status") == "success":
+            return result.get("message", "Simulation started")
+        else:
+            return f"Error playing scene: {result.get('message', 'Unknown error')}"
+            
+    except Exception as e:
+        logger.error(f"Error playing scene: {str(e)}")
+        return f"Error playing scene: {str(e)}"
+
+
+@mcp.tool()
+def save_scene_state(object_names: list, json_file_path: str = None) -> str:
+    """
+    Save scene state (object poses) to a JSON file.
+    
+    This tool allows you to save the current poses of objects to a JSON file when a state is verified.
+    Use this when objects are in a verified/assembled state that you want to restore later.
+    The code automatically finds the prim path from the object name using the pattern /World/Objects/{object_name}/{object_name}/{object_name}.
+    
+    Workflow:
+    1. When objects are in a verified/assembled state, use save_scene_state() to save their poses
+    2. If something goes wrong, use reset_scene() to reset the simulation
+    3. Then use restore_scene_state() to restore the objects to their previously saved poses
+    
+    Args:
+        object_names: List of object names (e.g., ["fork_orange", "line_red", "base"])
+        json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
+    
+    Example:
+        save_scene_state(["fork_orange", "line_red", "base"])
+        save_scene_state(["fork_orange", "line_red", "base"], "verified_state.json")
+    """
+    try:
+        isaac = get_isaac_connection()
+        result = isaac.send_command("save_scene_state", {
+            "object_names": object_names,
+            "json_file_path": json_file_path
+        })
+        
+        if result.get("status") == "success":
+            message = result.get("message", "Scene state saved successfully")
+            saved_count = result.get("saved_count")
+            failed_names = result.get("failed_names", [])
+            
+            response = message
+            if saved_count is not None:
+                response += f"\nSaved: {saved_count} object(s)"
+            if failed_names:
+                response += f"\nFailed objects: {failed_names}"
+            
+            return response
+        else:
+            return f"Error: {result.get('message', 'Unknown error')}"
+            
+    except Exception as e:
+        logger.error(f"Error in save_scene_state: {str(e)}")
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+def restore_scene_state(object_names: list, json_file_path: str = None) -> str:
+    """
+    Restore scene state (object poses) from a JSON file.
+    
+    This tool restores object poses from a previously saved JSON file. Use this after reset_scene()
+    to restore objects to their previously verified/assembled state.
+    The code automatically finds the prim path from the object name using the pattern /World/Objects/{object_name}/{object_name}/{object_name}.
+    
+    Workflow:
+    1. When objects are in a verified/assembled state, use save_scene_state() to save their poses
+    2. If something goes wrong, use reset_scene() to reset the simulation
+    3. Then use restore_scene_state() to restore the objects to their previously saved poses
+    
+    Args:
+        object_names: List of object names to restore (e.g., ["fork_orange", "line_red", "base"])
+        json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
+    
+    Example:
+        restore_scene_state(["fork_orange", "line_red", "base"])
+        restore_scene_state(["fork_orange", "line_red", "base"], "verified_state.json")
+    """
+    try:
+        isaac = get_isaac_connection()
+        result = isaac.send_command("restore_scene_state", {
+            "object_names": object_names,
+            "json_file_path": json_file_path
+        })
+        
+        if result.get("status") == "success":
+            message = result.get("message", "Scene state restored successfully")
+            restored_count = result.get("restored_count")
+            failed_names = result.get("failed_names", [])
+            
+            response = message
+            if restored_count is not None:
+                response += f"\nRestored: {restored_count} object(s)"
+            if failed_names:
+                response += f"\nFailed objects: {failed_names}"
+            
+            return response
+        else:
+            return f"Error: {result.get('message', 'Unknown error')}"
+            
+    except Exception as e:
+        logger.error(f"Error in restore_scene_state: {str(e)}")
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+def read_scene_state(json_file_path: str = None) -> str:
+    """
+    Read scene state (object poses) from a JSON file without applying them.
+    
+    This tool allows you to view the saved poses in a JSON file without restoring them to the scene.
+    Useful for checking what poses were saved before restoring.
+    
+    Args:
+        json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
+    
+    Example:
+        read_scene_state()
+        read_scene_state("verified_state.json")
+    """
+    try:
+        isaac = get_isaac_connection()
+        result = isaac.send_command("read_scene_state", {
+            "json_file_path": json_file_path
+        })
+        
+        if result.get("status") == "success":
+            message = result.get("message", "Scene state read successfully")
+            object_count = result.get("object_count", 0)
+            object_names = result.get("object_names", [])
+            summary = result.get("summary", [])
+            
+            response = f"{message}\n"
+            response += f"Objects saved: {object_count}\n"
+            response += f"Object names: {', '.join(object_names)}\n\n"
+            
+            # Add detailed pose information for each object
+            for item in summary:
+                obj_name = item.get("object_name", "unknown")
+                pos = item.get("position", [0, 0, 0])
+                quat = item.get("quaternion", [1, 0, 0, 0])
+                scale = item.get("scale", [1, 1, 1])
+                response += f"{obj_name}:\n"
+                response += f"  Position: [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]\n"
+                response += f"  Quaternion: [{quat[0]:.3f}, {quat[1]:.3f}, {quat[2]:.3f}, {quat[3]:.3f}]\n"
+                response += f"  Scale: [{scale[0]:.3f}, {scale[1]:.3f}, {scale[2]:.3f}]\n\n"
+            
+            return response
+        else:
+            return f"Error: {result.get('message', 'Unknown error')}"
+            
+    except Exception as e:
+        logger.error(f"Error in read_scene_state: {str(e)}")
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
 def import_usd(usd_path: str, prim_path: str = None, position: list = None, orientation: list = None, orientation_format: str = "degrees") -> str:
     """
     Import a USD file as a prim into the Isaac Sim stage with flexible orientation input.
