@@ -541,6 +541,63 @@ def read_scene_state(json_file_path: str = None) -> str:
 
 
 @mcp.tool()
+def clear_scene_state(object_names: list = None, json_file_path: str = None, clear_all: bool = False) -> str:
+    """
+    Clear/delete object poses from a JSON file.
+    
+    This tool allows you to remove specific objects from the saved JSON file, or delete the entire file.
+    
+    Args:
+        object_names: Optional list of object names to remove (e.g., ["fork_orange", "line_red"]). 
+                      If None or empty and clear_all=False, removes all objects.
+        json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
+        clear_all: If True, deletes the entire JSON file. If False, removes specified objects.
+    
+    Examples:
+        # Remove specific objects
+        clear_scene_state(["fork_orange", "line_red"])
+        
+        # Remove all objects (clears the file)
+        clear_scene_state()
+        
+        # Delete the entire file
+        clear_scene_state(clear_all=True)
+        
+        # Clear specific file
+        clear_scene_state(["base"], "verified_state.json")
+    """
+    try:
+        isaac = get_isaac_connection()
+        result = isaac.send_command("clear_scene_state", {
+            "object_names": object_names,
+            "json_file_path": json_file_path,
+            "clear_all": clear_all
+        })
+        
+        if result.get("status") == "success":
+            message = result.get("message", "Scene state cleared successfully")
+            removed_count = result.get("removed_count")
+            remaining_count = result.get("remaining_count")
+            not_found = result.get("not_found", [])
+            
+            response = message
+            if removed_count is not None:
+                response += f"\nRemoved: {removed_count} object(s)"
+            if remaining_count is not None:
+                response += f"\nRemaining: {remaining_count} object(s)"
+            if not_found:
+                response += f"\nNot found: {not_found}"
+            
+            return response
+        else:
+            return f"Error: {result.get('message', 'Unknown error')}"
+            
+    except Exception as e:
+        logger.error(f"Error in clear_scene_state: {str(e)}")
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
 def import_usd(usd_path: str, prim_path: str = None, position: list = None, orientation: list = None, orientation_format: str = "degrees") -> str:
     """
     Import a USD file as a prim into the Isaac Sim stage with flexible orientation input.
