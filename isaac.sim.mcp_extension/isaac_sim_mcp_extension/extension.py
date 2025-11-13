@@ -295,6 +295,7 @@ class MCPExtension(omni.ext.IExt):
             "save_scene_state": self.save_scene_state,
             "restore_scene_state": self.restore_scene_state,
             "read_scene_state": self.read_scene_state,
+            "clear_scene_state": self.clear_scene_state,
         }
         
         handler = handlers.get(cmd_type)
@@ -1143,6 +1144,104 @@ class MCPExtension(omni.ext.IExt):
             return {
                 "status": "error",
                 "message": f"Failed to read scene state: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    def clear_scene_state(self, object_names: List[str] = None, json_file_path: str = None, clear_all: bool = False) -> Dict[str, Any]:
+        """Clear/delete object poses from a JSON file.
+        
+        Args:
+            object_names: Optional list of object names to remove. If None or empty and clear_all=False, clears all.
+            json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
+            clear_all: If True, deletes the entire file. If False, removes specified objects.
+            
+        Returns:
+            Dictionary with execution result.
+        """
+        try:
+            import os
+            
+            # Default JSON file path if not provided
+            if json_file_path is None:
+                json_file_path = "object_poses.json"
+            
+            # If clear_all is True, delete the entire file
+            if clear_all:
+                if os.path.exists(json_file_path):
+                    os.remove(json_file_path)
+                    return {
+                        "status": "success",
+                        "message": f"Deleted JSON file: {json_file_path}",
+                        "json_file_path": json_file_path
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"JSON file not found: {json_file_path}"
+                    }
+            
+            # Check if file exists
+            if not os.path.exists(json_file_path):
+                return {
+                    "status": "error",
+                    "message": f"JSON file not found: {json_file_path}"
+                }
+            
+            # Read the JSON file
+            try:
+                with open(json_file_path, 'r') as f:
+                    poses = json.load(f)
+            except json.JSONDecodeError as e:
+                return {
+                    "status": "error",
+                    "message": f"Invalid JSON file: {str(e)}"
+                }
+            
+            # If no object_names provided, clear all
+            if not object_names:
+                object_names = list(poses.keys())
+            
+            # Remove specified objects
+            removed_count = 0
+            not_found = []
+            
+            for object_name in object_names:
+                if object_name in poses:
+                    del poses[object_name]
+                    removed_count += 1
+                    print(f"✓ Removed {object_name} from JSON file")
+                else:
+                    not_found.append(object_name)
+                    print(f"⚠ {object_name} not found in JSON file")
+            
+            # Write back the updated poses (or delete file if empty)
+            if len(poses) == 0:
+                os.remove(json_file_path)
+                message = f"Removed {removed_count} object(s) and deleted empty JSON file"
+            else:
+                with open(json_file_path, 'w') as f:
+                    json.dump(poses, f, indent=4)
+                message = f"Removed {removed_count} object(s) from {json_file_path}. {len(poses)} object(s) remaining."
+            
+            if not_found:
+                message += f" {len(not_found)} object(s) not found: {not_found}"
+            
+            return {
+                "status": "success",
+                "message": message,
+                "removed_count": removed_count,
+                "not_found": not_found,
+                "remaining_count": len(poses),
+                "json_file_path": json_file_path
+            }
+                
+        except Exception as e:
+            carb.log_error(f"Error in clear_scene_state: {e}")
+            import traceback
+            carb.log_error(traceback.format_exc())
+            return {
+                "status": "error",
+                "message": f"Failed to clear scene state: {str(e)}",
                 "traceback": traceback.format_exc()
             }
 
