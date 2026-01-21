@@ -438,14 +438,9 @@ def get_isaac_connection():
 @mcp.tool()
 def save_scene_state() -> str:
     """
-    Save scene state (object poses) to a JSON file.
-    
-    This tool automatically discovers and saves all objects in /World/Objects to a JSON file when a state is verified.
-    Use this when objects are in a verified/assembled state that you want to restore later.
-    The code automatically finds the prim path from the object name using the pattern /World/Objects/{object_name}/{object_name}/{object_name}.
-    
-    Example:
-        save_scene_state()
+    Saves current object poses to a JSON file so it can be retrieved later.
+    Make sure the objects are in the correct place before saving the scene state.
+
     """
     try:
         # Calculate the file path on the server side (where we have access to MCP_CLIENT_OUTPUT_DIR)
@@ -480,14 +475,8 @@ def save_scene_state() -> str:
 @mcp.tool()
 def restore_scene_state() -> str:
     """
-    Restore scene state (object poses) from a JSON file.
-    
-    This tool automatically restores all objects from a previously saved JSON file. Move home before using this tool
-    to restore objects to their previously verified/assembled state.
-    The code automatically finds the prim path from the object name using the pattern /World/Objects/{object_name}/{object_name}/{object_name}.
-    
-    Example:
-        restore_scene_state()
+    Restores previously saved object poses from a JSON file to the scene.
+
     """
     try:
         # Calculate the file path on the server side (where we have access to MCP_CLIENT_OUTPUT_DIR)
@@ -519,58 +508,58 @@ def restore_scene_state() -> str:
         return f"Error: {str(e)}"
 
 
-@mcp.tool()
-def read_scene_state() -> str:
-    """
-    Read scene state (object poses) from the JSON file without applying them.
+# @mcp.tool()
+# def read_scene_state() -> str:
+#     """
+#     Read scene state (object poses) from the JSON file without applying them.
     
-    This tool allows you to view the saved poses in the scene state file without restoring them to the scene.
-    Useful for checking what poses were saved before restoring.
-    Reads from the fixed file: scene_state.json
+#     This tool allows you to view the saved poses in the scene state file without restoring them to the scene.
+#     Useful for checking what poses were saved before restoring.
+#     Reads from the fixed file: scene_state.json
     
-    Example:
-        read_scene_state()
-    """
-    try:
-        # Calculate the file path on the server side (where we have access to MCP_CLIENT_OUTPUT_DIR)
-        resources_dir = os.path.abspath(RESOURCES_DIR)
-        json_file_path = os.path.join(resources_dir, "scene_state.json")
+#     Example:
+#         read_scene_state()
+#     """
+#     try:
+#         # Calculate the file path on the server side (where we have access to MCP_CLIENT_OUTPUT_DIR)
+#         resources_dir = os.path.abspath(RESOURCES_DIR)
+#         json_file_path = os.path.join(resources_dir, "scene_state.json")
         
-        isaac = get_isaac_connection()
-        result = isaac.send_command("read_scene_state", {
-            "json_file_path": json_file_path
-        })
+#         isaac = get_isaac_connection()
+#         result = isaac.send_command("read_scene_state", {
+#             "json_file_path": json_file_path
+#         })
         
-        if result.get("status") == "success":
-            message = result.get("message", "Scene state read successfully")
-            json_file_path = result.get("json_file_path", "scene_state.json")
-            object_count = result.get("object_count", 0)
-            object_names = result.get("object_names", [])
-            summary = result.get("summary", [])
+#         if result.get("status") == "success":
+#             message = result.get("message", "Scene state read successfully")
+#             json_file_path = result.get("json_file_path", "scene_state.json")
+#             object_count = result.get("object_count", 0)
+#             object_names = result.get("object_names", [])
+#             summary = result.get("summary", [])
             
-            response = f"{message}\n"
-            response += f"File: {json_file_path}\n"
-            response += f"Objects saved: {object_count}\n"
-            response += f"Object names: {', '.join(object_names)}\n\n"
+#             response = f"{message}\n"
+#             response += f"File: {json_file_path}\n"
+#             response += f"Objects saved: {object_count}\n"
+#             response += f"Object names: {', '.join(object_names)}\n\n"
             
-            # Add detailed pose information for each object
-            for item in summary:
-                obj_name = item.get("object_name", "unknown")
-                pos = item.get("position", [0, 0, 0])
-                quat = item.get("quaternion", [1, 0, 0, 0])
-                scale = item.get("scale", [1, 1, 1])
-                response += f"{obj_name}:\n"
-                response += f"  Position: [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]\n"
-                response += f"  Quaternion: [{quat[0]:.3f}, {quat[1]:.3f}, {quat[2]:.3f}, {quat[3]:.3f}]\n"
-                response += f"  Scale: [{scale[0]:.3f}, {scale[1]:.3f}, {scale[2]:.3f}]\n\n"
+#             # Add detailed pose information for each object
+#             for item in summary:
+#                 obj_name = item.get("object_name", "unknown")
+#                 pos = item.get("position", [0, 0, 0])
+#                 quat = item.get("quaternion", [1, 0, 0, 0])
+#                 scale = item.get("scale", [1, 1, 1])
+#                 response += f"{obj_name}:\n"
+#                 response += f"  Position: [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]\n"
+#                 response += f"  Quaternion: [{quat[0]:.3f}, {quat[1]:.3f}, {quat[2]:.3f}, {quat[3]:.3f}]\n"
+#                 response += f"  Scale: [{scale[0]:.3f}, {scale[1]:.3f}, {scale[2]:.3f}]\n\n"
             
-            return response
-        else:
-            return f"Error: {result.get('message', 'Unknown error')}"
+#             return response
+#         else:
+#             return f"Error: {result.get('message', 'Unknown error')}"
             
-    except Exception as e:
-        logger.error(f"Error in read_scene_state: {str(e)}")
-        return f"Error: {str(e)}"
+#     except Exception as e:
+#         logger.error(f"Error in read_scene_state: {str(e)}")
+#         return f"Error: {str(e)}"
 
 
 # @mcp.tool()
