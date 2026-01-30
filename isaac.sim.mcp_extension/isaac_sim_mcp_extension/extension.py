@@ -842,9 +842,10 @@ class MCPExtension(omni.ext.IExt):
                     "message": "/World/Objects path does not exist"
                 }
             
-            # Get direct children and extract their names
+            # Get direct children that are xformable (have transforms), skip materials etc.
+            from pxr import UsdGeom
             children = objects_prim.GetChildren()
-            object_names = [child.GetName() for child in children]
+            object_names = [child.GetName() for child in children if child.IsA(UsdGeom.Xformable)]
             
             if not object_names:
                 return {
