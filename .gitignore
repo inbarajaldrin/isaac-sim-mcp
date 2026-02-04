@@ -29,8 +29,6 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-mcp_venv/
-
 # IDE - VSCode
 .vscode/*
 !.vscode/settings.json
@@ -76,5 +74,5 @@ local_cache/
 # MCP specific
 mcp_cache/
 
-# System files
-isaac.sim.mcp_extension/isaac_sim_mcp_extension/archive
+# Resources (generated scene state files)
+resources/
