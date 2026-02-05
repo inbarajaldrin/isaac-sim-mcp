@@ -197,22 +197,34 @@ mcp = FastMCP(
 _isaac_connection = None
 
 
-def get_isaac_connection():
-    """Get or create a persistent Isaac connection"""
+def get_isaac_connection(verify_health: bool = True):
+    """Get or create a persistent Isaac connection.
+
+    Args:
+        verify_health: If True, verify the connection is alive before returning.
+                      Set to False to skip health check (e.g., during initial connection).
+    """
     global _isaac_connection
 
-    if _isaac_connection is not None:
-        try:
+    if _isaac_connection is not None and _isaac_connection.sock is not None:
+        if verify_health:
+            logger.debug("Checking connection health...")
+            # Proactively check if connection is still alive
+            if not _check_connection_health(_isaac_connection):
+                logger.warning("Existing connection is stale, reconnecting...")
+                try:
+                    _isaac_connection.disconnect()
+                except:
+                    pass
+                _isaac_connection = None
+            else:
+                logger.debug("Connection health check passed")
+                return _isaac_connection
+        else:
             return _isaac_connection
-        except Exception as e:
-            logger.warning(f"Existing connection is no longer valid: {str(e)}")
-            try:
-                _isaac_connection.disconnect()
-            except:
-                pass
-            _isaac_connection = None
 
     if _isaac_connection is None:
+        logger.info("Creating new connection to Isaac...")
         _isaac_connection = IsaacConnection(host="localhost", port=ISAAC_SIM_PORT)
         if not _isaac_connection.connect():
             logger.error("Failed to connect to Isaac")
@@ -220,6 +232,61 @@ def get_isaac_connection():
             raise Exception("Could not connect to Isaac. Make sure the Isaac Sim extension is running.")
 
     return _isaac_connection
+
+
+def _check_connection_health(conn: IsaacConnection) -> bool:
+    """Check if the connection to Isaac Sim is still alive.
+
+    Uses multiple methods to detect if the connection was closed
+    by the remote end (e.g., after extension hot-reload).
+
+    Returns:
+        True if connection appears healthy, False if it's dead/stale.
+    """
+    if conn.sock is None:
+        return False
+
+    try:
+        # Method 1: Check if socket is still connected via getpeername()
+        # This will raise an exception if the socket is disconnected
+        conn.sock.getpeername()
+    except (OSError, socket.error):
+        logger.debug("Connection health check failed: socket not connected")
+        return False
+
+    try:
+        # Method 2: Use select to check if socket has error condition or is readable
+        # with data (which could indicate closure)
+        import select
+        readable, _, errored = select.select([conn.sock], [], [conn.sock], 0)
+
+        if errored:
+            logger.debug("Connection health check failed: socket in error state")
+            return False
+
+        if readable:
+            # Socket is readable - check if it's a close notification (0 bytes)
+            try:
+                original_timeout = conn.sock.gettimeout()
+                conn.sock.setblocking(False)
+                data = conn.sock.recv(1, socket.MSG_PEEK)
+                conn.sock.setblocking(True)
+                conn.sock.settimeout(original_timeout)
+
+                if data == b'':
+                    logger.debug("Connection health check failed: remote closed connection")
+                    return False
+            except BlockingIOError:
+                # No data but socket is readable - unusual, but might be OK
+                pass
+            except (ConnectionError, OSError) as e:
+                logger.debug(f"Connection health check failed: {e}")
+                return False
+
+        return True
+    except Exception as e:
+        logger.debug(f"Unexpected error during health check: {e}")
+        return False
 
 
 def discover_and_register_tools(server: FastMCP):
@@ -294,34 +361,60 @@ def {name}({params_str}) -> str:
 
 def _tool_implementation(name: str, params: Dict[str, Any]) -> str:
     """Shared implementation for all dynamic tools."""
-    try:
-        isaac = get_isaac_connection()
+    global _isaac_connection
 
-        # Add json_file_path for scene state tools
-        if name in ["save_scene_state", "restore_scene_state", "clear_scene_state"]:
-            resources_dir = os.path.abspath(RESOURCES_DIR)
-            params["json_file_path"] = os.path.join(resources_dir, "scene_state.json")
+    # Add json_file_path for scene state tools
+    if name in ["save_scene_state", "restore_scene_state", "clear_scene_state"]:
+        resources_dir = os.path.abspath(RESOURCES_DIR)
+        params["json_file_path"] = os.path.join(resources_dir, "scene_state.json")
 
-        result = isaac.send_command(name, params)
+    # Retry logic: if first attempt fails with connection error, reconnect and retry once
+    last_error = None
+    for attempt in range(2):
+        try:
+            isaac = get_isaac_connection()
+            result = isaac.send_command(name, params)
 
-        if result.get("status") == "success":
-            message = result.get("message", f"{name} completed successfully")
-            extras = []
-            if "saved_count" in result:
-                extras.append(f"Saved: {result['saved_count']} object(s)")
-            if "restored_count" in result:
-                extras.append(f"Restored: {result['restored_count']} object(s)")
-            if result.get("failed_names"):
-                extras.append(f"Failed: {result['failed_names']}")
-            if extras:
-                message += "\n" + "\n".join(extras)
-            return message
-        else:
-            return f"Error: {result.get('message', 'Unknown error')}"
+            if result.get("status") == "success":
+                message = result.get("message", f"{name} completed successfully")
+                extras = []
+                if "saved_count" in result:
+                    extras.append(f"Saved: {result['saved_count']} object(s)")
+                if "restored_count" in result:
+                    extras.append(f"Restored: {result['restored_count']} object(s)")
+                if result.get("failed_names"):
+                    extras.append(f"Failed: {result['failed_names']}")
+                if extras:
+                    message += "\n" + "\n".join(extras)
+                return message
+            else:
+                return f"Error: {result.get('message', 'Unknown error')}"
 
-    except Exception as e:
-        logger.error(f"Error in {name}: {str(e)}")
-        return f"Error: {str(e)}"
+        except Exception as e:
+            last_error = e
+            error_msg = str(e).lower()
+
+            # Check if this is a connection-related error worth retrying
+            is_connection_error = any(x in error_msg for x in [
+                "connection", "closed", "reset", "broken pipe", "not connected",
+                "timeout", "recv", "send"
+            ])
+
+            if is_connection_error and attempt == 0:
+                logger.warning(f"Connection error on attempt {attempt + 1}, reconnecting: {e}")
+                # Force reconnection by clearing the connection
+                if _isaac_connection:
+                    try:
+                        _isaac_connection.disconnect()
+                    except:
+                        pass
+                    _isaac_connection = None
+                continue  # Retry
+            else:
+                break  # Don't retry non-connection errors or second attempt
+
+    logger.error(f"Error in {name}: {str(last_error)}")
+    return f"Error: {str(last_error)}"
 
 
 def register_dynamic_tool(server: FastMCP, tool_name: str, tool_def: Dict[str, Any]):
