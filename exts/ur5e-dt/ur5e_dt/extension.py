@@ -252,17 +252,13 @@ class DigitalTwin(omni.ext.IExt):
                     # Camera type selection with checkboxes and labels
                     with ui.VStack(spacing=5):
                         with ui.HStack(spacing=5):
-                            self._exocentric_checkbox = ui.CheckBox(width=20)
-                            self._exocentric_checkbox.model.set_value(False)  # Default unchecked
-                            ui.Label("Exocentric View", alignment=ui.Alignment.LEFT, width=120)
+                            self._workspace_checkbox = ui.CheckBox(width=20)
+                            self._workspace_checkbox.model.set_value(False)  # Default unchecked
+                            ui.Label("Workspace Camera", alignment=ui.Alignment.LEFT, width=120)
 
                         with ui.HStack(spacing=5):
                             self._custom_checkbox = ui.CheckBox(width=20)
-                            ui.Label("Close Up View", alignment=ui.Alignment.LEFT, width=120)
-
-                        with ui.HStack(spacing=5):
-                            self._custom_prim_checkbox = ui.CheckBox(width=20)
-                            ui.Label("Custom Camera Prim", alignment=ui.Alignment.LEFT, width=120)
+                            ui.Label("Custom Camera", alignment=ui.Alignment.LEFT, width=120)
 
                     # Custom camera prim path input
                     with ui.HStack(spacing=5):
@@ -275,6 +271,11 @@ class DigitalTwin(omni.ext.IExt):
                         ui.Label("ROS2 Topic Name:", alignment=ui.Alignment.LEFT, width=120)
                         self._custom_camera_topic_field = ui.StringField(width=200)
                         self._custom_camera_topic_field.model.set_value("custom_camera")
+
+                    # Resolution selection
+                    with ui.HStack(spacing=5):
+                        ui.Label("Resolution:", alignment=ui.Alignment.LEFT, width=120)
+                        self._resolution_combo = ui.ComboBox(0, "1280x720", "1920x1080", width=150)
 
                     # Camera control buttons
                     with ui.HStack(spacing=5):
@@ -383,13 +384,9 @@ class DigitalTwin(omni.ext.IExt):
         if camera_graph.IsValid():
             graph_paths_to_recreate.append("Camera")
         
-        exocentric_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_ExocentricCamera")
-        if exocentric_graph.IsValid():
-            graph_paths_to_recreate.append("ExocentricCamera")
-        
-        custom_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_CustomCamera")
-        if custom_graph.IsValid():
-            graph_paths_to_recreate.append("CustomCamera")
+        workspace_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_WorkspaceCamera")
+        if workspace_graph.IsValid():
+            graph_paths_to_recreate.append("WorkspaceCamera")
         
         objects_poses_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_objects_poses")
         if objects_poses_graph.IsValid():
@@ -441,31 +438,17 @@ class DigitalTwin(omni.ext.IExt):
                 print(f"✗ Failed to recreate Camera Action Graph: {e}")
         
         # Create Additional Camera Action Graphs (only if graphs existed)
-        if "ExocentricCamera" in graph_paths_to_recreate or "CustomCamera" in graph_paths_to_recreate:
+        if "WorkspaceCamera" in graph_paths_to_recreate:
             try:
-                stage = omni.usd.get_context().get_stage()
-                
-                if "ExocentricCamera" in graph_paths_to_recreate:
-                    # Get camera prim path from the graph's render product node if possible
-                    # For now, use default path
-                    self._create_camera_actiongraph(
-                        "/World/exocentric_camera", 
-                        1280, 720, 
-                        "exocentric_camera", 
-                        "ExocentricCamera"
-                    )
-                    print("✓ Exocentric Camera Action Graph recreated")
-                
-                if "CustomCamera" in graph_paths_to_recreate:
-                    self._create_camera_actiongraph(
-                        "/World/custom_camera", 
-                        640, 480, 
-                        "custom_camera", 
-                        "CustomCamera"
-                    )
-                    print("✓ Custom Camera Action Graph recreated")
+                self._create_camera_actiongraph(
+                    "/World/workspace_camera",
+                    1280, 720,
+                    "workspace_camera",
+                    "WorkspaceCamera"
+                )
+                print("✓ Workspace Camera Action Graph recreated")
             except Exception as e:
-                print(f"✗ Failed to recreate Additional Camera Action Graphs: {e}")
+                print(f"✗ Failed to recreate Workspace Camera Action Graph: {e}")
         
         # Create Pose Publisher Action Graph (only if graph existed)
         if "objects_poses" in graph_paths_to_recreate:
@@ -1337,19 +1320,19 @@ def cleanup(db):
             camera.CreateClippingRangeAttr().Set(Gf.Vec2f(0.1, 10000.0))
 
         # Check which camera type is selected
-        is_exocentric = self._exocentric_checkbox.model.get_value_as_bool()
+        is_workspace = self._workspace_checkbox.model.get_value_as_bool()
         is_custom = self._custom_checkbox.model.get_value_as_bool()
-        is_custom_prim = self._custom_prim_checkbox.model.get_value_as_bool()
 
         stage = omni.usd.get_context().get_stage()
         if not stage:
             print("Error: No stage found")
             return
 
-        if is_exocentric:
-            prim_path = "/World/exocentric_camera"
-            position = (1.5, -1.5, 0.85)
-            quat_xyzw = (0.52787, 0.24907, 0.32102, 0.74583)  # x, y, z, w
+        if is_workspace:
+            prim_path = "/World/workspace_camera"
+            position = (1.63108, -2.04754, 1.55408)
+            # Euler XYZ: (54.872, 36.12, 22.525) degrees
+            quat_xyzw = (0.3758, 0.3553, 0.0250, 0.8552)  # x, y, z, w
             resolution = (1280, 720)
 
             # Create camera prim using UsdGeom.Camera
@@ -1357,35 +1340,15 @@ def cleanup(db):
             if not camera_prim:
                 print(f"Error: Failed to create camera at {prim_path}")
                 return
-            
+
             # Configure camera properties
             configure_camera_properties(camera_prim.GetPrim(), resolution[0], resolution[1])
-            
+
             # Set camera pose
             set_camera_pose(prim_path, position, quat_xyzw)
-            print(f"Exocentric camera created at {prim_path} with resolution {resolution[0]}x{resolution[1]}")
+            print(f"Workspace camera created at {prim_path} with resolution {resolution[0]}x{resolution[1]}")
 
         if is_custom:
-            prim_path = "/World/custom_camera"
-            position = (0.0, 4.0, 0.5)
-            quat_xyzw = (0.0, 0.67559, 0.73728, 0.0)  # x, y, z, w
-            resolution = (640, 480)
-
-            # Create camera prim using UsdGeom.Camera
-            camera_prim = UsdGeom.Camera.Define(stage, prim_path)
-            if not camera_prim:
-                print(f"Error: Failed to create camera at {prim_path}")
-                return
-            
-            # Configure camera properties
-            configure_camera_properties(camera_prim.GetPrim(), resolution[0], resolution[1])
-            
-            # Set camera pose
-            set_camera_pose(prim_path, position, quat_xyzw)
-            print(f"Custom camera created at {prim_path} with resolution {resolution[0]}x{resolution[1]}")
-            # Note: Motion vectors would need to be added via render settings or post-processing
-
-        if is_custom_prim:
             # Get custom prim path from text field
             custom_prim_path = self._custom_camera_prim_field.model.get_value_as_string()
             if not custom_prim_path or custom_prim_path.strip() == "":
@@ -1420,34 +1383,31 @@ def cleanup(db):
     def create_additional_camera_actiongraph(self):
         """Create ActionGraph for additional camera ROS2 publishing"""
         # Check which cameras exist and create action graphs accordingly
-        is_exocentric = self._exocentric_checkbox.model.get_value_as_bool()
+        is_workspace = self._workspace_checkbox.model.get_value_as_bool()
         is_custom = self._custom_checkbox.model.get_value_as_bool()
-        is_custom_prim = self._custom_prim_checkbox.model.get_value_as_bool()
 
-        if is_exocentric:
-            # TODO: Copy other camera properties into exocentric camera (e.g., from Intel camera setup)
+        # Get selected resolution from combo box
+        resolution_index = self._resolution_combo.model.get_item_value_model().get_value_as_int()
+        if resolution_index == 0:
+            width, height = 1280, 720
+        else:
+            width, height = 1920, 1080
+
+        if is_workspace:
             self._create_camera_actiongraph(
-                "/World/exocentric_camera", 
-                1280, 720, 
-                "exocentric_camera", 
-                "ExocentricCamera"
+                "/World/workspace_camera",
+                width, height,
+                "workspace_camera",
+                "WorkspaceCamera"
             )
-        
+
         if is_custom:
-            self._create_camera_actiongraph(
-                "/World/custom_camera", 
-                640, 480, 
-                "custom_camera", 
-                "CustomCamera"
-            )
-
-        if is_custom_prim:
             # Get custom prim path from text field
             custom_prim_path = self._custom_camera_prim_field.model.get_value_as_string()
             if not custom_prim_path or custom_prim_path.strip() == "":
                 print("Error: Please enter a valid camera prim path")
                 return
-            
+
             # Get ROS2 topic name from text field, or generate from prim path if empty
             topic_name = self._custom_camera_topic_field.model.get_value_as_string()
             if not topic_name or topic_name.strip() == "":
@@ -1455,16 +1415,15 @@ def cleanup(db):
                 prim_name = custom_prim_path.split("/")[-1] if "/" in custom_prim_path else custom_prim_path
                 topic_name = prim_name.lower().replace(" ", "_").replace("-", "_")
                 print(f"Topic name not specified, using generated name: {topic_name}")
-            
+
             # Use topic name for graph suffix (sanitize for graph name - remove special chars, capitalize)
             # Convert topic name to a valid graph suffix: remove underscores, capitalize words
             graph_suffix = topic_name.replace("_", " ").replace("-", " ").title().replace(" ", "")
-            
-            # Default resolution for custom camera
+
             self._create_camera_actiongraph(
-                custom_prim_path, 
-                1280, 720, 
-                topic_name, 
+                custom_prim_path,
+                width, height,
+                topic_name,
                 graph_suffix
             )
 
@@ -1903,6 +1862,13 @@ def cleanup(db):
                 UsdGeom.Xform.Define(stage, target_path)
             base_name = os.path.splitext(os.path.basename(folder_path))[0]
             prim_path = f"{target_path}/{base_name}"
+
+            # Skip if prim already exists
+            existing_prim = stage.GetPrimAtPath(prim_path)
+            if existing_prim and existing_prim.IsValid():
+                print(f"Skipping {base_name} - already exists at {prim_path}")
+                return
+
             prim = stage.DefinePrim(prim_path)
             prim.GetReferences().AddReference(folder_path)
             xform = UsdGeom.Xform(prim)
@@ -1952,11 +1918,17 @@ def cleanup(db):
             # Import each USD file with positioning
             for i, usd_file in enumerate(usd_files):
                 usd_file_path = folder_path + usd_file
-                
+
                 # Create a child prim under the selected path
                 base_name = os.path.splitext(usd_file)[0]
                 prim_path = f"{target_path}/{base_name}"
-                
+
+                # Skip if prim already exists
+                existing_prim = stage.GetPrimAtPath(prim_path)
+                if existing_prim and existing_prim.IsValid():
+                    print(f"Skipping {base_name} - already exists at {prim_path}")
+                    continue
+
                 # Create a reference to the USD file
                 prim = stage.DefinePrim(prim_path)
                 references = prim.GetReferences()
@@ -2510,29 +2482,37 @@ def cleanup(db):
             orient_attr = prim.GetAttribute("xformOp:orient")
             scale_attr = prim.GetAttribute("xformOp:scale")
 
-            position = [0.0, 0.0, 0.0]
-            quaternion = [1.0, 0.0, 0.0, 0.0]  # Identity quaternion [w, x, y, z]
-            scale = [1.0, 1.0, 1.0]
+            position = {"x": 0.0, "y": 0.0, "z": 0.0}
+            quaternion = {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0}  # Identity quaternion
+            scale = {"x": 1.0, "y": 1.0, "z": 1.0}
 
             if translate_attr.IsValid():
                 translate_value = translate_attr.Get()
                 if translate_value:
-                    position = [float(translate_value[0]), float(translate_value[1]), float(translate_value[2])]
+                    position = {
+                        "x": float(translate_value[0]),
+                        "y": float(translate_value[1]),
+                        "z": float(translate_value[2])
+                    }
 
             if orient_attr.IsValid():
                 orient_value = orient_attr.Get()
                 if orient_value:
-                    quaternion = [
-                        float(orient_value.GetReal()),
-                        float(orient_value.GetImaginary()[0]),
-                        float(orient_value.GetImaginary()[1]),
-                        float(orient_value.GetImaginary()[2])
-                    ]
+                    quaternion = {
+                        "w": float(orient_value.GetReal()),
+                        "x": float(orient_value.GetImaginary()[0]),
+                        "y": float(orient_value.GetImaginary()[1]),
+                        "z": float(orient_value.GetImaginary()[2])
+                    }
 
             if scale_attr.IsValid():
                 scale_value = scale_attr.Get()
                 if scale_value:
-                    scale = [float(scale_value[0]), float(scale_value[1]), float(scale_value[2])]
+                    scale = {
+                        "x": float(scale_value[0]),
+                        "y": float(scale_value[1]),
+                        "z": float(scale_value[2])
+                    }
 
             return {
                 "position": position,
@@ -2548,9 +2528,9 @@ def cleanup(db):
         try:
             from pxr import Gf
 
-            position = pose_data.get("position", [0.0, 0.0, 0.0])
-            quaternion = pose_data.get("quaternion", [1.0, 0.0, 0.0, 0.0])  # [w, x, y, z]
-            scale = pose_data.get("scale", [1.0, 1.0, 1.0])
+            pos = pose_data.get("position", {"x": 0.0, "y": 0.0, "z": 0.0})
+            quat = pose_data.get("quaternion", {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0})
+            scale = pose_data.get("scale", {"x": 1.0, "y": 1.0, "z": 1.0})
 
             stage = omni.usd.get_context().get_stage()
             prim = stage.GetPrimAtPath(prim_path)
@@ -2562,16 +2542,16 @@ def cleanup(db):
             # This avoids stale property reference issues in async context
             translate_attr = prim.GetAttribute("xformOp:translate")
             if translate_attr:
-                translate_attr.Set(Gf.Vec3d(position[0], position[1], position[2]))
+                translate_attr.Set(Gf.Vec3d(pos["x"], pos["y"], pos["z"]))
 
             orient_attr = prim.GetAttribute("xformOp:orient")
             if orient_attr:
-                quat_gf = Gf.Quatf(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
+                quat_gf = Gf.Quatf(quat["w"], quat["x"], quat["y"], quat["z"])
                 orient_attr.Set(quat_gf)
 
             scale_attr = prim.GetAttribute("xformOp:scale")
             if scale_attr:
-                scale_attr.Set(Gf.Vec3d(scale[0], scale[1], scale[2]))
+                scale_attr.Set(Gf.Vec3d(scale["x"], scale["y"], scale["z"]))
 
             return True
         except Exception as e:
@@ -2929,7 +2909,17 @@ def cleanup(db):
         # Isaac Sim handles ROS2 shutdown automatically
         print("ROS2 bridge shutdown handled by Isaac Sim")
 
-        # Destroy window
+        # Clear UI widget references to break closure references
+        self._workspace_checkbox = None
+        self._custom_checkbox = None
+        self._custom_camera_prim_field = None
+        self._custom_camera_topic_field = None
+        self._resolution_combo = None
+        self._objects_path_field = None
+        self._assembly_file_field = None
+
+        # Destroy window - clear frame first to break lambda closure references
         if self._window:
+            self._window.frame.clear()
             self._window.destroy()
             self._window = None
