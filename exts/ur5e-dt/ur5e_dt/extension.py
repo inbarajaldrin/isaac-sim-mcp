@@ -153,6 +153,9 @@ class DigitalTwin(omni.ext.IExt):
         self._z_offset = 0.0495  # Z offset for all objects
         self._assembly_file_path = os.path.expanduser("~/Projects/aruco-grasp-annotator/data/fmb_assembly1.json")
 
+        # Scene state file path (can be set by MCP client)
+        self._scene_state_file_path = None
+
         # Physics scene settings
         self._min_frame_rate = 60
         self._time_steps_per_second = 120
@@ -2122,7 +2125,14 @@ def cleanup(db):
             """
             
             graph_path = "/World/Graphs/ActionGraph_objects_poses"
-            
+
+            # Check if graph already exists
+            stage = omni.usd.get_context().get_stage()
+            existing_graph = stage.GetPrimAtPath(graph_path)
+            if existing_graph and existing_graph.IsValid():
+                print(f"Action graph already exists at {graph_path}, skipping creation")
+                return
+
             # Create the action graph using OmniGraph API
             keys = og.Controller.Keys
             
@@ -2200,8 +2210,6 @@ def cleanup(db):
             parent_prim="/World",
             topic_name="objects_poses_sim"
         )
-        
-        print("\nAction graph created successfully!")
 
     # ==================== MCP Socket Server Methods ====================
 
@@ -2467,7 +2475,19 @@ def cleanup(db):
     # ==================== Scene Management Handlers ====================
 
     def _get_scene_state_path(self) -> str:
-        """Get the path to scene_state.json file in the resources directory."""
+        """Get the path to scene_state.json file.
+
+        If a path was previously set by MCP client, use that.
+        Otherwise, use the default resources directory.
+        """
+        if self._scene_state_file_path:
+            # Use the path set by MCP client
+            parent_dir = os.path.dirname(self._scene_state_file_path)
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
+            return self._scene_state_file_path
+
+        # Default path
         os.makedirs(RESOURCES_DIR, exist_ok=True)
         return os.path.join(RESOURCES_DIR, "scene_state.json")
 
@@ -2625,7 +2645,10 @@ def cleanup(db):
         try:
             from pxr import UsdGeom
 
-            if json_file_path is None:
+            # Store the path if provided by MCP client
+            if json_file_path is not None:
+                self._scene_state_file_path = json_file_path
+            else:
                 json_file_path = self._get_scene_state_path()
 
             stage = omni.usd.get_context().get_stage()
@@ -2708,7 +2731,10 @@ def cleanup(db):
             Dictionary with execution result.
         """
         try:
-            if json_file_path is None:
+            # Store the path if provided by MCP client
+            if json_file_path is not None:
+                self._scene_state_file_path = json_file_path
+            else:
                 json_file_path = self._get_scene_state_path()
 
             if not os.path.exists(json_file_path):
@@ -2777,7 +2803,10 @@ def cleanup(db):
             Dictionary with execution result.
         """
         try:
-            if json_file_path is None:
+            # Store the path if provided by MCP client
+            if json_file_path is not None:
+                self._scene_state_file_path = json_file_path
+            else:
                 json_file_path = self._get_scene_state_path()
 
             if os.path.exists(json_file_path):
