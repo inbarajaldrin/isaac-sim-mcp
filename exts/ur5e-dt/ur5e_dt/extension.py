@@ -86,6 +86,24 @@ MCP_TOOL_REGISTRY = {
         "description": "Delete the scene state JSON file, removing all saved object poses.",
         "parameters": {}
     },
+    "add_objects": {
+        "description": "Add objects to the scene from a predefined assembly folder.",
+        "parameters": {
+            "assembly": {
+                "type": "string",
+                "enum": ["fmb1", "fmb2", "fmb3"],
+                "description": "Which assembly folder to load objects from"
+            }
+        }
+    },
+    "delete_objects": {
+        "description": "Delete all objects from /World/Objects and the associated pose publisher graph.",
+        "parameters": {}
+    },
+    "setup_pose_publisher": {
+        "description": "Create an action graph to publish object poses to ROS2 topic 'objects_poses_sim'.",
+        "parameters": {}
+    },
 }
 
 # Handler method names for each tool (maps to self._cmd_<name> methods)
@@ -98,6 +116,9 @@ MCP_HANDLERS = {
     "save_scene_state": "_cmd_save_scene_state",
     "restore_scene_state": "_cmd_restore_scene_state",
     "clear_scene_state": "_cmd_clear_scene_state",
+    "add_objects": "_cmd_add_objects",
+    "delete_objects": "_cmd_delete_objects",
+    "setup_pose_publisher": "_cmd_setup_pose_publisher",
 }
 
 from omni.isaac.core.utils.stage import add_reference_to_stage
@@ -2778,6 +2799,91 @@ def cleanup(db):
             return {
                 "status": "error",
                 "message": f"Failed to clear scene state: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    def _cmd_add_objects(self, assembly: str = "fmb1") -> Dict[str, Any]:
+        """MCP handler for adding objects to the scene.
+
+        Args:
+            assembly: Which assembly folder to load objects from (fmb1, fmb2, fmb3)
+
+        Returns:
+            Dictionary with execution result.
+        """
+        try:
+            # Map assembly name to folder path
+            assembly_folders = {
+                "fmb1": "omniverse://localhost/Library/DT demo/fmb1/",
+                "fmb2": "omniverse://localhost/Library/DT demo/fmb2/",
+                "fmb3": "omniverse://localhost/Library/DT demo/fmb3/",
+            }
+
+            if assembly not in assembly_folders:
+                return {
+                    "status": "error",
+                    "message": f"Invalid assembly: {assembly}. Must be one of: {', '.join(assembly_folders.keys())}"
+                }
+
+            folder_path = assembly_folders[assembly]
+
+            # Update the UI field and call add_objects
+            self._objects_path_field.model.set_value(folder_path)
+            self.add_objects()
+
+            return {
+                "status": "success",
+                "message": f"Objects added from {assembly}",
+                "folder_path": folder_path
+            }
+        except Exception as e:
+            carb.log_error(f"Error in add_objects: {e}")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"Failed to add objects: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    def _cmd_delete_objects(self) -> Dict[str, Any]:
+        """MCP handler for deleting objects from the scene.
+
+        Returns:
+            Dictionary with execution result.
+        """
+        try:
+            self.delete_objects()
+            return {
+                "status": "success",
+                "message": "Objects deleted from /World/Objects"
+            }
+        except Exception as e:
+            carb.log_error(f"Error in delete_objects: {e}")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"Failed to delete objects: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    def _cmd_setup_pose_publisher(self) -> Dict[str, Any]:
+        """MCP handler for setting up pose publisher action graph.
+
+        Returns:
+            Dictionary with execution result.
+        """
+        try:
+            self.create_pose_publisher()
+            return {
+                "status": "success",
+                "message": "Pose publisher action graph created at /World/Graphs/ActionGraph_objects_poses"
+            }
+        except Exception as e:
+            carb.log_error(f"Error in setup_pose_publisher: {e}")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"Failed to setup pose publisher: {str(e)}",
                 "traceback": traceback.format_exc()
             }
 
