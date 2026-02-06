@@ -9,7 +9,6 @@ import omni.client
 import omni.kit.commands
 import carb
 import math
-import re
 import socket
 import json
 import traceback
@@ -27,6 +26,22 @@ if BASE_OUTPUT_DIR:
     RESOURCES_DIR = os.path.join(BASE_OUTPUT_DIR, "resources")
 else:
     RESOURCES_DIR = "resources"
+
+# Assembly definitions: each entry pairs an objects folder with its assembly JSON
+ASSEMBLIES = {
+    "fmb1": {
+        "folder": "omniverse://localhost/Library/DT demo/fmb1/",
+        "assembly_file": os.path.expanduser("~/Projects/aruco-grasp-annotator/data/fmb_assembly1.json"),
+    },
+    "fmb2": {
+        "folder": "omniverse://localhost/Library/DT demo/fmb2/",
+        "assembly_file": os.path.expanduser("~/Projects/aruco-grasp-annotator/data/fmb_assembly2.json"),
+    },
+    "fmb3": {
+        "folder": "omniverse://localhost/Library/DT demo/fmb3/",
+        "assembly_file": os.path.expanduser("~/Projects/aruco-grasp-annotator/data/fmb_assembly3.json"),
+    },
+}
 
 # =============================================================================
 # MCP TOOL REGISTRY - Single source of truth for all MCP tools
@@ -65,7 +80,7 @@ MCP_TOOL_REGISTRY = {
         "parameters": {
             "assembly": {
                 "type": "string",
-                "enum": ["assembly1", "assembly2", "assembly3"],
+                "enum": ["fmb1", "fmb2", "fmb3"],
                 "description": "Which assembly configuration to use"
             }
         }
@@ -147,11 +162,10 @@ class DigitalTwin(omni.ext.IExt):
         self._mcp_server_running = False
 
         # Add Objects UI state
-        self._objects_folder_path = "omniverse://localhost/Library/DT demo/fmb1/"
+        self._selected_assembly = "fmb1"
         self._object_spacing = 0.25  # Spacing between objects along X-axis in meters
         self._y_offset = -0.5  # Y offset for all objects
         self._z_offset = 0.0495  # Z offset for all objects
-        self._assembly_file_path = os.path.expanduser("~/Projects/aruco-grasp-annotator/data/fmb_assembly1.json")
 
         # Scene state file path (can be set by MCP client)
         self._scene_state_file_path = None
@@ -177,21 +191,37 @@ class DigitalTwin(omni.ext.IExt):
         self._gripper_friction_combine_mode = "max"
         self._gripper_restitution_combine_mode = "min"
 
-        # Object physics material
+        # Common physics material (applied to all objects)
         self._object_dynamic_friction = 0.1
         self._object_static_friction = 0.1
         self._object_restitution = 0.0
         self._object_friction_combine_mode = "max"
         self._object_restitution_combine_mode = "min"
 
-        # Object collision settings
-        self._base_collision_approximation = "sdf"  # "sdf" or "convexDecomposition"
-        self._object_collision_approximation = "sdf"  # "sdf" or "convexDecomposition"
+        # Shared collision settings
         self._sdf_resolution = 300
         self._contact_offset = 0.0005
-        self._base_rest_offset = 0.0
-        self._object_rest_offset = -0.0005
-        self._object_angular_damping = 50.0  # High damping to prevent mid-air rotation
+
+        # Per-category prim settings (collision approximation, rest offset, angular damping)
+        # Board (type: "board", e.g. base1, base2, base3)
+        self._board_collision_approximation = "sdf"  # "sdf" or "convexDecomposition"
+        self._board_rest_offset = 0.0
+        self._board_angular_damping = 20.0
+
+        # Block (subtype: "block", e.g. u_brown, fork_orange, line_green)
+        self._block_collision_approximation = "sdf"
+        self._block_rest_offset = -0.0005
+        self._block_angular_damping = 20.0
+
+        # Socket (subtype: "socket", e.g. inverted_u_brown)
+        self._socket_collision_approximation = "sdf"
+        self._socket_rest_offset = -0.0005
+        self._socket_angular_damping = 20.0
+
+        # Peg (subtype: "peg", e.g. hex_blue, hex_red)
+        self._peg_collision_approximation = "sdf"
+        self._peg_rest_offset = -0.0005
+        self._peg_angular_damping = 50.0
 
         # Isaac Sim handles ROS2 initialization automatically through its bridge
         print("ROS2 bridge will be initialized by Isaac Sim when needed")
@@ -221,6 +251,7 @@ class DigitalTwin(omni.ext.IExt):
                     with ui.HStack(spacing=5):
                         ui.Button("Load UR5e", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_ur5e()))
                         ui.Button("Setup UR5e Action Graph", width=200, height=35, clicked_fn=lambda: asyncio.ensure_future(self.setup_action_graph()))
+                        ui.Button("Setup UR5e Force Publisher", width=200, height=35, clicked_fn=self.setup_force_publish_action_graph)
 
             with ui.CollapsableFrame(title="RG2 Gripper", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
@@ -231,7 +262,6 @@ class DigitalTwin(omni.ext.IExt):
                     
                     with ui.HStack(spacing=5):
                         ui.Button("Setup Gripper Action Graph", width=200, height=35, clicked_fn=self.setup_gripper_action_graph)
-                        ui.Button("Setup Force Publish Graph", width=200, height=35, clicked_fn=self.setup_force_publish_action_graph)
 
             # Intel RealSense Camera
             with ui.CollapsableFrame(title="Intel RealSense Camera", collapsed=False, height=0):
@@ -285,13 +315,12 @@ class DigitalTwin(omni.ext.IExt):
             with ui.CollapsableFrame(title="Objects", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
                     with ui.HStack(spacing=5):
-                        ui.Label("Objects Folder:", alignment=ui.Alignment.LEFT, width=100)
-                        self._objects_path_field = ui.StringField(width=300)
-                        self._objects_path_field.model.set_value(self._objects_folder_path)
-                    with ui.HStack(spacing=5):
-                        ui.Label("Assembly File:", alignment=ui.Alignment.LEFT, width=100)
-                        self._assembly_file_field = ui.StringField(width=450)
-                        self._assembly_file_field.model.set_value(self._assembly_file_path)
+                        ui.Label("Assembly:", alignment=ui.Alignment.LEFT, width=100)
+                        assembly_names = list(ASSEMBLIES.keys())
+                        self._assembly_combo = ui.ComboBox(0, *assembly_names, width=150)
+                        self._assembly_combo.model.add_item_changed_fn(
+                            lambda m, _: self._on_assembly_changed(m)
+                        )
                     with ui.HStack(spacing=5):
                         ui.Button("Add Objects", width=150, height=35, clicked_fn=self.add_objects)
                         ui.Button("Setup Pose Publisher", width=180, height=35, clicked_fn=self.create_pose_publisher)
@@ -308,6 +337,19 @@ class DigitalTwin(omni.ext.IExt):
                             clicked_fn=lambda: self._cmd_restore_scene_state())
                         ui.Button("Clear State", width=120, height=35,
                             clicked_fn=lambda: self._cmd_clear_scene_state())
+
+    def _on_assembly_changed(self, model):
+        """Called when the assembly combo box selection changes."""
+        idx = model.get_item_value_model().as_int
+        self._selected_assembly = list(ASSEMBLIES.keys())[idx]
+
+    @property
+    def _objects_folder_path(self):
+        return ASSEMBLIES[self._selected_assembly]["folder"]
+
+    @property
+    def _assembly_file_path(self):
+        return ASSEMBLIES[self._selected_assembly]["assembly_file"]
 
     async def load_scene(self):
         stage = omni.usd.get_context().get_stage()
@@ -376,9 +418,9 @@ class DigitalTwin(omni.ext.IExt):
         if gripper_graph.IsValid():
             graph_paths_to_recreate.append("RG2")
         
-        force_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_RG2_ForcePublish")
+        force_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_UR5e_ForcePublish")
         if force_graph.IsValid() or getattr(self, '_force_publish_active', False):
-            graph_paths_to_recreate.append("RG2_ForcePublish")
+            graph_paths_to_recreate.append("UR5e_ForcePublish")
         
         camera_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_Camera")
         if camera_graph.IsValid():
@@ -422,7 +464,7 @@ class DigitalTwin(omni.ext.IExt):
                 print(f"✗ Failed to recreate Gripper Action Graph: {e}")
         
         # Create Force Publish Action Graph
-        if "RG2_ForcePublish" in graph_paths_to_recreate:
+        if "UR5e_ForcePublish" in graph_paths_to_recreate:
             try:
                 self.setup_force_publish_action_graph()
                 print("✓ Force Publish Action Graph recreated")
@@ -682,7 +724,7 @@ def setup(db):
     global gripper_view
     try:
         # Always create a fresh gripper view in setup
-        gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper")
+        gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper_cmd")
         gripper_view.initialize()
         db.log_info("Gripper initialized successfully")
     except Exception as e:
@@ -691,11 +733,11 @@ def setup(db):
 
 def compute(db):
     global gripper_view, last_sim_frame
-    
+
     try:
         # Get input string from ROS2
         input_str = str(db.inputs.String).strip()
-        
+
         # Handle string replacements in Python
         if input_str == "open":
             processed_str = "1100"
@@ -703,23 +745,23 @@ def compute(db):
             processed_str = "0"
         else:
             processed_str = input_str
-        
+
         # Convert to width in mm
         try:
             width_mm = float(processed_str) / 10.0
         except ValueError:
             db.log_error(f"Invalid input: {input_str}")
             return
-        
+
         # Check if simulation restarted by monitoring frame count
         timeline = omni.timeline.get_timeline_interface()
         current_frame = timeline.get_current_time() * timeline.get_time_codes_per_seconds()
-        
+
         # If frame went backwards, simulation was restarted
         if current_frame < last_sim_frame or last_sim_frame == -1:
             db.log_info("Simulation restart detected, reinitializing gripper...")
             try:
-                gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper")
+                gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper_cmd")
                 gripper_view.initialize()
                 db.log_info("Gripper reinitialized after restart")
             except Exception as e:
@@ -760,9 +802,9 @@ def compute(db):
             db.log_info(f"Gripper: \\'{input_str}\\' -> {width_mm:.1f}mm -> {joint_angle:.3f}rad")
             
         except Exception as e:
-            # This is expected during the first few frames after restart
-            if "Physics Simulation View is not created yet" in str(e):
-                # Physics not ready yet, just wait
+            err_str = str(e)
+            # Expected during the first few frames after restart
+            if "_physics_view" in err_str or "Physics Simulation View" in err_str:
                 db.outputs.Integer = int(np.clip(width_mm, 0.0, 110.0))
             else:
                 db.log_warning(f"Action failed: {e}")
@@ -792,7 +834,7 @@ def setup(db):
     global gripper_view, physics_ready
     physics_ready = False
     try:
-        gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper")
+        gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper_state")
         gripper_view.initialize()
         db.log_info("Gripper initialized successfully")
     except Exception as e:
@@ -801,19 +843,19 @@ def setup(db):
 
 def compute(db):
     global gripper_view, last_sim_frame, physics_ready
-    
+
     try:
         timeline = omni.timeline.get_timeline_interface()
         if timeline.is_stopped():
             return
-        
+
         current_frame = timeline.get_current_time() * timeline.get_time_codes_per_seconds()
-        
+
         # Handle simulation restart
         if current_frame < last_sim_frame or last_sim_frame == -1:
             physics_ready = False
             try:
-                gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper")
+                gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper_state")
                 gripper_view.initialize()
             except Exception as e:
                 db.log_error(f"Gripper reinitialization failed: {e}")
@@ -922,34 +964,28 @@ def cleanup(db):
         print("ros2 topic echo /gripper_width_sim")
 
     def setup_force_publish_action_graph(self):
-        """Setup force publishing using joint forces from ArticulationView.
+        """Setup force publishing using joint forces from UR5e ArticulationView.
 
         Uses a physics step callback to read measured joint forces at physics rate
         (~60 Hz). Uses get_measured_joint_forces() which returns 6-DOF spatial forces
-        [Fx, Fy, Fz, Tx, Ty, Tz] per joint. Publishes Fz from the gripper joint.
+        [Fx, Fy, Fz, Tx, Ty, Tz] per joint. Publishes Fz from the UR5e wrist joint.
         """
         import omni.physx
 
-        print("Setting up Joint Force Publisher...")
+        print("Setting up UR5e Force Publisher...")
 
         # Clean up any previous physics callback
         self._stop_force_publish()
 
-        # Initialize ArticulationView for reading joint forces
-        try:
-            self._effort_articulation = ArticulationView(
-                prim_paths_expr="/World/UR5e",
-                name="ur5e_force_view"
-            )
-            self._effort_articulation.initialize()
-            print(f"ArticulationView initialized. Joints: {self._effort_articulation.joint_names}")
-        except Exception as e:
-            print(f"Failed to initialize ArticulationView: {e}")
-            print("Make sure simulation is playing and UR5e is loaded")
+        # Reuse the ArticulationView created during UR5e loading
+        if self._ur5e_view is None:
+            print("Error: UR5e ArticulationView not available. Load UR5e first.")
             return
+        self._effort_articulation = self._ur5e_view
+        print(f"Using existing ArticulationView. Joints: {self._effort_articulation.joint_names}")
 
         # Delete existing graph if it exists
-        graph_path = "/World/Graphs/ActionGraph_RG2_ForcePublish"
+        graph_path = "/World/Graphs/ActionGraph_UR5e_ForcePublish"
         keys = og.Controller.Keys
         stage = omni.usd.get_context().get_stage()
         if stage.GetPrimAtPath(graph_path):
@@ -967,7 +1003,7 @@ def cleanup(db):
                 keys.SET_VALUES: [
                     (f"{graph_path}/publisher.inputs:messageName", "Float64"),
                     (f"{graph_path}/publisher.inputs:messagePackage", "std_msgs"),
-                    (f"{graph_path}/publisher.inputs:topicName", "joint_force"),
+                    (f"{graph_path}/publisher.inputs:topicName", "ur5e_wrist_force"),
                 ],
                 keys.CONNECT: [
                     (f"{graph_path}/tick.outputs:tick", f"{graph_path}/publisher.inputs:execIn"),
@@ -989,8 +1025,8 @@ def cleanup(db):
 
         self._force_publish_active = True
 
-        print(f"Joint Force Publisher created at {graph_path}")
-        print("Publishing Fz (N) from gripper joint to topic: /joint_force")
+        print(f"UR5e Force Publisher created at {graph_path}")
+        print("Publishing Fz (N) from UR5e wrist joint to topic: /ur5e_wrist_force")
         print("Using get_measured_joint_forces() - 6-DOF spatial forces per joint")
         print("Joint forces read at physics rate (~60 Hz)")
 
@@ -999,17 +1035,24 @@ def cleanup(db):
 
         Uses get_measured_joint_forces() which returns 6-DOF spatial forces
         [Fx, Fy, Fz, Tx, Ty, Tz] per joint. Publishes Fz from the last joint
-        (gripper joint) as the main collision/contact indicator.
+        (wrist joint) as the main collision/contact indicator.
         """
         try:
             if self._effort_articulation is None:
+                return
+
+            # Wait until the physics simulation view is ready
+            if not self._effort_articulation.is_physics_handle_valid():
+                self._effort_articulation.initialize(
+                    World.instance().physics_sim_view
+                )
                 return
 
             # get_measured_joint_forces returns shape (num_articulations, num_joints, 6)
             # where 6 = [Fx, Fy, Fz, Tx, Ty, Tz]
             forces = self._effort_articulation.get_measured_joint_forces()
             if forces is not None and len(forces) > 0:
-                # Use last joint (gripper joint), get Fz (index 2) as collision indicator
+                # Use last joint (wrist joint), get Fz (index 2) as collision indicator
                 fz = float(forces[0][-1][2])
                 og.Controller.set(
                     og.Controller.attribute(self._force_graph_attr_path),
@@ -1330,9 +1373,9 @@ def cleanup(db):
 
         if is_workspace:
             prim_path = "/World/workspace_camera"
-            position = (1.63108, -2.04754, 1.55408)
-            # Euler XYZ: (54.872, 36.12, 22.525) degrees
-            quat_xyzw = (0.3758, 0.3553, 0.0250, 0.8552)  # x, y, z, w
+            position = (1.80632, -2.25319, 1.70657)
+            # Euler XYZ: (52.147, 39.128, 26.127) degrees
+            quat_xyzw = (0.4714, 0.1994, 0.3347, 0.7912)  # x, y, z, w
             resolution = (1280, 720)
 
             # Create camera prim using UsdGeom.Camera
@@ -1428,7 +1471,18 @@ def cleanup(db):
             )
 
     def _create_camera_actiongraph(self, camera_prim, width, height, topic, graph_suffix):
-        """Helper method to create camera ActionGraph"""
+        """Helper method to create camera ActionGraph
+
+        TODO: Camera action graphs slow down physics and stop producing frames as FPS drops.
+        Root cause: OnPlaybackTick fires every render frame, and IsaacRunOneSimulationFrame
+        couples rendering to the physics step. When physics slows (e.g. SDF collisions, many
+        objects), render FPS drops, which starves the camera pipeline. Possible fixes:
+          - Decouple camera publishing from the physics tick (use a separate event-based or
+            timer-driven graph instead of OnPlaybackTick → IsaacRunOneSimulationFrame chain)
+          - Use OnImpulseEvent with a fixed-rate async timer instead of OnPlaybackTick
+          - Lower render product resolution or publish at a reduced rate (e.g. skip N frames)
+          - Profile whether the ROS2CameraHelper itself is the bottleneck (GPU readback stall)
+        """
         graph_path = f"/World/Graphs/ActionGraph_{graph_suffix}"
         print(f"Creating ActionGraph: {graph_path}")
         print(f"Camera: {camera_prim}")
@@ -1504,9 +1558,36 @@ def cleanup(db):
         print(f"\n{graph_suffix} ActionGraph created successfully!")
         print(f"Test with: ros2 topic echo /{topic}")
 
-    def _is_base_object(self, name):
-        """Check if an object name matches the base{number} pattern."""
-        return bool(re.match(r'^base\d+$', name))
+    def _load_object_type_map(self):
+        """Read the assembly JSON and return a dict mapping object name -> category (board/block/peg/socket).
+
+        JSON uses type="board" for boards, and type="object" with subtype for the rest.
+        Returns the effective category for prim settings lookup.
+        """
+        type_map = {}
+        assembly_file = self._assembly_file_path
+        if assembly_file and os.path.exists(assembly_file):
+            with open(assembly_file, 'r') as f:
+                assembly_data = json.load(f)
+            for component in assembly_data.get('components', []):
+                comp_type = component.get('type', 'object')
+                if comp_type == 'board':
+                    category = 'board'
+                else:
+                    category = component.get('subtype', 'block')
+                type_map[component['name']] = category
+        else:
+            print(f"Warning: Assembly file not found: {assembly_file}, defaulting all objects to 'block'")
+        return type_map
+
+    def _get_prim_params(self, category):
+        """Return prim settings dict for the given category (board/block/peg/socket)."""
+        prefix = f"_{category}_"
+        return {
+            "collision_approximation": getattr(self, f"{prefix}collision_approximation"),
+            "rest_offset": getattr(self, f"{prefix}rest_offset"),
+            "angular_damping": getattr(self, f"{prefix}angular_damping"),
+        }
 
     def _sample_non_overlapping_objects(
         self,
@@ -1600,10 +1681,8 @@ def cleanup(db):
         )
 
     def assemble_objects(self, folder_path="/World/Objects"):
-        """Assemble objects based on JSON assembly data, positioned relative to the current base pose."""
-        import json
-
-        assembly_file = self._assembly_file_field.model.get_value_as_string()
+        """Assemble objects based on JSON assembly data, positioned relative to the current board pose."""
+        assembly_file = self._assembly_file_path
         if not os.path.exists(assembly_file):
             print(f"Error: Assembly file not found: {assembly_file}")
             return
@@ -1614,7 +1693,8 @@ def cleanup(db):
 
         stage = omni.usd.get_context().get_stage()
 
-        # Find the base object's current world position to use as assembly origin
+        # Find the board object's current world position to use as assembly origin
+        type_map = self._load_object_type_map()
         objects_root = stage.GetPrimAtPath(folder_path)
         if not objects_root.IsValid():
             print(f"Warning: {folder_path} does not exist")
@@ -1623,14 +1703,14 @@ def cleanup(db):
         base_world_pos = Gf.Vec3d(0, 0, 0)
         for child in objects_root.GetChildren():
             obj_name = child.GetName()
-            if self._is_base_object(obj_name):
+            if type_map.get(obj_name, 'block') == 'board':
                 child_path = f"{folder_path}/{obj_name}/{obj_name}/{obj_name}"
                 child_prim = stage.GetPrimAtPath(child_path)
                 if child_prim and child_prim.IsValid():
                     child_xform = UsdGeom.Xformable(child_prim)
                     world_transform = child_xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
                     base_world_pos = world_transform.ExtractTranslation()
-                    print(f"Base object '{obj_name}' at world pos: ({base_world_pos[0]:.4f}, {base_world_pos[1]:.4f}, {base_world_pos[2]:.4f})")
+                    print(f"Board '{obj_name}' at world pos: ({base_world_pos[0]:.4f}, {base_world_pos[1]:.4f}, {base_world_pos[2]:.4f})")
                 break
 
         # Position each component from assembly data
@@ -1682,7 +1762,7 @@ def cleanup(db):
         i = 0
         for child in objects_root.GetChildren():
             obj_name = child.GetName()
-            if obj_name == "PhysicsMaterial":
+            if obj_name.endswith("Material"):
                 continue
 
             child_path = f"{folder_path}/{obj_name}/{obj_name}/{obj_name}"
@@ -1730,31 +1810,32 @@ def cleanup(db):
             return
 
         # Collect object info: parent path, child path, parent's current world position, and child's current Z
-        # Also collect base object positions to respect during randomization
+        # Also collect board positions to respect during randomization
+        type_map = self._load_object_type_map()
         object_info = []
-        base_positions = []  # Store base object world positions
-        
+        board_positions = []  # Store board world positions
+
         for child in objects_root.GetChildren():
             obj = child.GetName()
             parent_path = f"{folder_path}/{obj}"
             child_path = f"{folder_path}/{obj}/{obj}/{obj}"
-            
+
             parent_prim = stage.GetPrimAtPath(parent_path)
             child_prim = stage.GetPrimAtPath(child_path)
-            
+
             if not parent_prim.IsValid() or not child_prim.IsValid():
                 continue
-            
+
             # Get child's current world transform
             child_xform = UsdGeom.Xformable(child_prim)
             child_world_transform = child_xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
             child_world_pos = child_world_transform.ExtractTranslation()
-            
-            # Check if this is a base object (matches pattern base{id})
-            if self._is_base_object(obj):
-                # Store base position for separation checking
-                base_positions.append(child_world_pos)
-                print(f"Skipping {obj} (matches base{{id}} pattern) at world pos: ({child_world_pos[0]:.3f}, {child_world_pos[1]:.3f}, {child_world_pos[2]:.3f})")
+
+            # Check if this is a board object
+            if type_map.get(obj, 'block') == 'board':
+                # Store board position for separation checking
+                board_positions.append(child_world_pos)
+                print(f"Skipping {obj} (board) at world pos: ({child_world_pos[0]:.3f}, {child_world_pos[1]:.3f}, {child_world_pos[2]:.3f})")
                 continue
             
             # Get parent's current world transform and position
@@ -1781,15 +1862,15 @@ def cleanup(db):
         z_values = [info["current_z"] for info in object_info]
         
         # Randomize positions in world frame
-        # Pass base positions so randomization respects them for minimum separation
+        # Pass board positions so randomization respects them for minimum separation
         poses = self._sample_non_overlapping_objects(
             num_objects=len(object_info),
             z_values=z_values,
-            fixed_positions=base_positions
+            fixed_positions=board_positions
         )
-        
-        if base_positions:
-            print(f"Randomization will respect {len(base_positions)} base object positions for minimum separation")
+
+        if board_positions:
+            print(f"Randomization will respect {len(board_positions)} board positions for minimum separation")
 
         # Apply randomized poses
         for obj_info, pose in zip(object_info, poses):
@@ -1845,11 +1926,10 @@ def cleanup(db):
             print(f"Deleted {pose_graph_path}")
 
     def add_objects(self):
-        """Import all objects from the specified folder into the scene"""
-        # Get the folder path from the UI
-        folder_path = self._objects_path_field.model.get_value_as_string()
+        """Import all objects from the selected assembly's folder into the scene"""
+        folder_path = self._objects_folder_path
         if not folder_path:
-            print("Error: No folder path specified")
+            print("Error: No folder path for selected assembly")
             return
         
         # Check if path is a single USD file or a folder
@@ -1903,7 +1983,10 @@ def cleanup(db):
             
             print(f"Found {len(usd_files)} USD files")
 
-            # Create physics material inside the objects folder
+            # Load object type map from assembly file
+            type_map = self._load_object_type_map()
+
+            # Create single common physics material for all objects
             physics_mat_path = f"{target_path}/PhysicsMaterial"
             material = UsdShade.Material.Define(stage, physics_mat_path)
             physics_mat_api = UsdPhysics.MaterialAPI.Apply(material.GetPrim())
@@ -1913,7 +1996,7 @@ def cleanup(db):
             physx_mat_api = PhysxSchema.PhysxMaterialAPI.Apply(material.GetPrim())
             physx_mat_api.CreateFrictionCombineModeAttr().Set(self._object_friction_combine_mode)
             physx_mat_api.CreateRestitutionCombineModeAttr().Set(self._object_restitution_combine_mode)
-            print(f"Created physics material at {physics_mat_path}")
+            print(f"Created common physics material at {physics_mat_path}")
 
             # Import each USD file with positioning
             for i, usd_file in enumerate(usd_files):
@@ -1986,7 +2069,7 @@ def cleanup(db):
                         prev=None)
                     print(f"Added {usd_file_path} to {prim_path} at position ({x_position}, {self._y_offset}, {self._z_offset})")
 
-            # Bind physics material to each object and its descendants
+            # Bind common physics material and apply per-category prim settings
             from omni.physx.scripts import physicsUtils
             physics_mat_sdf_path = Sdf.Path(physics_mat_path)
             objects_prim = stage.GetPrimAtPath(target_path)
@@ -1995,40 +2078,42 @@ def cleanup(db):
                     child_name = child.GetName()
                     if child_name == "PhysicsMaterial":
                         continue
-                    # Walk all descendants and bind material to prims with CollisionAPI
+                    # Determine category from assembly file (board/block/peg/socket)
+                    category = type_map.get(child_name, 'block')
+                    prim_params = self._get_prim_params(category)
+                    # Walk all descendants and bind common material to prims with CollisionAPI
                     bound_count = 0
                     for desc in Usd.PrimRange(child):
                         if desc.HasAPI(UsdPhysics.CollisionAPI):
                             physicsUtils.add_physics_material_to_prim(stage, desc, physics_mat_sdf_path)
                             bound_count += 1
                             print(f"  Bound physics material to collision prim: {desc.GetPath()}")
-                    # Set collision approximation on the mesh prim: {name}/{name}/{name}
+                    # Set per-category prim settings on the mesh prim: {name}/{name}/{name}
                     mesh_path = f"{target_path}/{child_name}/{child_name}/{child_name}"
                     mesh_prim = stage.GetPrimAtPath(mesh_path)
                     if mesh_prim and mesh_prim.IsValid():
-                        # Determine collision approximation based on object type
-                        is_base = self._is_base_object(child_name)
-                        approx = self._base_collision_approximation if is_base else self._object_collision_approximation
+                        approx = prim_params["collision_approximation"]
                         UsdPhysics.CollisionAPI.Apply(mesh_prim)
                         mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
                         if approx == "sdf":
                             mesh_collision_api.CreateApproximationAttr(PhysxSchema.Tokens.sdf)
                             sdf_api = PhysxSchema.PhysxSDFMeshCollisionAPI.Apply(mesh_prim)
                             sdf_api.CreateSdfResolutionAttr(self._sdf_resolution)
-                            print(f"  Set SDF mesh (resolution={self._sdf_resolution}) on {mesh_path}")
+                            print(f"  Set SDF mesh (resolution={self._sdf_resolution}) on {mesh_path} [{category}]")
                         else:
                             mesh_collision_api.CreateApproximationAttr(approx)
-                            print(f"  Set {approx} collision on {mesh_path}")
-                        # Set contact/rest offset for 0.01 scale objects
-                        rest_offset = self._base_rest_offset if is_base else self._object_rest_offset
+                            print(f"  Set {approx} collision on {mesh_path} [{category}]")
+                        # Set contact/rest offset
+                        rest_offset = prim_params["rest_offset"]
                         physx_collision_api = PhysxSchema.PhysxCollisionAPI.Apply(mesh_prim)
                         physx_collision_api.CreateContactOffsetAttr().Set(self._contact_offset)
                         physx_collision_api.CreateRestOffsetAttr().Set(rest_offset)
-                        print(f"  Set contactOffset={self._contact_offset}, restOffset={rest_offset} on {mesh_path}")
-                        # Apply angular damping to prevent mid-air rotation
+                        print(f"  Set contactOffset={self._contact_offset}, restOffset={rest_offset} on {mesh_path} [{category}]")
+                        # Apply angular damping
+                        angular_damping = prim_params["angular_damping"]
                         physx_rb_api = PhysxSchema.PhysxRigidBodyAPI.Apply(mesh_prim)
-                        physx_rb_api.CreateAngularDampingAttr().Set(self._object_angular_damping)
-                        print(f"  Set angularDamping={self._object_angular_damping} on {mesh_path}")
+                        physx_rb_api.CreateAngularDampingAttr().Set(angular_damping)
+                        print(f"  Set angularDamping={angular_damping} on {mesh_path} [{category}]")
                     else:
                         print(f"  Warning: Mesh prim not found at {mesh_path}")
 
@@ -2040,7 +2125,7 @@ def cleanup(db):
                             physicsUtils.add_physics_material_to_prim(stage, nested_prim, physics_mat_sdf_path)
                             print(f"  Bound physics material to {nested_path} (no collision prims found)")
                     else:
-                        print(f"Bound physics material to {bound_count} collision prim(s) under {child_name}")
+                        print(f"Bound physics material to {bound_count} collision prim(s) under {child_name} [{category}]")
         else:
             print(f"Failed to list folder: {folder_path}")
 
@@ -2411,14 +2496,21 @@ def cleanup(db):
             }
 
     def _cmd_play_scene(self) -> Dict[str, Any]:
-        """Start/resume the simulation timeline."""
+        """Start/resume the simulation timeline, refreshing graphs first."""
         try:
             import omni.timeline
+
+            # Refresh all graphs before playing to fix stale script nodes
+            try:
+                self.refresh_graphs()
+            except Exception as e:
+                print(f"[DigitalTwin] Warning: Graph refresh failed: {e}")
+
             timeline = omni.timeline.get_timeline_interface()
             timeline.play()
             return {
                 "status": "success",
-                "message": "Simulation started"
+                "message": "Simulation started (graphs refreshed)"
             }
         except Exception as e:
             traceback.print_exc()
@@ -2559,31 +2651,23 @@ def cleanup(db):
             traceback.print_exc()
             return False
 
-    def _cmd_assemble_objects(self, assembly: str = "assembly1") -> Dict[str, Any]:
+    def _cmd_assemble_objects(self, assembly: str = "fmb1") -> Dict[str, Any]:
         """MCP handler for assembling objects."""
         try:
-            # Map assembly name to file path
-            assembly_files = {
-                "assembly1": os.path.expanduser("~/Projects/aruco-grasp-annotator/data/fmb_assembly1.json"),
-                "assembly2": os.path.expanduser("~/Projects/aruco-grasp-annotator/data/fmb_assembly2.json"),
-                "assembly3": os.path.expanduser("~/Projects/aruco-grasp-annotator/data/fmb_assembly3.json"),
-            }
-
-            if assembly not in assembly_files:
+            if assembly not in ASSEMBLIES:
                 return {
                     "status": "error",
-                    "message": f"Invalid assembly: {assembly}. Must be one of: assembly1, assembly2, assembly3"
+                    "message": f"Invalid assembly: {assembly}. Must be one of: {', '.join(ASSEMBLIES.keys())}"
                 }
 
-            assembly_file = assembly_files[assembly]
+            self._selected_assembly = assembly
+            assembly_file = self._assembly_file_path
             if not os.path.exists(assembly_file):
                 return {
                     "status": "error",
                     "message": f"Assembly file not found: {assembly_file}"
                 }
 
-            # Update the UI field and call assemble
-            self._assembly_file_field.model.set_value(assembly_file)
             self.assemble_objects()
             return {
                 "status": "success",
@@ -2815,35 +2899,25 @@ def cleanup(db):
         """MCP handler for adding objects to the scene.
 
         Args:
-            assembly: Which assembly folder to load objects from (fmb1, fmb2, fmb3)
+            assembly: Which assembly to load (fmb1, fmb2, fmb3)
 
         Returns:
             Dictionary with execution result.
         """
         try:
-            # Map assembly name to folder path
-            assembly_folders = {
-                "fmb1": "omniverse://localhost/Library/DT demo/fmb1/",
-                "fmb2": "omniverse://localhost/Library/DT demo/fmb2/",
-                "fmb3": "omniverse://localhost/Library/DT demo/fmb3/",
-            }
-
-            if assembly not in assembly_folders:
+            if assembly not in ASSEMBLIES:
                 return {
                     "status": "error",
-                    "message": f"Invalid assembly: {assembly}. Must be one of: {', '.join(assembly_folders.keys())}"
+                    "message": f"Invalid assembly: {assembly}. Must be one of: {', '.join(ASSEMBLIES.keys())}"
                 }
 
-            folder_path = assembly_folders[assembly]
-
-            # Update the UI field and call add_objects
-            self._objects_path_field.model.set_value(folder_path)
+            self._selected_assembly = assembly
             self.add_objects()
 
             return {
                 "status": "success",
                 "message": f"Objects added from {assembly}",
-                "folder_path": folder_path
+                "folder_path": self._objects_folder_path
             }
         except Exception as e:
             carb.log_error(f"Error in add_objects: {e}")
@@ -2915,8 +2989,7 @@ def cleanup(db):
         self._custom_camera_prim_field = None
         self._custom_camera_topic_field = None
         self._resolution_combo = None
-        self._objects_path_field = None
-        self._assembly_file_field = None
+        self._assembly_combo = None
 
         # Destroy window - clear frame first to break lambda closure references
         if self._window:
