@@ -155,6 +155,8 @@ class DigitalTwin(omni.ext.IExt):
         self._ur5e_view = None
         self._articulation = None
         self._gripper_view = None
+        self._viewport_rendering_enabled = True
+        self._viewport_toggle_btn = None
 
         # MCP socket server state
         self._mcp_socket = None
@@ -243,6 +245,7 @@ class DigitalTwin(omni.ext.IExt):
                     with ui.HStack(spacing=5):
                         ui.Button("Load Scene", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_scene()))
                         ui.Button("Refresh Graphs", width=120, height=35, clicked_fn=self.refresh_graphs)
+                        self._viewport_toggle_btn = ui.Button("Disable Viewport", width=140, height=35, clicked_fn=self._toggle_viewport_rendering)
 
 
             with ui.CollapsableFrame(title="UR5e Control", collapsed=False, height=0):
@@ -382,14 +385,28 @@ class DigitalTwin(omni.ext.IExt):
         physics_scene_prim = stage.GetPrimAtPath("/physicsScene")
         if physics_scene_prim and physics_scene_prim.IsValid():
             physx_scene_api = PhysxSchema.PhysxSceneAPI.Apply(physics_scene_prim)
-            physx_scene_api.CreateEnableGPUDynamicsAttr().Set(True)
+            physx_scene_api.CreateEnableGPUDynamicsAttr().Set(False)
             physx_scene_api.CreateTimeStepsPerSecondAttr().Set(self._time_steps_per_second)
             physx_scene_api.CreateEnableCCDAttr().Set(False)
-            print(f"Enabled GPU dynamics, timeStepsPerSecond={self._time_steps_per_second}, CCD disabled on /physicsScene")
+            print(f"GPU dynamics disabled, timeStepsPerSecond={self._time_steps_per_second}, CCD disabled on /physicsScene")
         else:
             print("Warning: /physicsScene not found")
 
         print("Scene loaded successfully.")
+
+    def _toggle_viewport_rendering(self):
+        """Toggle viewport rendering on/off to free GPU resources."""
+        import omni.kit.viewport.utility as vp_utils
+        viewport = vp_utils.get_active_viewport()
+        if viewport is None:
+            print("Warning: No active viewport found")
+            return
+        self._viewport_rendering_enabled = not self._viewport_rendering_enabled
+        viewport.updates_enabled = self._viewport_rendering_enabled
+        state = "enabled" if self._viewport_rendering_enabled else "disabled"
+        print(f"Viewport rendering {state}")
+        if self._viewport_toggle_btn:
+            self._viewport_toggle_btn.text = "Disable Viewport" if self._viewport_rendering_enabled else "Enable Viewport"
 
     def refresh_graphs(self):
         """Delete /World/Graphs folder and automatically recreate all graphs"""
