@@ -158,6 +158,14 @@ class DigitalTwin(omni.ext.IExt):
         self._viewport_rendering_enabled = True
         self._viewport_toggle_btn = None
 
+        # Gripper physics callback state
+        self._gripper_physx_sub = None
+        self._gripper_articulation = None
+        self._gripper_graph_path = None
+        self._gripper_sub_attr_path = None
+        self._gripper_pub_attr_path = None
+        self._gripper_publish_active = False
+
         # MCP socket server state
         self._mcp_socket = None
         self._mcp_server_thread = None
@@ -171,6 +179,9 @@ class DigitalTwin(omni.ext.IExt):
 
         # Scene state file path (can be set by MCP client)
         self._scene_state_file_path = None
+
+        # Output directory pushed by MCP server on connect (None = use default)
+        self._output_dir = None
 
         # Physics scene settings
         self._min_frame_rate = 60
@@ -244,7 +255,6 @@ class DigitalTwin(omni.ext.IExt):
                     ui.Label("Simulation Setup", alignment=ui.Alignment.LEFT)
                     with ui.HStack(spacing=5):
                         ui.Button("Load Scene", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_scene()))
-                        ui.Button("Refresh Graphs", width=120, height=35, clicked_fn=self.refresh_graphs)
                         self._viewport_toggle_btn = ui.Button("Disable Viewport", width=140, height=35, clicked_fn=self._toggle_viewport_rendering)
 
 
@@ -408,119 +418,6 @@ class DigitalTwin(omni.ext.IExt):
         if self._viewport_toggle_btn:
             self._viewport_toggle_btn.text = "Disable Viewport" if self._viewport_rendering_enabled else "Enable Viewport"
 
-    def refresh_graphs(self):
-        """Delete /World/Graphs folder and automatically recreate all graphs"""
-        import omni.usd
-        from pxr import Usd, Sdf
-        import asyncio
-        
-        print("Refreshing graphs...")
-        
-        # Get the current stage
-        stage = omni.usd.get_context().get_stage()
-        if not stage:
-            print("Error: No stage found")
-            return
-        
-        # Check which graphs exist BEFORE deleting the Graphs folder
-        graphs_path = "/World/Graphs"
-        graph_paths_to_recreate = []
-        
-        # Check for each graph's existence
-        ur5e_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_UR5e")
-        if ur5e_graph.IsValid():
-            graph_paths_to_recreate.append("UR5e")
-        
-        gripper_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_RG2")
-        if gripper_graph.IsValid():
-            graph_paths_to_recreate.append("RG2")
-        
-        force_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_UR5e_ForcePublish")
-        if force_graph.IsValid() or getattr(self, '_force_publish_active', False):
-            graph_paths_to_recreate.append("UR5e_ForcePublish")
-        
-        camera_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_Camera")
-        if camera_graph.IsValid():
-            graph_paths_to_recreate.append("Camera")
-        
-        workspace_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_WorkspaceCamera")
-        if workspace_graph.IsValid():
-            graph_paths_to_recreate.append("WorkspaceCamera")
-        
-        objects_poses_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_objects_poses")
-        if objects_poses_graph.IsValid():
-            graph_paths_to_recreate.append("objects_poses")
-        
-        # Delete the entire /World/Graphs folder if it exists
-        graphs_prim = stage.GetPrimAtPath(graphs_path)
-        if graphs_prim.IsValid():
-            stage.RemovePrim(graphs_path)
-            print(f"Deleted existing {graphs_path} folder")
-        
-        # Recreate the Graphs folder
-        UsdGeom.Xform.Define(stage, graphs_path)
-        print(f"Created new {graphs_path} folder")
-        
-        # Automatically recreate only graphs that existed
-        print(f"Recreating {len(graph_paths_to_recreate)} existing graphs...")
-        
-        # Create UR5e Action Graph
-        if "UR5e" in graph_paths_to_recreate:
-            try:
-                asyncio.ensure_future(self.setup_action_graph())
-                print("✓ UR5e Action Graph recreated")
-            except Exception as e:
-                print(f"✗ Failed to recreate UR5e Action Graph: {e}")
-        
-        # Create Gripper Action Graph
-        if "RG2" in graph_paths_to_recreate:
-            try:
-                self.setup_gripper_action_graph()
-                print("✓ Gripper Action Graph recreated")
-            except Exception as e:
-                print(f"✗ Failed to recreate Gripper Action Graph: {e}")
-        
-        # Create Force Publish Action Graph
-        if "UR5e_ForcePublish" in graph_paths_to_recreate:
-            try:
-                self.setup_force_publish_action_graph()
-                print("✓ Force Publish Action Graph recreated")
-            except Exception as e:
-                print(f"✗ Failed to recreate Force Publish Action Graph: {e}")
-        
-        # Create Camera Action Graph
-        if "Camera" in graph_paths_to_recreate:
-            try:
-                self.setup_camera_action_graph()
-                print("✓ Camera Action Graph recreated")
-            except Exception as e:
-                print(f"✗ Failed to recreate Camera Action Graph: {e}")
-        
-        # Create Additional Camera Action Graphs (only if graphs existed)
-        if "WorkspaceCamera" in graph_paths_to_recreate:
-            try:
-                self._create_camera_actiongraph(
-                    "/World/workspace_camera",
-                    1280, 720,
-                    "workspace_camera",
-                    "WorkspaceCamera"
-                )
-                print("✓ Workspace Camera Action Graph recreated")
-            except Exception as e:
-                print(f"✗ Failed to recreate Workspace Camera Action Graph: {e}")
-        
-        # Create Pose Publisher Action Graph (only if graph existed)
-        if "objects_poses" in graph_paths_to_recreate:
-            try:
-                self.create_pose_publisher()
-                print("✓ Pose Publisher Action Graph recreated")
-            except Exception as e:
-                print(f"✗ Failed to recreate Pose Publisher Action Graph: {e}")
-        
-        print("Graph refresh completed!")
-
-
-
     async def load_ur5e(self):
         asset_path = "omniverse://localhost/Library/ur5e.usd"
         prim_path = "/World/UR5e"
@@ -660,20 +557,29 @@ class DigitalTwin(omni.ext.IExt):
         print("ROS 2 Action Graph setup complete.")
 
     def setup_gripper_action_graph(self):
-        """Setup gripper action graph for ROS2 control"""
+        """Setup gripper action graph for ROS2 control.
+
+        Uses the same pattern as the force publisher: a pure OmniGraph action
+        graph for ROS2 communication and an extension-level physics callback
+        for ArticulationView control. No ScriptNodes — the extension owns
+        the ArticulationView lifecycle so stop/play works without refresh.
+        """
+        import omni.physx
+
         print("Setting up Gripper Action Graph...")
-        
+
+        # Clean up any previous physics callback
+        self._stop_gripper_physics()
+
         graph_path = "/World/Graphs/ActionGraph_RG2"
-        
-        # Delete existing
+        keys = og.Controller.Keys
+
+        # Delete existing graph
         stage = omni.usd.get_context().get_stage()
         if stage.GetPrimAtPath(graph_path):
             stage.RemovePrim(graph_path)
-        
-        keys = og.Controller.Keys
-        
-        print("Creating nodes...")
-        # Create nodes including the new publisher and script_node
+
+        # Create graph with only ROS2 nodes — no ScriptNodes
         (graph, nodes, _, _) = og.Controller.edit(
             {"graph_path": graph_path, "evaluator_name": "execution"},
             {
@@ -681,304 +587,126 @@ class DigitalTwin(omni.ext.IExt):
                     (f"{graph_path}/tick", "omni.graph.action.OnPlaybackTick"),
                     (f"{graph_path}/context", "isaacsim.ros2.bridge.ROS2Context"),
                     (f"{graph_path}/subscriber", "isaacsim.ros2.bridge.ROS2Subscriber"),
-                    (f"{graph_path}/script", "omni.graph.scriptnode.ScriptNode"),
-                    (f"{graph_path}/script_node", "omni.graph.scriptnode.ScriptNode"),
-                    (f"{graph_path}/ros2_publisher", "isaacsim.ros2.bridge.ROS2Publisher")
-                ]
+                    (f"{graph_path}/ros2_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
+                ],
+                keys.SET_VALUES: [
+                    (f"{graph_path}/subscriber.inputs:messageName", "String"),
+                    (f"{graph_path}/subscriber.inputs:messagePackage", "std_msgs"),
+                    (f"{graph_path}/subscriber.inputs:topicName", "gripper_command"),
+                    (f"{graph_path}/ros2_publisher.inputs:messageName", "Float64"),
+                    (f"{graph_path}/ros2_publisher.inputs:messagePackage", "std_msgs"),
+                    (f"{graph_path}/ros2_publisher.inputs:topicName", "gripper_width_sim"),
+                ],
+                keys.CONNECT: [
+                    (f"{graph_path}/tick.outputs:tick", f"{graph_path}/subscriber.inputs:execIn"),
+                    (f"{graph_path}/tick.outputs:tick", f"{graph_path}/ros2_publisher.inputs:execIn"),
+                    (f"{graph_path}/context.outputs:context", f"{graph_path}/subscriber.inputs:context"),
+                    (f"{graph_path}/context.outputs:context", f"{graph_path}/ros2_publisher.inputs:context"),
+                ],
             }
         )
-        
-        print("Adding script attributes...")
-        # Add script attributes for command script
-        script_node = og.Controller.node(f"{graph_path}/script")
-        og.Controller.create_attribute(script_node, "inputs:String", og.Type(og.BaseDataType.TOKEN))
-        og.Controller.create_attribute(script_node, "outputs:Integer", og.Type(og.BaseDataType.INT))
-        
-        # Add script_node attributes for reading gripper state - use proper pattern
-        script_node_state = og.Controller.node(f"{graph_path}/script_node")
-        og.Controller.create_attribute(
-            script_node_state, 
-            "gripper_width", 
-            og.Type(og.BaseDataType.DOUBLE),
-            attr_port=og.AttributePortType.ATTRIBUTE_PORT_TYPE_OUTPUT
+
+        # Create custom data attribute on publisher for gripper width
+        publisher_prim = stage.GetPrimAtPath(f"{graph_path}/ros2_publisher")
+        publisher_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
+
+        # Store attribute paths for the physics callback
+        self._gripper_graph_path = graph_path
+        self._gripper_sub_attr_path = f"{graph_path}/subscriber.outputs:data"
+        self._gripper_pub_attr_path = f"{graph_path}/ros2_publisher.inputs:data"
+        self._gripper_articulation = None
+
+        # Subscribe to physics step events — gripper control runs at physics rate
+        self._gripper_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
+            self._on_physics_step_gripper
         )
-        print("Created outputs:gripper_width attribute on script_node")
-        
-        print("Setting values...")
-        # Set values with try/catch for each one
-        def safe_set(path, value, desc=""):
-            try:
-                attr = og.Controller.attribute(path)
-                if attr.is_valid():
-                    og.Controller.set(attr, value)
-                    print(f"Set {desc}")
-                    return True
-                else:
-                    print(f"Invalid: {desc}")
-                    return False
-            except Exception as e:
-                print(f"Failed {desc}: {e}")
-                return False
-        
-        # Configure ROS2 Subscriber
-        safe_set(f"{graph_path}/subscriber.inputs:messageName", "String", "ROS2 message type")
-        safe_set(f"{graph_path}/subscriber.inputs:messagePackage", "std_msgs", "ROS2 package")
-        safe_set(f"{graph_path}/subscriber.inputs:topicName", "gripper_command", "ROS2 topic")
-        
-        # Configure Script Node
-        safe_set(f"{graph_path}/script.inputs:usePath", False, "Use inline script")
-        
-        # Script that handles string processing internally
-        script_content = '''from omni.isaac.core.articulations import ArticulationView
-from omni.isaac.core.utils.types import ArticulationActions
-import numpy as np
-import omni.timeline
+        self._gripper_publish_active = True
 
-gripper_view = None
-last_sim_frame = -1
-
-def setup(db):
-    global gripper_view
-    try:
-        # Always create a fresh gripper view in setup
-        gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper_cmd")
-        gripper_view.initialize()
-        db.log_info("Gripper initialized successfully")
-    except Exception as e:
-        db.log_error(f"Gripper setup failed: {e}")
-        gripper_view = None
-
-def compute(db):
-    global gripper_view, last_sim_frame
-
-    try:
-        # Get input string from ROS2
-        input_str = str(db.inputs.String).strip()
-
-        # Handle string replacements in Python
-        if input_str == "open":
-            processed_str = "1100"
-        elif input_str == "close":
-            processed_str = "0"
-        else:
-            processed_str = input_str
-
-        # Convert to width in mm
-        try:
-            width_mm = float(processed_str) / 10.0
-        except ValueError:
-            db.log_error(f"Invalid input: {input_str}")
-            return
-
-        # Check if simulation restarted by monitoring frame count
-        timeline = omni.timeline.get_timeline_interface()
-        current_frame = timeline.get_current_time() * timeline.get_time_codes_per_seconds()
-
-        # If frame went backwards, simulation was restarted
-        if current_frame < last_sim_frame or last_sim_frame == -1:
-            db.log_info("Simulation restart detected, reinitializing gripper...")
-            try:
-                gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper_cmd")
-                gripper_view.initialize()
-                db.log_info("Gripper reinitialized after restart")
-            except Exception as e:
-                db.log_error(f"Gripper reinitialization failed: {e}")
-                gripper_view = None
-        
-        last_sim_frame = current_frame
-        
-        # Check if gripper is available
-        if gripper_view is None:
-            db.log_warning("Gripper not available")
-            return
-        
-        # Check if simulation is running
-        if timeline.is_stopped():
-            return
-        
-        # Try to apply action, with graceful handling of physics not ready
-        try:
-            # Clamp to valid range
-            width_mm = np.clip(width_mm, 0.0, 110.0)
-            
-            # Map width to joint angle: 0mm = -π/4 (closed), 110mm = π/6 (open)
-            ratio = width_mm / 110.0
-            joint_angle = -np.pi/4 + ratio * (np.pi/4 + np.pi/6)
-            
-            # Apply to gripper
-            target_positions = np.array([joint_angle, joint_angle])
-            action = ArticulationActions(
-                joint_positions=target_positions,
-                joint_indices=np.array([0, 1])
-            )
-            gripper_view.apply_action(action)
-            
-            # Set output
-            db.outputs.Integer = int(width_mm)
-            
-            db.log_info(f"Gripper: \\'{input_str}\\' -> {width_mm:.1f}mm -> {joint_angle:.3f}rad")
-            
-        except Exception as e:
-            err_str = str(e)
-            # Expected during the first few frames after restart
-            if "_physics_view" in err_str or "Physics Simulation View" in err_str:
-                db.outputs.Integer = int(np.clip(width_mm, 0.0, 110.0))
-            else:
-                db.log_warning(f"Action failed: {e}")
-                db.outputs.Integer = 0
-        
-    except Exception as e:
-        db.log_error(f"Compute error: {e}")
-        db.outputs.Integer = 0
-
-def cleanup(db):
-    global gripper_view
-    db.log_info("Cleaning up gripper")
-    gripper_view = None'''
-        
-        safe_set(f"{graph_path}/script.inputs:script", script_content, "Python script")
-        
-        # Configure script_node for reading gripper state
-        script_node_content = '''from omni.isaac.core.articulations import ArticulationView
-import numpy as np
-import omni.timeline
-
-gripper_view = None
-last_sim_frame = -1
-physics_ready = False
-
-def setup(db):
-    global gripper_view, physics_ready
-    physics_ready = False
-    try:
-        gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper_state")
-        gripper_view.initialize()
-        db.log_info("Gripper initialized successfully")
-    except Exception as e:
-        db.log_error(f"Gripper setup failed: {e}")
-        gripper_view = None
-
-def compute(db):
-    global gripper_view, last_sim_frame, physics_ready
-
-    try:
-        timeline = omni.timeline.get_timeline_interface()
-        if timeline.is_stopped():
-            return
-
-        current_frame = timeline.get_current_time() * timeline.get_time_codes_per_seconds()
-
-        # Handle simulation restart
-        if current_frame < last_sim_frame or last_sim_frame == -1:
-            physics_ready = False
-            try:
-                gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper_state")
-                gripper_view.initialize()
-            except Exception as e:
-                db.log_error(f"Gripper reinitialization failed: {e}")
-                gripper_view = None
-        
-        last_sim_frame = current_frame
-        
-        if gripper_view is None:
-            db.outputs.gripper_width = 0.0
-            return
-        
-        # Read actual gripper state every frame
-        actual_width_mm = 0.0
-        
-        try:
-            joint_positions = gripper_view.get_joint_positions()
-            
-            if joint_positions is not None and len(joint_positions) > 0 and joint_positions.shape[1] >= 2:
-                physics_ready = True
-                
-                # Get actual angle
-                actual_angle = np.mean(joint_positions[0, :2])
-                
-                # Convert to width
-                actual_ratio = (actual_angle + np.pi/4) / (np.pi/4 + np.pi/6)
-                actual_width_mm = actual_ratio * 110.0
-                actual_width_mm = np.clip(actual_width_mm, 0.0, 110.0)
-                
-        except Exception as e:
-            pass  # Ignore during initialization
-        
-        # Always output actual width
-        db.outputs.gripper_width = float(actual_width_mm)
-        
-    except Exception as e:
-        db.log_error(f"Compute error: {e}")
-        db.outputs.gripper_width = 0.0
-
-def cleanup(db):
-    global gripper_view, physics_ready
-    gripper_view = None
-    physics_ready = False'''
-        
-        safe_set(f"{graph_path}/script_node.inputs:usePath", False, "Use inline script for script_node")
-        safe_set(f"{graph_path}/script_node.inputs:script", script_node_content, "Python script for script_node")
-        
-        # Configure ROS2 Publisher
-        safe_set(f"{graph_path}/ros2_publisher.inputs:messageName", "Float64", "ROS2 message type")
-        safe_set(f"{graph_path}/ros2_publisher.inputs:messagePackage", "std_msgs", "ROS2 package")
-        safe_set(f"{graph_path}/ros2_publisher.inputs:topicName", "gripper_width_sim", "ROS2 topic")
-        
-        # Create input attribute on publisher and connect it using OmniGraph API
-        try:
-            stage = omni.usd.get_context().get_stage()
-            publisher_prim = stage.GetPrimAtPath(f"{graph_path}/ros2_publisher")
-            if publisher_prim.IsValid():
-                # Check if attribute already exists
-                existing_attr = publisher_prim.GetAttribute("inputs:data")
-                if not existing_attr.IsValid():
-                    data_attr = publisher_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
-                    print("Created inputs:data attribute on ros2_publisher")
-                else:
-                    print("inputs:data attribute already exists on ros2_publisher")
-                
-                # Connect script_node output to publisher input using OmniGraph API
-                og.Controller.connect(
-                    f"{graph_path}/script_node.outputs:gripper_width",
-                    f"{graph_path}/ros2_publisher.inputs:data"
-                )
-                print("Connected script_node.outputs:gripper_width to ros2_publisher.inputs:data")
-            else:
-                print(f"Warning: Could not find publisher prim at {graph_path}/ros2_publisher")
-        except Exception as e:
-            print(f"Error creating publisher connection: {e}")
-        
-        print("Creating connections...")
-        # Connections for command handling (subscriber -> script)
-        connections = [
-            (f"{graph_path}/tick.outputs:tick", f"{graph_path}/subscriber.inputs:execIn", "Tick to subscriber"),
-            (f"{graph_path}/context.outputs:context", f"{graph_path}/subscriber.inputs:context", "Context to subscriber"),
-            (f"{graph_path}/subscriber.outputs:data", f"{graph_path}/script.inputs:String", "ROS2 data to script"),
-            (f"{graph_path}/subscriber.outputs:execOut", f"{graph_path}/script.inputs:execIn", "ROS2 exec to script"),
-            # Connections for state reading and publishing (script_node -> publisher)
-            (f"{graph_path}/tick.outputs:tick", f"{graph_path}/script_node.inputs:execIn", "Tick to script_node"),
-            (f"{graph_path}/script_node.outputs:execOut", f"{graph_path}/ros2_publisher.inputs:execIn", "Script_node exec to publisher"),
-            (f"{graph_path}/context.outputs:context", f"{graph_path}/ros2_publisher.inputs:context", "Context to publisher")
-        ]
-        
-        success_count = 0
-        for src, dst, desc in connections:
-            try:
-                og.Controller.edit(graph, {keys.CONNECT: [(src, dst)]})
-                print(f"Connected {desc}")
-                success_count += 1
-            except Exception as e:
-                print(f"Failed {desc}: {e}")
-        
-        print(f"Graph created with {success_count}/7 connections (plus gripper_width connection)!")
-        print("Location: /World/Graphs/ActionGraph_RG2")
-        print("\nTest commands for gripper control:")
+        print(f"Gripper Action Graph created at {graph_path}")
+        print("Gripper control runs at physics rate via extension callback (no ScriptNodes)")
+        print("\nTest commands:")
         print("ros2 topic pub /gripper_command std_msgs/String 'data: \"open\"'")
         print("ros2 topic pub /gripper_command std_msgs/String 'data: \"close\"'")
         print("ros2 topic pub /gripper_command std_msgs/String 'data: \"1100\"'")
         print("ros2 topic pub /gripper_command std_msgs/String 'data: \"550\"'")
         print("\nMonitor gripper width:")
         print("ros2 topic echo /gripper_width_sim")
+
+    def _on_physics_step_gripper(self, dt):
+        """Physics step callback — read ROS2 command, apply to gripper, publish state."""
+        import numpy as np
+        from omni.isaac.core.articulations import ArticulationView
+        from omni.isaac.core.utils.types import ArticulationActions
+
+        try:
+            # Lazy-init ArticulationView on first physics step
+            if self._gripper_articulation is None:
+                try:
+                    self._gripper_articulation = ArticulationView(
+                        prim_paths_expr="/World/RG2_Gripper", name="gripper_ctrl"
+                    )
+                    self._gripper_articulation.initialize()
+                except Exception:
+                    return  # Physics not ready yet, try next step
+
+            if not self._gripper_articulation.is_physics_handle_valid():
+                try:
+                    self._gripper_articulation.initialize(
+                        World.instance().physics_sim_view
+                    )
+                except Exception:
+                    return
+
+            # --- Read command from ROS2 subscriber ---
+            try:
+                raw = og.Controller.get(og.Controller.attribute(self._gripper_sub_attr_path))
+                input_str = str(raw).strip() if raw else ""
+            except Exception:
+                input_str = ""
+
+            # Parse command
+            if input_str and input_str not in ("", "None", "0"):
+                if input_str == "open":
+                    width_mm = 110.0
+                elif input_str == "close":
+                    width_mm = 0.0
+                else:
+                    try:
+                        width_mm = float(input_str) / 10.0
+                    except ValueError:
+                        width_mm = None
+
+                if width_mm is not None:
+                    width_mm = float(np.clip(width_mm, 0.0, 110.0))
+                    ratio = width_mm / 110.0
+                    joint_angle = -np.pi / 4 + ratio * (np.pi / 4 + np.pi / 6)
+                    target = np.array([joint_angle, joint_angle])
+                    action = ArticulationActions(
+                        joint_positions=target,
+                        joint_indices=np.array([0, 1])
+                    )
+                    self._gripper_articulation.apply_action(action)
+
+            # --- Read gripper state and publish ---
+            joint_positions = self._gripper_articulation.get_joint_positions()
+            if joint_positions is not None and joint_positions.shape[1] >= 2:
+                actual_angle = float(np.mean(joint_positions[0, :2]))
+                actual_ratio = (actual_angle + np.pi / 4) / (np.pi / 4 + np.pi / 6)
+                actual_width_mm = float(np.clip(actual_ratio * 110.0, 0.0, 110.0))
+                og.Controller.set(
+                    og.Controller.attribute(self._gripper_pub_attr_path),
+                    actual_width_mm
+                )
+        except Exception:
+            pass  # Silently ignore during initialization/teardown
+
+    def _stop_gripper_physics(self):
+        """Stop the gripper physics callback and clean up resources."""
+        if hasattr(self, '_gripper_physx_sub') and self._gripper_physx_sub is not None:
+            self._gripper_physx_sub = None
+        if hasattr(self, '_gripper_articulation'):
+            self._gripper_articulation = None
+        self._gripper_publish_active = False
 
     def setup_force_publish_action_graph(self):
         """Setup force publishing using joint forces from UR5e ArticulationView.
@@ -1239,7 +967,8 @@ def cleanup(db):
     def attach_camera_to_ur5e(self):
         """Attach RealSense camera to UR5e wrist"""
         import omni.kit.commands
-        from pxr import Gf
+        import omni.usd
+        from pxr import Gf, Usd, UsdPhysics
         
         # Move the prim
         omni.kit.commands.execute('MovePrim',
@@ -1255,7 +984,16 @@ def cleanup(db):
                                  prop_path="/World/UR5e/wrist_3_link/rsd455.xformOp:rotateZYX",
                                  value=Gf.Vec3d(-90, -180, 270),
                                  prev=None)
-        
+
+        # Remove RigidBodyAPI only from the RSD455 prim to fix nested rigid body error.
+        # Only target this specific prim — other descendants may be needed.
+        stage = omni.usd.get_context().get_stage()
+        rsd455_prim = stage.GetPrimAtPath("/World/UR5e/wrist_3_link/rsd455/RSD455")
+        if rsd455_prim.IsValid() and rsd455_prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            UsdPhysics.RigidBodyAPI(rsd455_prim).GetRigidBodyEnabledAttr().Set(False)
+            rsd455_prim.RemoveAPI(UsdPhysics.RigidBodyAPI)
+            print("Removed RigidBodyAPI from RSD455 (nested under wrist_3_link rigid body)")
+
         print("RealSense camera attached to UR5e wrist_3_link")
 
     def setup_camera_action_graph(self):
@@ -2513,21 +2251,15 @@ def cleanup(db):
             }
 
     def _cmd_play_scene(self) -> Dict[str, Any]:
-        """Start/resume the simulation timeline, refreshing graphs first."""
+        """Start/resume the simulation timeline."""
         try:
             import omni.timeline
-
-            # Refresh all graphs before playing to fix stale script nodes
-            try:
-                self.refresh_graphs()
-            except Exception as e:
-                print(f"[DigitalTwin] Warning: Graph refresh failed: {e}")
 
             timeline = omni.timeline.get_timeline_interface()
             timeline.play()
             return {
                 "status": "success",
-                "message": "Simulation started (graphs refreshed)"
+                "message": "Simulation started"
             }
         except Exception as e:
             traceback.print_exc()
@@ -2568,9 +2300,13 @@ def cleanup(db):
                 os.makedirs(parent_dir, exist_ok=True)
             return self._scene_state_file_path
 
-        # Default path
-        os.makedirs(RESOURCES_DIR, exist_ok=True)
-        return os.path.join(RESOURCES_DIR, "scene_state.json")
+        # Use output dir pushed by MCP server, or fall back to default
+        if self._output_dir:
+            resources_dir = os.path.join(self._output_dir, "resources")
+        else:
+            resources_dir = RESOURCES_DIR
+        os.makedirs(resources_dir, exist_ok=True)
+        return os.path.join(resources_dir, "scene_state.json")
 
     def _get_prim_path(self, object_name: str) -> str:
         """Get the full prim path for an object name."""
@@ -2712,19 +2448,24 @@ def cleanup(db):
                 "message": f"Failed to randomize object poses: {str(e)}"
             }
 
-    def _cmd_save_scene_state(self, json_file_path: str = None) -> Dict[str, Any]:
+    def _cmd_save_scene_state(self, json_file_path: str = None, output_dir: str = None) -> Dict[str, Any]:
         """Save scene state (object poses) to a JSON file.
 
         Automatically discovers and saves all objects in /World/Objects.
 
         Args:
             json_file_path: Optional path to the JSON file. If not provided, uses default.
+            output_dir: Optional output directory pushed by MCP server.
 
         Returns:
             Dictionary with execution result.
         """
         try:
             from pxr import UsdGeom
+
+            # Update output dir if provided by MCP server
+            if output_dir:
+                self._output_dir = os.path.abspath(output_dir)
 
             # Store the path if provided by MCP client
             if json_file_path is not None:
@@ -2800,18 +2541,23 @@ def cleanup(db):
                 "traceback": traceback.format_exc()
             }
 
-    def _cmd_restore_scene_state(self, json_file_path: str = None) -> Dict[str, Any]:
+    def _cmd_restore_scene_state(self, json_file_path: str = None, output_dir: str = None) -> Dict[str, Any]:
         """Restore scene state (object poses) from a JSON file.
 
         Automatically restores all objects that were saved in the scene state file.
 
         Args:
             json_file_path: Optional path to the JSON file. If not provided, uses default.
+            output_dir: Optional output directory pushed by MCP server.
 
         Returns:
             Dictionary with execution result.
         """
         try:
+            # Update output dir if provided by MCP server
+            if output_dir:
+                self._output_dir = os.path.abspath(output_dir)
+
             # Store the path if provided by MCP client
             if json_file_path is not None:
                 self._scene_state_file_path = json_file_path
@@ -2872,18 +2618,23 @@ def cleanup(db):
                 "traceback": traceback.format_exc()
             }
 
-    def _cmd_clear_scene_state(self, json_file_path: str = None) -> Dict[str, Any]:
+    def _cmd_clear_scene_state(self, json_file_path: str = None, output_dir: str = None) -> Dict[str, Any]:
         """Clear/delete the scene state JSON file.
 
         Deletes the entire scene state file, removing all saved object poses.
 
         Args:
             json_file_path: Optional path to the JSON file. If not provided, uses default.
+            output_dir: Optional output directory pushed by MCP server.
 
         Returns:
             Dictionary with execution result.
         """
         try:
+            # Update output dir if provided by MCP server
+            if output_dir:
+                self._output_dir = os.path.abspath(output_dir)
+
             # Store the path if provided by MCP client
             if json_file_path is not None:
                 self._scene_state_file_path = json_file_path
@@ -2994,8 +2745,9 @@ def cleanup(db):
         # Stop MCP socket server
         self._stop_mcp_server()
 
-        # Stop physics-rate force publisher
+        # Stop physics-rate callbacks
         self._stop_force_publish()
+        self._stop_gripper_physics()
 
         # Isaac Sim handles ROS2 shutdown automatically
         print("ROS2 bridge shutdown handled by Isaac Sim")
