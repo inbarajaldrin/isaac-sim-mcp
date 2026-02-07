@@ -14,7 +14,7 @@ import json
 import traceback
 from typing import Dict, Any
 
-from omni.isaac.core.world import World
+from isaacsim.core.api.world import World
 
 # MCP socket server port - change this for different extensions
 MCP_SERVER_PORT = 8766
@@ -136,12 +136,12 @@ MCP_HANDLERS = {
     "setup_pose_publisher": "_cmd_setup_pose_publisher",
 }
 
-from omni.isaac.core.utils.stage import add_reference_to_stage
-from omni.isaac.core.articulations import ArticulationView
-from omni.isaac.nucleus import get_assets_root_path
-from omni.isaac.motion_generation import LulaKinematicsSolver, ArticulationKinematicsSolver
-from omni.isaac.core.utils.numpy.rotations import euler_angles_to_quats
-from omni.isaac.core.articulations import Articulation
+from isaacsim.core.utils.stage import add_reference_to_stage
+from isaacsim.core.prims import Articulation as ArticulationView
+from isaacsim.storage.native import get_assets_root_path
+from isaacsim.robot_motion.motion_generation import LulaKinematicsSolver, ArticulationKinematicsSolver
+from isaacsim.core.utils.numpy.rotations import euler_angles_to_quats
+from isaacsim.core.prims import SingleArticulation as Articulation
 import omni.graph.core as og
 import omni.usd
 from pxr import UsdGeom, Gf, Sdf, Usd, UsdPhysics, UsdShade, PhysxSchema
@@ -165,6 +165,10 @@ class DigitalTwin(omni.ext.IExt):
         self._gripper_sub_attr_path = None
         self._gripper_pub_attr_path = None
         self._gripper_publish_active = False
+        self._gripper_warmup = 0  # skip N physics steps before re-init
+
+        # Force publisher physics callback state
+        self._force_warmup = 0
 
         # MCP socket server state
         self._mcp_socket = None
@@ -382,7 +386,7 @@ class DigitalTwin(omni.ext.IExt):
         if ground_prim and ground_prim.IsValid():
             print("Ground plane already exists, skipping")
         else:
-            from omni.isaac.core.objects import GroundPlane
+            from isaacsim.core.api.objects import GroundPlane
             GroundPlane(prim_path="/World/defaultGroundPlane", z_position=0, size=5000)
             print("Added ground plane")
 
@@ -495,8 +499,8 @@ class DigitalTwin(omni.ext.IExt):
         
     async def setup_action_graph(self):
         import omni.graph.core as og
-        import omni.isaac.core.utils.stage as stage_utils
-        from omni.isaac.core.utils.extensions import enable_extension
+        import isaacsim.core.utils.stage as stage_utils
+        from isaacsim.core.utils.extensions import enable_extension
 
         print("Setting up ROS 2 Action Graph...")
 
@@ -635,27 +639,34 @@ class DigitalTwin(omni.ext.IExt):
     def _on_physics_step_gripper(self, dt):
         """Physics step callback — read ROS2 command, apply to gripper, publish state."""
         import numpy as np
-        from omni.isaac.core.articulations import ArticulationView
-        from omni.isaac.core.utils.types import ArticulationActions
+        from isaacsim.core.prims import Articulation as ArticulationView
+        from isaacsim.core.utils.types import ArticulationActions
 
         try:
+            # Warmup: skip physics steps after a stop/play to let engine settle
+            if self._gripper_warmup > 0:
+                self._gripper_warmup -= 1
+                return
+
             # Lazy-init ArticulationView on first physics step
             if self._gripper_articulation is None:
                 try:
+                    import time as _t
                     self._gripper_articulation = ArticulationView(
-                        prim_paths_expr="/World/RG2_Gripper", name="gripper_ctrl"
+                        prim_paths_expr="/World/RG2_Gripper",
+                        name=f"gripper_ctrl_{int(_t.time()*1000)}"
                     )
                     self._gripper_articulation.initialize()
                 except Exception:
+                    self._gripper_articulation = None
                     return  # Physics not ready yet, try next step
 
             if not self._gripper_articulation.is_physics_handle_valid():
-                try:
-                    self._gripper_articulation.initialize(
-                        World.instance().physics_sim_view
-                    )
-                except Exception:
-                    return
+                # Handle went stale (e.g. after timeline stop/play cycle).
+                # Discard and wait for physics engine to settle before re-init.
+                self._gripper_articulation = None
+                self._gripper_warmup = 30  # ~0.25s at 120 Hz
+                return
 
             # --- Read command from ROS2 subscriber ---
             try:
@@ -707,6 +718,7 @@ class DigitalTwin(omni.ext.IExt):
         if hasattr(self, '_gripper_articulation'):
             self._gripper_articulation = None
         self._gripper_publish_active = False
+        self._gripper_warmup = 0
 
     def setup_force_publish_action_graph(self):
         """Setup force publishing using joint forces from UR5e ArticulationView.
@@ -783,14 +795,30 @@ class DigitalTwin(omni.ext.IExt):
         (wrist joint) as the main collision/contact indicator.
         """
         try:
-            if self._effort_articulation is None:
+            # Warmup: skip physics steps after a stop/play to let engine settle
+            if self._force_warmup > 0:
+                self._force_warmup -= 1
                 return
 
-            # Wait until the physics simulation view is ready
+            # Lazy-init ArticulationView (or re-init after stop/play cycle)
+            if self._effort_articulation is None:
+                try:
+                    import time as _t
+                    from isaacsim.core.prims import Articulation as _AV
+                    self._effort_articulation = _AV(
+                        prim_paths_expr="/World/UR5e",
+                        name=f"force_pub_ctrl_{int(_t.time()*1000)}"
+                    )
+                    self._effort_articulation.initialize()
+                except Exception:
+                    self._effort_articulation = None
+                    return  # Physics not ready yet
+
             if not self._effort_articulation.is_physics_handle_valid():
-                self._effort_articulation.initialize(
-                    World.instance().physics_sim_view
-                )
+                # Handle went stale (e.g. after timeline stop/play cycle).
+                # Discard and wait for physics engine to settle before re-init.
+                self._effort_articulation = None
+                self._force_warmup = 30  # ~0.25s at 120 Hz
                 return
 
             # get_measured_joint_forces returns shape (num_articulations, num_joints, 6)
@@ -813,9 +841,10 @@ class DigitalTwin(omni.ext.IExt):
         if hasattr(self, '_effort_articulation'):
             self._effort_articulation = None
         self._force_publish_active = False
+        self._force_warmup = 0
 
     def import_rg2_gripper(self):
-        from omni.isaac.core.utils.stage import add_reference_to_stage
+        from isaacsim.core.utils.stage import add_reference_to_stage
         rg2_usd_path = "omniverse://localhost/Library/RG2.usd"
         add_reference_to_stage(rg2_usd_path, "/World/RG2_Gripper")
         print("RG2 Gripper imported at /World/RG2_Gripper")
@@ -894,7 +923,7 @@ class DigitalTwin(omni.ext.IExt):
 
         print("Setting RG2 gripper orientation with 180° Z offset and rotated position...")
 
-        from omni.isaac.core.utils.numpy.rotations import euler_angles_to_quats
+        from isaacsim.core.utils.numpy.rotations import euler_angles_to_quats
         import numpy as np
 
         if rg2_prim.IsValid():
