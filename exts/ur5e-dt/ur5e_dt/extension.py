@@ -509,7 +509,7 @@ class DigitalTwin(omni.ext.IExt):
         enable_extension("isaacsim.core.nodes")
         enable_extension("omni.graph.action")
 
-        graph_path = "/World/Graphs/ActionGraph_UR5e"
+        graph_path = "/Graph/ActionGraph_UR5e"
 
         # Check if graph already exists
         stage = omni.usd.get_context().get_stage()
@@ -573,7 +573,7 @@ class DigitalTwin(omni.ext.IExt):
         # Clean up any previous physics callback
         self._stop_gripper_physics()
 
-        graph_path = "/World/Graphs/ActionGraph_RG2"
+        graph_path = "/Graph/ActionGraph_RG2"
         keys = og.Controller.Keys
 
         # Delete existing graph
@@ -740,7 +740,7 @@ class DigitalTwin(omni.ext.IExt):
         print(f"Using existing ArticulationView. Joints: {self._effort_articulation.joint_names}")
 
         # Delete existing graph if it exists
-        graph_path = "/World/Graphs/ActionGraph_UR5e_ForcePublish"
+        graph_path = "/Graph/ActionGraph_UR5e_ForcePublish"
         keys = og.Controller.Keys
         stage = omni.usd.get_context().get_stage()
         if stage.GetPrimAtPath(graph_path):
@@ -1025,15 +1025,20 @@ class DigitalTwin(omni.ext.IExt):
 
     def setup_camera_action_graph(self):
         """Create ActionGraph for camera ROS2 publishing"""
-        from isaacsim.core.utils.stage import get_next_free_path
-
         # Configuration
         CAMERA_PRIM = "/World/UR5e/wrist_3_link/rsd455/RSD455/Camera_OmniVision_OV9782_Color"
         IMAGE_WIDTH = 1280
         IMAGE_HEIGHT = 720
         ROS2_TOPIC = "intel_camera_rgb_sim"
 
-        graph_path = get_next_free_path("/World/Graphs/ActionGraph_Camera", "")
+        graph_path = "/Graph/ActionGraph_Camera"
+
+        # Skip if already created
+        stage = omni.usd.get_context().get_stage()
+        if stage.GetPrimAtPath(graph_path):
+            print(f"ActionGraph already exists at {graph_path}, skipping creation.")
+            return
+
         print(f"Creating ActionGraph: {graph_path}")
         print(f"Camera: {CAMERA_PRIM}")
         print(f"Resolution: {IMAGE_WIDTH}x{IMAGE_HEIGHT}")
@@ -1054,6 +1059,8 @@ class DigitalTwin(omni.ext.IExt):
                 ],
                 keys.SET_VALUES: [
                     ("RenderProduct.inputs:cameraPrim", CAMERA_PRIM),
+                    ("RenderProduct.inputs:width", IMAGE_WIDTH),
+                    ("RenderProduct.inputs:height", IMAGE_HEIGHT),
                     ("CameraInfoPublish.inputs:topicName", "camera_info"),
                     ("CameraInfoPublish.inputs:frameId", "camera_link"),
                     ("CameraInfoPublish.inputs:resetSimulationTimeOnStop", True),
@@ -1121,6 +1128,13 @@ class DigitalTwin(omni.ext.IExt):
         is_workspace = self._workspace_checkbox.model.get_value_as_bool()
         is_custom = self._custom_checkbox.model.get_value_as_bool()
 
+        # Get selected resolution from combo box
+        resolution_index = self._resolution_combo.model.get_item_value_model().get_value_as_int()
+        if resolution_index == 0:
+            resolution = (1280, 720)
+        else:
+            resolution = (1920, 1080)
+
         stage = omni.usd.get_context().get_stage()
         if not stage:
             print("Error: No stage found")
@@ -1131,7 +1145,6 @@ class DigitalTwin(omni.ext.IExt):
             position = (1.80632, -2.25319, 1.70657)
             # Euler XYZ: (52.147, 39.128, 26.127) degrees
             quat_xyzw = (0.4714, 0.1994, 0.3347, 0.7912)  # x, y, z, w
-            resolution = (1280, 720)
 
             # Create camera prim using UsdGeom.Camera
             camera_prim = UsdGeom.Camera.Define(stage, prim_path)
@@ -1168,9 +1181,6 @@ class DigitalTwin(omni.ext.IExt):
                 if not camera_prim:
                     print(f"Error: Failed to create camera at {custom_prim_path}")
                     return
-            
-            # Default resolution for custom camera
-            resolution = (1280, 720)
             
             # Configure camera properties
             configure_camera_properties(camera_prim.GetPrim(), resolution[0], resolution[1])
@@ -1230,11 +1240,17 @@ class DigitalTwin(omni.ext.IExt):
 
         Follows the same pattern as isaacsim.ros2.bridge's built-in camera graph
         shortcut (og_rtx_sensors.py). Creates all nodes, sets values, and wires
-        connections in a single batch call.
+        connections in a single batch call. If the graph already exists it is
+        deleted and recreated with the current settings.
         """
-        from isaacsim.core.utils.stage import get_next_free_path
+        graph_path = f"/Graph/ActionGraph_{graph_suffix}"
 
-        graph_path = get_next_free_path(f"/World/Graphs/ActionGraph_{graph_suffix}", "")
+        # Delete existing graph so it gets recreated with current settings
+        stage = omni.usd.get_context().get_stage()
+        if stage.GetPrimAtPath(graph_path):
+            stage.RemovePrim(graph_path)
+            print(f"Removed existing ActionGraph at {graph_path}")
+
         print(f"Creating ActionGraph: {graph_path}")
         print(f"Camera: {camera_prim}, Resolution: {width}x{height}, Topic: /{topic}")
 
@@ -1254,6 +1270,8 @@ class DigitalTwin(omni.ext.IExt):
                     ],
                     keys.SET_VALUES: [
                         ("RenderProduct.inputs:cameraPrim", camera_prim),
+                        ("RenderProduct.inputs:width", width),
+                        ("RenderProduct.inputs:height", height),
                         ("CameraInfoPublish.inputs:topicName", "camera_info"),
                         ("CameraInfoPublish.inputs:frameId", "camera_link"),
                         ("CameraInfoPublish.inputs:resetSimulationTimeOnStop", True),
@@ -1641,7 +1659,7 @@ class DigitalTwin(omni.ext.IExt):
             print(f"Warning: {folder_path} does not exist")
 
         # Also delete the object poses action graph if present
-        pose_graph_path = "/World/Graphs/ActionGraph_objects_poses"
+        pose_graph_path = "/Graph/ActionGraph_objects_poses"
         pose_graph_prim = stage.GetPrimAtPath(pose_graph_path)
         if pose_graph_prim and pose_graph_prim.IsValid():
             stage.RemovePrim(pose_graph_path)
@@ -1903,7 +1921,7 @@ class DigitalTwin(omni.ext.IExt):
                 topic_name: ROS2 topic name
             """
             
-            graph_path = "/World/Graphs/ActionGraph_objects_poses"
+            graph_path = "/Graph/ActionGraph_objects_poses"
 
             # Check if graph already exists
             stage = omni.usd.get_context().get_stage()
@@ -2694,7 +2712,7 @@ class DigitalTwin(omni.ext.IExt):
             self.create_pose_publisher()
             return {
                 "status": "success",
-                "message": "Pose publisher action graph created at /World/Graphs/ActionGraph_objects_poses"
+                "message": "Pose publisher action graph created at /Graph/ActionGraph_objects_poses"
             }
         except Exception as e:
             carb.log_error(f"Error in setup_pose_publisher: {e}")
