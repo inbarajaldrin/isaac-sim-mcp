@@ -536,12 +536,10 @@ class DigitalTwin(omni.ext.IExt):
                     ("ros2_context.inputs:domain_id", 0),
                     ("ros2_subscribe_joint_state.inputs:topicName", "/joint_states"),
                     ("ros2_subscribe_joint_state.inputs:nodeNamespace", ""),
-                    ("ros2_subscribe_joint_state.inputs:queueSize", 10),
                     ("ros2_publish_clock.inputs:topicName", "/clock"),
                     ("ros2_publish_clock.inputs:nodeNamespace", ""),
-                    ("ros2_publish_clock.inputs:queueSize", 10),
-                    ("isaac_read_simulation_time.inputs:resetOnStop", True),
-                    ("articulation_controller.inputs:robotPath", "/World/UR5e"),
+                    ("isaac_read_simulation_time.inputs:resetOnStop", False),
+                    ("articulation_controller.inputs:targetPrim", "/World/UR5e"),
                 ],
                 og.Controller.Keys.CONNECT: [
                     ("on_playback_tick.outputs:tick", "ros2_subscribe_joint_state.inputs:execIn"),
@@ -588,24 +586,24 @@ class DigitalTwin(omni.ext.IExt):
             {"graph_path": graph_path, "evaluator_name": "execution"},
             {
                 keys.CREATE_NODES: [
-                    (f"{graph_path}/tick", "omni.graph.action.OnPlaybackTick"),
-                    (f"{graph_path}/context", "isaacsim.ros2.bridge.ROS2Context"),
-                    (f"{graph_path}/subscriber", "isaacsim.ros2.bridge.ROS2Subscriber"),
-                    (f"{graph_path}/ros2_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
+                    ("tick", "omni.graph.action.OnPlaybackTick"),
+                    ("context", "isaacsim.ros2.bridge.ROS2Context"),
+                    ("subscriber", "isaacsim.ros2.bridge.ROS2Subscriber"),
+                    ("ros2_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
                 ],
                 keys.SET_VALUES: [
-                    (f"{graph_path}/subscriber.inputs:messageName", "String"),
-                    (f"{graph_path}/subscriber.inputs:messagePackage", "std_msgs"),
-                    (f"{graph_path}/subscriber.inputs:topicName", "gripper_command"),
-                    (f"{graph_path}/ros2_publisher.inputs:messageName", "Float64"),
-                    (f"{graph_path}/ros2_publisher.inputs:messagePackage", "std_msgs"),
-                    (f"{graph_path}/ros2_publisher.inputs:topicName", "gripper_width_sim"),
+                    ("subscriber.inputs:messageName", "String"),
+                    ("subscriber.inputs:messagePackage", "std_msgs"),
+                    ("subscriber.inputs:topicName", "gripper_command"),
+                    ("ros2_publisher.inputs:messageName", "Float64"),
+                    ("ros2_publisher.inputs:messagePackage", "std_msgs"),
+                    ("ros2_publisher.inputs:topicName", "gripper_width_sim"),
                 ],
                 keys.CONNECT: [
-                    (f"{graph_path}/tick.outputs:tick", f"{graph_path}/subscriber.inputs:execIn"),
-                    (f"{graph_path}/tick.outputs:tick", f"{graph_path}/ros2_publisher.inputs:execIn"),
-                    (f"{graph_path}/context.outputs:context", f"{graph_path}/subscriber.inputs:context"),
-                    (f"{graph_path}/context.outputs:context", f"{graph_path}/ros2_publisher.inputs:context"),
+                    ("tick.outputs:tick", "subscriber.inputs:execIn"),
+                    ("tick.outputs:tick", "ros2_publisher.inputs:execIn"),
+                    ("context.outputs:context", "subscriber.inputs:context"),
+                    ("context.outputs:context", "ros2_publisher.inputs:context"),
                 ],
             }
         )
@@ -753,18 +751,18 @@ class DigitalTwin(omni.ext.IExt):
             {"graph_path": graph_path, "evaluator_name": "execution"},
             {
                 keys.CREATE_NODES: [
-                    (f"{graph_path}/tick", "omni.graph.action.OnPlaybackTick"),
-                    (f"{graph_path}/context", "isaacsim.ros2.bridge.ROS2Context"),
-                    (f"{graph_path}/publisher", "isaacsim.ros2.bridge.ROS2Publisher")
+                    ("tick", "omni.graph.action.OnPlaybackTick"),
+                    ("context", "isaacsim.ros2.bridge.ROS2Context"),
+                    ("publisher", "isaacsim.ros2.bridge.ROS2Publisher")
                 ],
                 keys.SET_VALUES: [
-                    (f"{graph_path}/publisher.inputs:messageName", "Float64"),
-                    (f"{graph_path}/publisher.inputs:messagePackage", "std_msgs"),
-                    (f"{graph_path}/publisher.inputs:topicName", "ur5e_wrist_force"),
+                    ("publisher.inputs:messageName", "Float64"),
+                    ("publisher.inputs:messagePackage", "std_msgs"),
+                    ("publisher.inputs:topicName", "ur5e_wrist_force"),
                 ],
                 keys.CONNECT: [
-                    (f"{graph_path}/tick.outputs:tick", f"{graph_path}/publisher.inputs:execIn"),
-                    (f"{graph_path}/context.outputs:context", f"{graph_path}/publisher.inputs:context"),
+                    ("tick.outputs:tick", "publisher.inputs:execIn"),
+                    ("context.outputs:context", "publisher.inputs:context"),
                 ]
             }
         )
@@ -1027,83 +1025,56 @@ class DigitalTwin(omni.ext.IExt):
 
     def setup_camera_action_graph(self):
         """Create ActionGraph for camera ROS2 publishing"""
+        from isaacsim.core.utils.stage import get_next_free_path
+
         # Configuration
-        CAMERA_PRIM = "/World/UR5e/wrist_3_link/rsd455/RSD455/Camera_OmniVision_OV9782_Color" 
+        CAMERA_PRIM = "/World/UR5e/wrist_3_link/rsd455/RSD455/Camera_OmniVision_OV9782_Color"
         IMAGE_WIDTH = 1280
         IMAGE_HEIGHT = 720
         ROS2_TOPIC = "intel_camera_rgb_sim"
-        
-        graph_path = "/World/Graphs/ActionGraph_Camera"  # Different name to avoid conflicts
+
+        graph_path = get_next_free_path("/World/Graphs/ActionGraph_Camera", "")
         print(f"Creating ActionGraph: {graph_path}")
         print(f"Camera: {CAMERA_PRIM}")
         print(f"Resolution: {IMAGE_WIDTH}x{IMAGE_HEIGHT}")
         print(f"ROS2 Topic: {ROS2_TOPIC}")
-        
-        # Create ActionGraph
-        try:
-            og.Controller.create_graph(graph_path)
-            print(f"Created ActionGraph at {graph_path}")
-        except Exception:
-            print(f"ActionGraph already exists at {graph_path}")
-        
-        # Create nodes
-        nodes = [
-            ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
-            ("isaac_run_one_simulation_frame", "isaacsim.core.nodes.OgnIsaacRunOneSimulationFrame"),
-            ("isaac_create_render_product", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
-            ("ros2_context", "isaacsim.ros2.bridge.ROS2Context"),
-            ("ros2_camera_helper", "isaacsim.ros2.bridge.ROS2CameraHelper"),
-        ]
-        
-        print("\nCreating nodes...")
-        for node_name, node_type in nodes:
-            try:
-                node_path = f"{graph_path}/{node_name}"
-                og.Controller.create_node(node_path, node_type)
-                print(f"Created {node_name}")
-            except Exception as e:
-                print(f"Node {node_name} already exists")
-        
-        # Set node attributes
-        print("\nConfiguring nodes...")
-        # Configure render product
-        try:
-            og.Controller.attribute(f"{graph_path}/isaac_create_render_product.inputs:cameraPrim").set([CAMERA_PRIM])
-            og.Controller.attribute(f"{graph_path}/isaac_create_render_product.inputs:width").set(IMAGE_WIDTH)
-            og.Controller.attribute(f"{graph_path}/isaac_create_render_product.inputs:height").set(IMAGE_HEIGHT)
-            og.Controller.attribute(f"{graph_path}/isaac_create_render_product.inputs:enabled").set(True)
-            print(f"Configured render product: {CAMERA_PRIM} @ {IMAGE_WIDTH}x{IMAGE_HEIGHT}")
-        except Exception as e:
-            print(f"Error configuring render product: {e}")
-        
-        # Configure ROS2 camera helper
-        try:
-            og.Controller.attribute(f"{graph_path}/ros2_camera_helper.inputs:topicName").set(ROS2_TOPIC)
-            og.Controller.attribute(f"{graph_path}/ros2_camera_helper.inputs:frameId").set("camera_link")
-            og.Controller.attribute(f"{graph_path}/ros2_camera_helper.inputs:type").set("rgb")
-            og.Controller.attribute(f"{graph_path}/ros2_camera_helper.inputs:enabled").set(True)
-            og.Controller.attribute(f"{graph_path}/ros2_camera_helper.inputs:queueSize").set(10)
-            print(f"Configured ROS2 helper: topic={ROS2_TOPIC}")
-        except Exception as e:
-            print(f"Error configuring ROS2 helper: {e}")
-        
-        # Create connections
-        print("\nConnecting nodes...")
-        connections = [
-            ("on_playback_tick.outputs:tick", "isaac_run_one_simulation_frame.inputs:execIn"),
-            ("isaac_run_one_simulation_frame.outputs:step", "isaac_create_render_product.inputs:execIn"),
-            ("isaac_create_render_product.outputs:execOut", "ros2_camera_helper.inputs:execIn"),
-            ("isaac_create_render_product.outputs:renderProductPath", "ros2_camera_helper.inputs:renderProductPath"),
-            ("ros2_context.outputs:context", "ros2_camera_helper.inputs:context"),
-        ]
-        
-        for source, target in connections:
-            try:
-                og.Controller.connect(f"{graph_path}/{source}", f"{graph_path}/{target}")
-                print(f"Connected {source.split('.')[0]} -> {target.split('.')[0]}")
-            except Exception as e:
-                print(f"Failed to connect {source} -> {target}: {e}")
-        
+
+        keys = og.Controller.Keys
+
+        (graph, nodes, _, _) = og.Controller.edit(
+            {"graph_path": graph_path, "evaluator_name": "execution"},
+            {
+                keys.CREATE_NODES: [
+                    ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
+                    ("RunOnce", "isaacsim.core.nodes.OgnIsaacRunOneSimulationFrame"),
+                    ("RenderProduct", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
+                    ("Context", "isaacsim.ros2.bridge.ROS2Context"),
+                    ("CameraInfoPublish", "isaacsim.ros2.bridge.ROS2CameraInfoHelper"),
+                    ("RGBPublish", "isaacsim.ros2.bridge.ROS2CameraHelper"),
+                ],
+                keys.SET_VALUES: [
+                    ("RenderProduct.inputs:cameraPrim", CAMERA_PRIM),
+                    ("CameraInfoPublish.inputs:topicName", "camera_info"),
+                    ("CameraInfoPublish.inputs:frameId", "camera_link"),
+                    ("CameraInfoPublish.inputs:resetSimulationTimeOnStop", True),
+                    ("RGBPublish.inputs:topicName", ROS2_TOPIC),
+                    ("RGBPublish.inputs:type", "rgb"),
+                    ("RGBPublish.inputs:frameId", "camera_link"),
+                    ("RGBPublish.inputs:resetSimulationTimeOnStop", True),
+                ],
+                keys.CONNECT: [
+                    ("OnPlaybackTick.outputs:tick", "RunOnce.inputs:execIn"),
+                    ("RunOnce.outputs:step", "RenderProduct.inputs:execIn"),
+                    ("RenderProduct.outputs:execOut", "CameraInfoPublish.inputs:execIn"),
+                    ("RenderProduct.outputs:execOut", "RGBPublish.inputs:execIn"),
+                    ("RenderProduct.outputs:renderProductPath", "CameraInfoPublish.inputs:renderProductPath"),
+                    ("RenderProduct.outputs:renderProductPath", "RGBPublish.inputs:renderProductPath"),
+                    ("Context.outputs:context", "CameraInfoPublish.inputs:context"),
+                    ("Context.outputs:context", "RGBPublish.inputs:context"),
+                ],
+            }
+        )
+
         print("\nCamera ActionGraph created successfully!")
         print(f"Test with: ros2 topic echo /{ROS2_TOPIC}")
 
@@ -1255,92 +1226,59 @@ class DigitalTwin(omni.ext.IExt):
             )
 
     def _create_camera_actiongraph(self, camera_prim, width, height, topic, graph_suffix):
-        """Helper method to create camera ActionGraph
+        """Helper method to create camera ActionGraph using og.Controller.edit().
 
-        TODO: Camera action graphs slow down physics and stop producing frames as FPS drops.
-        Root cause: OnPlaybackTick fires every render frame, and IsaacRunOneSimulationFrame
-        couples rendering to the physics step. When physics slows (e.g. SDF collisions, many
-        objects), render FPS drops, which starves the camera pipeline. Possible fixes:
-          - Decouple camera publishing from the physics tick (use a separate event-based or
-            timer-driven graph instead of OnPlaybackTick → IsaacRunOneSimulationFrame chain)
-          - Use OnImpulseEvent with a fixed-rate async timer instead of OnPlaybackTick
-          - Lower render product resolution or publish at a reduced rate (e.g. skip N frames)
-          - Profile whether the ROS2CameraHelper itself is the bottleneck (GPU readback stall)
+        Follows the same pattern as isaacsim.ros2.bridge's built-in camera graph
+        shortcut (og_rtx_sensors.py). Creates all nodes, sets values, and wires
+        connections in a single batch call.
         """
-        graph_path = f"/World/Graphs/ActionGraph_{graph_suffix}"
+        from isaacsim.core.utils.stage import get_next_free_path
+
+        graph_path = get_next_free_path(f"/World/Graphs/ActionGraph_{graph_suffix}", "")
         print(f"Creating ActionGraph: {graph_path}")
-        print(f"Camera: {camera_prim}")
-        print(f"Resolution: {width}x{height}")
-        print(f"ROS2 Topic: {topic}")
-        
-        # Create ActionGraph
+        print(f"Camera: {camera_prim}, Resolution: {width}x{height}, Topic: /{topic}")
+
+        keys = og.Controller.Keys
+
         try:
-            og.Controller.create_graph(graph_path)
-            print(f"Created ActionGraph at {graph_path}")
-        except Exception:
-            print(f"ActionGraph already exists at {graph_path}")
-        
-        # Create nodes
-        nodes = [
-            ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
-            ("isaac_run_one_simulation_frame", "isaacsim.core.nodes.OgnIsaacRunOneSimulationFrame"),
-            ("isaac_create_render_product", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
-            ("ros2_context", "isaacsim.ros2.bridge.ROS2Context"),
-            ("ros2_camera_helper", "isaacsim.ros2.bridge.ROS2CameraHelper"),
-        ]
-        
-        print("\nCreating nodes...")
-        for node_name, node_type in nodes:
-            try:
-                node_path = f"{graph_path}/{node_name}"
-                og.Controller.create_node(node_path, node_type)
-                print(f"Created {node_name}")
-            except Exception as e:
-                print(f"Node {node_name} already exists")
-        
-        # Set node attributes
-        print("\nConfiguring nodes...")
-        
-        # Configure render product
-        try:
-            og.Controller.attribute(f"{graph_path}/isaac_create_render_product.inputs:cameraPrim").set([camera_prim])
-            og.Controller.attribute(f"{graph_path}/isaac_create_render_product.inputs:width").set(width)
-            og.Controller.attribute(f"{graph_path}/isaac_create_render_product.inputs:height").set(height)
-            og.Controller.attribute(f"{graph_path}/isaac_create_render_product.inputs:enabled").set(True)
-            print(f"Configured render product: {camera_prim} @ {width}x{height}")
+            (graph_handle, nodes, _, _) = og.Controller.edit(
+                {"graph_path": graph_path, "evaluator_name": "execution"},
+                {
+                    keys.CREATE_NODES: [
+                        ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
+                        ("RunOnce", "isaacsim.core.nodes.OgnIsaacRunOneSimulationFrame"),
+                        ("RenderProduct", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
+                        ("Context", "isaacsim.ros2.bridge.ROS2Context"),
+                        ("CameraInfoPublish", "isaacsim.ros2.bridge.ROS2CameraInfoHelper"),
+                        ("RGBPublish", "isaacsim.ros2.bridge.ROS2CameraHelper"),
+                    ],
+                    keys.SET_VALUES: [
+                        ("RenderProduct.inputs:cameraPrim", camera_prim),
+                        ("CameraInfoPublish.inputs:topicName", "camera_info"),
+                        ("CameraInfoPublish.inputs:frameId", "camera_link"),
+                        ("CameraInfoPublish.inputs:resetSimulationTimeOnStop", True),
+                        ("RGBPublish.inputs:topicName", topic),
+                        ("RGBPublish.inputs:type", "rgb"),
+                        ("RGBPublish.inputs:frameId", "camera_link"),
+                        ("RGBPublish.inputs:resetSimulationTimeOnStop", True),
+                    ],
+                    keys.CONNECT: [
+                        ("OnPlaybackTick.outputs:tick", "RunOnce.inputs:execIn"),
+                        ("RunOnce.outputs:step", "RenderProduct.inputs:execIn"),
+                        ("RenderProduct.outputs:execOut", "CameraInfoPublish.inputs:execIn"),
+                        ("RenderProduct.outputs:renderProductPath", "CameraInfoPublish.inputs:renderProductPath"),
+                        ("Context.outputs:context", "CameraInfoPublish.inputs:context"),
+                        ("RenderProduct.outputs:execOut", "RGBPublish.inputs:execIn"),
+                        ("RenderProduct.outputs:renderProductPath", "RGBPublish.inputs:renderProductPath"),
+                        ("Context.outputs:context", "RGBPublish.inputs:context"),
+                    ],
+                },
+            )
+            print(f"{graph_suffix} ActionGraph created successfully!")
+            print(f"Test with: ros2 topic echo /{topic}")
         except Exception as e:
-            print(f"Error configuring render product: {e}")
-        
-        # Configure ROS2 camera helper
-        try:
-            og.Controller.attribute(f"{graph_path}/ros2_camera_helper.inputs:topicName").set(topic)
-            og.Controller.attribute(f"{graph_path}/ros2_camera_helper.inputs:frameId").set("camera_link")
-            og.Controller.attribute(f"{graph_path}/ros2_camera_helper.inputs:type").set("rgb")
-            og.Controller.attribute(f"{graph_path}/ros2_camera_helper.inputs:enabled").set(True)
-            og.Controller.attribute(f"{graph_path}/ros2_camera_helper.inputs:queueSize").set(10)
-            print(f"Configured ROS2 helper: topic={topic}")
-        except Exception as e:
-            print(f"Error configuring ROS2 helper: {e}")
-        
-        # Create connections
-        print("\nConnecting nodes...")
-        connections = [
-            ("on_playback_tick.outputs:tick", "isaac_run_one_simulation_frame.inputs:execIn"),
-            ("isaac_run_one_simulation_frame.outputs:step", "isaac_create_render_product.inputs:execIn"),
-            ("isaac_create_render_product.outputs:execOut", "ros2_camera_helper.inputs:execIn"),
-            ("isaac_create_render_product.outputs:renderProductPath", "ros2_camera_helper.inputs:renderProductPath"),
-            ("ros2_context.outputs:context", "ros2_camera_helper.inputs:context"),
-        ]
-        
-        for source, target in connections:
-            try:
-                og.Controller.connect(f"{graph_path}/{source}", f"{graph_path}/{target}")
-                print(f"Connected {source.split('.')[0]} -> {target.split('.')[0]}")
-            except Exception as e:
-                print(f"Failed to connect {source} -> {target}: {e}")
-        
-        print(f"\n{graph_suffix} ActionGraph created successfully!")
-        print(f"Test with: ros2 topic echo /{topic}")
+            print(f"Error creating ActionGraph: {e}")
+            traceback.print_exc()
 
     def _load_object_type_map(self):
         """Read the assembly JSON and return a dict mapping object name -> category (board/block/peg/socket).
@@ -1996,7 +1934,7 @@ class DigitalTwin(omni.ext.IExt):
                     ],
                     keys.SET_VALUES: [
                         ("ros2_publish_transform_tree.inputs:topicName", topic_name),
-                        ("isaac_read_simulation_time.inputs:resetOnStop", True),
+                        ("isaac_read_simulation_time.inputs:resetOnStop", False),
                     ],
                 },
             )
