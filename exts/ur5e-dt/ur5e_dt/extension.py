@@ -387,7 +387,7 @@ class DigitalTwin(omni.ext.IExt):
             print("Ground plane already exists, skipping")
         else:
             from isaacsim.core.api.objects import GroundPlane
-            GroundPlane(prim_path="/World/defaultGroundPlane", z_position=0, size=5000)
+            GroundPlane(prim_path="/World/defaultGroundPlane", z_position=-0.11, size=5000)
             print("Added ground plane")
 
         # Set minimum frame rate to 60
@@ -454,7 +454,7 @@ class DigitalTwin(omni.ext.IExt):
         xform.ClearXformOpOrder()
 
         # Custom position and orientation
-        position = Gf.Vec3d(0.0, 0.0, 0.11)  # Replace with your desired position
+        position = Gf.Vec3d(0.0, 0.0, 0.0)  # UR5e at origin; table workspace at z=-0.11
         rpy_deg = np.array([0.0, 0.0, 180.0])  # Replace with your desired RPY
         rpy_rad = np.deg2rad(rpy_deg)
         quat_xyzw = euler_angles_to_quats(rpy_rad)
