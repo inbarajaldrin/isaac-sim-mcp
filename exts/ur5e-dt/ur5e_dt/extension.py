@@ -175,7 +175,8 @@ class DigitalTwin(omni.ext.IExt):
         # Force publisher physics callback state
         self._force_physx_sub = None
         self._effort_articulation = None
-        self._force_graph_attr_path = None
+        self._force_graph_path = None
+        self._force_pub_node = None
         self._force_warmup = 0
 
         # MCP socket server state
@@ -391,7 +392,11 @@ class DigitalTwin(omni.ext.IExt):
         # Force publisher action graph
         force_graph = "/Graph/ActionGraph_UR5e_ForcePublish"
         if stage.GetPrimAtPath(force_graph):
-            self._force_graph_attr_path = f"{force_graph}/publisher.inputs:data"
+            self._force_graph_path = force_graph
+            # Recover the publisher OG node handle from the existing graph
+            pub_prim = stage.GetPrimAtPath(f"{force_graph}/publisher")
+            if pub_prim:
+                self._force_pub_node = og.get_node_by_path(f"{force_graph}/publisher")
             self._force_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
                 self._on_physics_step_force
             )
@@ -761,25 +766,33 @@ class DigitalTwin(omni.ext.IExt):
         self._gripper_warmup = 0
 
     def setup_force_publish_action_graph(self):
-        """Setup force publishing using joint forces from UR5e ArticulationView.
+        """Setup force publishing as geometry_msgs/WrenchStamped on /force_torque_sensor_broadcaster/wrench_sim.
 
         Uses a physics step callback to read measured joint forces at physics rate
         (~60 Hz). Uses get_measured_joint_forces() which returns 6-DOF spatial forces
-        [Fx, Fy, Fz, Tx, Ty, Tz] per joint. Publishes Fz from the UR5e wrist joint.
+        [Fx, Fy, Fz, Tx, Ty, Tz] per joint. Publishes full wrench from the UR5e wrist joint,
+        matching the real robot's force_torque_sensor_broadcaster message format.
         """
         import omni.physx
 
-        print("Setting up UR5e Force Publisher...")
+        print("Setting up UR5e Force Publisher (WrenchStamped)...")
 
         # Clean up any previous physics callback
         self._stop_force_publish()
 
-        # Reuse the ArticulationView created during UR5e loading
-        if self._ur5e_view is None:
-            print("Error: UR5e ArticulationView not available. Load UR5e first.")
+        # Check that UR5e prim exists in the scene (may survive hot-reload even if Python state is lost)
+        stage_check = omni.usd.get_context().get_stage()
+        if not stage_check.GetPrimAtPath("/World/UR5e"):
+            print("Error: UR5e prim not found at /World/UR5e. Load UR5e first.")
             return
-        self._effort_articulation = self._ur5e_view
-        print(f"Using existing ArticulationView. Joints: {self._effort_articulation.joint_names}")
+
+        # Reuse existing ArticulationView if available; otherwise physics callback will lazy-init
+        if self._ur5e_view is not None:
+            self._effort_articulation = self._ur5e_view
+            print(f"Using existing ArticulationView. Joints: {self._effort_articulation.joint_names}")
+        else:
+            self._effort_articulation = None
+            print("ArticulationView not cached (hot-reload?). Will lazy-init in physics callback.")
 
         # Delete existing graph if it exists
         graph_path = "/Graph/ActionGraph_UR5e_ForcePublish"
@@ -798,9 +811,9 @@ class DigitalTwin(omni.ext.IExt):
                     ("publisher", "isaacsim.ros2.bridge.ROS2Publisher")
                 ],
                 keys.SET_VALUES: [
-                    ("publisher.inputs:messageName", "Float64"),
-                    ("publisher.inputs:messagePackage", "std_msgs"),
-                    ("publisher.inputs:topicName", "ur5e_wrist_force"),
+                    ("publisher.inputs:messageName", "WrenchStamped"),
+                    ("publisher.inputs:messagePackage", "geometry_msgs"),
+                    ("publisher.inputs:topicName", "force_torque_sensor_broadcaster/wrench_sim"),
                 ],
                 keys.CONNECT: [
                     ("tick.outputs:tick", "publisher.inputs:execIn"),
@@ -809,13 +822,17 @@ class DigitalTwin(omni.ext.IExt):
             }
         )
 
-        # Create data attribute on publisher for the effort value
-        publisher_prim = stage.GetPrimAtPath(f"{graph_path}/publisher")
-        publisher_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
+        # Store graph path and publisher node reference for the physics callback.
+        # The ROS2Publisher C++ node auto-creates dynamic attributes (wrench:force:x, etc.)
+        # based on the WrenchStamped message definition. We access them via og.Controller.attribute()
+        # using colon-separated field paths (the convention for nested ROS2 message fields in OG).
+        self._force_graph_path = graph_path
+        self._force_pub_node = nodes[2]  # publisher node
 
-        self._force_graph_attr_path = f"{graph_path}/publisher.inputs:data"
+        # Set header frame_id
+        og.Controller.attribute("inputs:header:frame_id", self._force_pub_node).set("tool0")
 
-        # Physics callback reads joint forces at physics rate and updates the attribute
+        # Physics callback reads joint forces at physics rate and updates the attributes
         self._force_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
             self._on_physics_step_force
         )
@@ -823,16 +840,16 @@ class DigitalTwin(omni.ext.IExt):
         self._force_publish_active = True
 
         print(f"UR5e Force Publisher created at {graph_path}")
-        print("Publishing Fz (N) from UR5e wrist joint to topic: /ur5e_wrist_force")
-        print("Using get_measured_joint_forces() - 6-DOF spatial forces per joint")
+        print("Publishing geometry_msgs/WrenchStamped to topic: /force_torque_sensor_broadcaster/wrench_sim")
+        print("Full 6-DOF wrench (Fx, Fy, Fz, Tx, Ty, Tz) from UR5e wrist joint")
         print("Joint forces read at physics rate (~60 Hz)")
 
     def _on_physics_step_force(self, dt):
-        """Physics step callback - read joint forces and update OmniGraph attribute.
+        """Physics step callback - read joint forces and update OmniGraph WrenchStamped attributes.
 
         Uses get_measured_joint_forces() which returns 6-DOF spatial forces
-        [Fx, Fy, Fz, Tx, Ty, Tz] per joint. Publishes Fz from the last joint
-        (wrist joint) as the main collision/contact indicator.
+        [Fx, Fy, Fz, Tx, Ty, Tz] per joint. Publishes full wrench from the last joint
+        (wrist joint) as geometry_msgs/WrenchStamped.
         """
         try:
             # Warmup: skip physics steps after a stop/play to let engine settle
@@ -865,12 +882,15 @@ class DigitalTwin(omni.ext.IExt):
             # where 6 = [Fx, Fy, Fz, Tx, Ty, Tz]
             forces = self._effort_articulation.get_measured_joint_forces()
             if forces is not None and len(forces) > 0:
-                # Use last joint (wrist joint), get Fz (index 2) as collision indicator
-                fz = float(forces[0][-1][2])
-                og.Controller.set(
-                    og.Controller.attribute(self._force_graph_attr_path),
-                    fz
-                )
+                # Use last joint (wrist joint) - full 6-DOF wrench
+                wrist = forces[0][-1]
+                node = self._force_pub_node
+                og.Controller.attribute("inputs:wrench:force:x", node).set(float(wrist[0]))
+                og.Controller.attribute("inputs:wrench:force:y", node).set(float(wrist[1]))
+                og.Controller.attribute("inputs:wrench:force:z", node).set(float(wrist[2]))
+                og.Controller.attribute("inputs:wrench:torque:x", node).set(float(wrist[3]))
+                og.Controller.attribute("inputs:wrench:torque:y", node).set(float(wrist[4]))
+                og.Controller.attribute("inputs:wrench:torque:z", node).set(float(wrist[5]))
         except Exception as e:
             print(f"[Force callback] {e}")
 
