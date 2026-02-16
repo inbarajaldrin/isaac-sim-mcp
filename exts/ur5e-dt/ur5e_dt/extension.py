@@ -119,6 +119,10 @@ MCP_TOOL_REGISTRY = {
         "description": "Create an action graph to publish object poses to ROS2 topic 'objects_poses_sim'.",
         "parameters": {}
     },
+    "sync_real_poses": {
+        "description": "Subscribe to /objects_poses_real ROS2 topic and update sim object poses to match real-world detected poses.",
+        "parameters": {}
+    },
 }
 
 # Handler method names for each tool (maps to self._cmd_<name> methods)
@@ -134,6 +138,7 @@ MCP_HANDLERS = {
     "add_objects": "_cmd_add_objects",
     "delete_objects": "_cmd_delete_objects",
     "setup_pose_publisher": "_cmd_setup_pose_publisher",
+    "sync_real_poses": "_cmd_sync_real_poses",
 }
 
 from isaacsim.core.utils.stage import add_reference_to_stage
@@ -168,6 +173,9 @@ class DigitalTwin(omni.ext.IExt):
         self._gripper_warmup = 0  # skip N physics steps before re-init
 
         # Force publisher physics callback state
+        self._force_physx_sub = None
+        self._effort_articulation = None
+        self._force_graph_attr_path = None
         self._force_warmup = 0
 
         # MCP socket server state
@@ -178,7 +186,7 @@ class DigitalTwin(omni.ext.IExt):
         # Add Objects UI state
         self._selected_assembly = "fmb1"
         self._object_spacing = 0.25  # Spacing between objects along X-axis in meters
-        self._y_offset = -0.5  # Y offset for all objects
+        self._y_offset = -0.4  # Y offset for all objects
         self._z_offset = 0.0495  # Z offset for all objects
 
         # Scene state file path (can be set by MCP client)
@@ -223,22 +231,23 @@ class DigitalTwin(omni.ext.IExt):
         # Board (type: "board", e.g. base1, base2, base3)
         self._board_collision_approximation = "sdf"  # "sdf" or "convexDecomposition"
         self._board_rest_offset = 0.0
-        self._board_angular_damping = 20.0
+        self._board_angular_damping = 30.0
 
         # Block (subtype: "block", e.g. u_brown, fork_orange, line_green)
         self._block_collision_approximation = "sdf"
         self._block_rest_offset = -0.0005
-        self._block_angular_damping = 20.0
+        self._block_angular_damping = 30.0
 
         # Socket (subtype: "socket", e.g. inverted_u_brown)
         self._socket_collision_approximation = "sdf"
         self._socket_rest_offset = -0.0005
-        self._socket_angular_damping = 20.0
+        self._socket_angular_damping = 30.0
 
         # Peg (subtype: "peg", e.g. hex_blue, hex_red)
         self._peg_collision_approximation = "sdf"
         self._peg_rest_offset = -0.0005
         self._peg_angular_damping = 50.0
+        self._peg_linear_damping = 5.0
 
         # Isaac Sim handles ROS2 initialization automatically through its bridge
         print("ROS2 bridge will be initialized by Isaac Sim when needed")
@@ -322,7 +331,7 @@ class DigitalTwin(omni.ext.IExt):
                     # Resolution selection
                     with ui.HStack(spacing=5):
                         ui.Label("Resolution:", alignment=ui.Alignment.LEFT, width=120)
-                        self._resolution_combo = ui.ComboBox(0, "1280x720", "1920x1080", width=150)
+                        self._resolution_combo = ui.ComboBox(0, "640x480", "1280x720", "1920x1080", width=150)
 
                     # Camera control buttons
                     with ui.HStack(spacing=5):
@@ -346,6 +355,9 @@ class DigitalTwin(omni.ext.IExt):
                         ui.Button("Assemble", width=120, height=35, clicked_fn=self.assemble_objects)
                         ui.Button("Disassemble", width=120, height=35, clicked_fn=self.disassemble_objects)
                         ui.Button("Randomize Poses", width=150, height=35, clicked_fn=self.randomize_object_poses)
+                    with ui.HStack(spacing=5):
+                        ui.Button("Add ArUco Markers", width=180, height=35, clicked_fn=self.add_aruco_markers)
+                        ui.Button("Sync Real Poses", width=180, height=35, clicked_fn=self.sync_real_poses)
                     ui.Label("Scene State", alignment=ui.Alignment.LEFT)
                     with ui.HStack(spacing=5):
                         ui.Button("Save State", width=120, height=35,
@@ -354,6 +366,36 @@ class DigitalTwin(omni.ext.IExt):
                             clicked_fn=lambda: self._cmd_restore_scene_state())
                         ui.Button("Clear State", width=120, height=35,
                             clicked_fn=lambda: self._cmd_clear_scene_state())
+
+        # Re-subscribe physics callbacks if action graphs already exist (e.g. after hot-reload)
+        self._resubscribe_physics_callbacks()
+
+    def _resubscribe_physics_callbacks(self):
+        """Re-subscribe physics callbacks for graphs that survived a hot-reload."""
+        import omni.physx
+
+        stage = omni.usd.get_context().get_stage()
+
+        # Gripper action graph
+        gripper_graph = "/Graph/ActionGraph_RG2"
+        if stage.GetPrimAtPath(gripper_graph):
+            self._gripper_graph_path = gripper_graph
+            self._gripper_sub_attr_path = f"{gripper_graph}/subscriber.outputs:data"
+            self._gripper_pub_attr_path = f"{gripper_graph}/ros2_publisher.inputs:data"
+            self._gripper_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
+                self._on_physics_step_gripper
+            )
+            self._gripper_publish_active = True
+            print(f"[HotReload] Re-subscribed gripper physics callback for {gripper_graph}")
+
+        # Force publisher action graph
+        force_graph = "/Graph/ActionGraph_UR5e_ForcePublish"
+        if stage.GetPrimAtPath(force_graph):
+            self._force_graph_attr_path = f"{force_graph}/publisher.inputs:data"
+            self._force_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
+                self._on_physics_step_force
+            )
+            print(f"[HotReload] Re-subscribed force publisher physics callback for {force_graph}")
 
     def _on_assembly_changed(self, model):
         """Called when the assembly combo box selection changes."""
@@ -387,7 +429,7 @@ class DigitalTwin(omni.ext.IExt):
             print("Ground plane already exists, skipping")
         else:
             from isaacsim.core.api.objects import GroundPlane
-            GroundPlane(prim_path="/World/defaultGroundPlane", z_position=-0.11, size=5000)
+            GroundPlane(prim_path="/World/defaultGroundPlane", z_position=-0.08, size=5000)
             print("Added ground plane")
 
         # Set minimum frame rate to 60
@@ -454,7 +496,7 @@ class DigitalTwin(omni.ext.IExt):
         xform.ClearXformOpOrder()
 
         # Custom position and orientation
-        position = Gf.Vec3d(0.0, 0.0, 0.0)  # UR5e at origin; table workspace at z=-0.11
+        position = Gf.Vec3d(0.0, 0.0, 0.0)  # UR5e at origin; table workspace at z=-0.08
         rpy_deg = np.array([0.0, 0.0, 180.0])  # Replace with your desired RPY
         rpy_rad = np.deg2rad(rpy_deg)
         quat_xyzw = euler_angles_to_quats(rpy_rad)
@@ -676,7 +718,7 @@ class DigitalTwin(omni.ext.IExt):
             # Parse command
             if input_str and input_str not in ("", "None", "0"):
                 if input_str == "open":
-                    width_mm = 110.0
+                    width_mm = 100.0
                 elif input_str == "close":
                     width_mm = 0.0
                 else:
@@ -686,9 +728,9 @@ class DigitalTwin(omni.ext.IExt):
                         width_mm = None
 
                 if width_mm is not None:
-                    width_mm = float(np.clip(width_mm, 0.0, 110.0))
-                    ratio = width_mm / 110.0
-                    joint_angle = -np.pi / 4 + ratio * (np.pi / 4 + np.pi / 6)
+                    width_mm = float(np.clip(width_mm, 0.0, 100.0))
+                    ratio = width_mm / 100.0
+                    joint_angle = -np.pi / 4 + ratio * (np.pi / 4 + np.pi / 9)
                     target = np.array([joint_angle, joint_angle])
                     action = ArticulationActions(
                         joint_positions=target,
@@ -700,14 +742,14 @@ class DigitalTwin(omni.ext.IExt):
             joint_positions = self._gripper_articulation.get_joint_positions()
             if joint_positions is not None and joint_positions.shape[1] >= 2:
                 actual_angle = float(np.mean(joint_positions[0, :2]))
-                actual_ratio = (actual_angle + np.pi / 4) / (np.pi / 4 + np.pi / 6)
-                actual_width_mm = float(np.clip(actual_ratio * 110.0, 0.0, 110.0))
+                actual_ratio = (actual_angle + np.pi / 4) / (np.pi / 4 + np.pi / 9)
+                actual_width_mm = float(np.clip(actual_ratio * 100.0, 0.0, 100.0))
                 og.Controller.set(
                     og.Controller.attribute(self._gripper_pub_attr_path),
                     actual_width_mm
                 )
-        except Exception:
-            pass  # Silently ignore during initialization/teardown
+        except Exception as e:
+            print(f"[Gripper callback] {e}")
 
     def _stop_gripper_physics(self):
         """Stop the gripper physics callback and clean up resources."""
@@ -829,8 +871,8 @@ class DigitalTwin(omni.ext.IExt):
                     og.Controller.attribute(self._force_graph_attr_path),
                     fz
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[Force callback] {e}")
 
     def _stop_force_publish(self):
         """Stop the physics-rate force publisher and clean up resources."""
@@ -1002,10 +1044,11 @@ class DigitalTwin(omni.ext.IExt):
                                  path_from="/World/rsd455",
                                  path_to="/World/UR5e/wrist_3_link/rsd455")
         
+        # TODO: Fix prim position of /World/UR5e/wrist_3_link/rsd455/RSD455/Camera_OmniVision_OV9782_Color
         # Set transform properties
         omni.kit.commands.execute('ChangeProperty',
                                  prop_path="/World/UR5e/wrist_3_link/rsd455.xformOp:translate",
-                                 value=Gf.Vec3d(-0.012, -0.055, 0.1),
+                                 value=Gf.Vec3d(0.045, -0.05, 0.07),
                                  prev=None)
         omni.kit.commands.execute('ChangeProperty',
                                  prop_path="/World/UR5e/wrist_3_link/rsd455.xformOp:rotateZYX",
@@ -1025,10 +1068,24 @@ class DigitalTwin(omni.ext.IExt):
 
     def setup_camera_action_graph(self):
         """Create ActionGraph for camera ROS2 publishing"""
-        # Configuration
+        import yaml
+
+        # Load camera config from robot_config.yaml
+        config_path = os.path.expanduser(
+            "~/Desktop/ros2_ws/src/aruco_camera_localizer/config/robot_config.yaml"
+        )
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                cam_cfg = yaml.safe_load(f)
+            print(f"Loaded camera config from {config_path}")
+        else:
+            cam_cfg = {}
+            print(f"Warning: {config_path} not found, using defaults")
+
+        # Configuration from yaml (with fallbacks)
         CAMERA_PRIM = "/World/UR5e/wrist_3_link/rsd455/RSD455/Camera_OmniVision_OV9782_Color"
-        IMAGE_WIDTH = 1280
-        IMAGE_HEIGHT = 720
+        IMAGE_WIDTH = cam_cfg.get("camera_width", 1280)
+        IMAGE_HEIGHT = cam_cfg.get("camera_height", 720)
         ROS2_TOPIC = "intel_camera_rgb_sim"
 
         graph_path = "/Graph/ActionGraph_Camera"
@@ -1054,8 +1111,10 @@ class DigitalTwin(omni.ext.IExt):
                     ("RunOnce", "isaacsim.core.nodes.OgnIsaacRunOneSimulationFrame"),
                     ("RenderProduct", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
                     ("Context", "isaacsim.ros2.bridge.ROS2Context"),
+                    ("ReadSimTime", "isaacsim.core.nodes.IsaacReadSimulationTime"),
                     ("CameraInfoPublish", "isaacsim.ros2.bridge.ROS2CameraInfoHelper"),
                     ("RGBPublish", "isaacsim.ros2.bridge.ROS2CameraHelper"),
+                    ("TFPublish", "isaacsim.ros2.bridge.ROS2PublishTransformTree"),
                 ],
                 keys.SET_VALUES: [
                     ("RenderProduct.inputs:cameraPrim", CAMERA_PRIM),
@@ -1068,19 +1127,77 @@ class DigitalTwin(omni.ext.IExt):
                     ("RGBPublish.inputs:type", "rgb"),
                     ("RGBPublish.inputs:frameId", "camera_link"),
                     ("RGBPublish.inputs:resetSimulationTimeOnStop", True),
+                    ("TFPublish.inputs:topicName", "tf_cam"),
+                    ("TFPublish.inputs:targetPrims", CAMERA_PRIM),
+                    ("TFPublish.inputs:parentPrim", "/World"),
+                    ("ReadSimTime.inputs:resetOnStop", False),
                 ],
                 keys.CONNECT: [
                     ("OnPlaybackTick.outputs:tick", "RunOnce.inputs:execIn"),
                     ("RunOnce.outputs:step", "RenderProduct.inputs:execIn"),
                     ("RenderProduct.outputs:execOut", "CameraInfoPublish.inputs:execIn"),
                     ("RenderProduct.outputs:execOut", "RGBPublish.inputs:execIn"),
+                    ("OnPlaybackTick.outputs:tick", "TFPublish.inputs:execIn"),
                     ("RenderProduct.outputs:renderProductPath", "CameraInfoPublish.inputs:renderProductPath"),
                     ("RenderProduct.outputs:renderProductPath", "RGBPublish.inputs:renderProductPath"),
                     ("Context.outputs:context", "CameraInfoPublish.inputs:context"),
                     ("Context.outputs:context", "RGBPublish.inputs:context"),
+                    ("Context.outputs:context", "TFPublish.inputs:context"),
+                    ("ReadSimTime.outputs:simulationTime", "TFPublish.inputs:timeStamp"),
                 ],
             }
         )
+
+        # Override the USD camera's baked-in intrinsics to match the real Intel RealSense
+        camera_prim = stage.GetPrimAtPath(CAMERA_PRIM)
+        if camera_prim and camera_prim.IsValid():
+            from pxr import Sdf
+            import numpy as np
+
+            # Use calibrated camera_matrix [fx, fy, cx, cy] from yaml if available,
+            # otherwise fall back to HFOV/VFOV computation
+            camera_matrix = cam_cfg.get("camera_matrix")
+            if camera_matrix and len(camera_matrix) == 4:
+                fx, fy, cx, cy = camera_matrix
+                print(f"Using calibrated camera_matrix from config: fx={fx}, fy={fy}, cx={cx}, cy={cy}")
+            else:
+                hfov_deg = cam_cfg.get("camera_hfov", 69.4)
+                vfov_deg = cam_cfg.get("camera_vfov", 42.5)
+                fx = IMAGE_WIDTH / (2 * np.tan(np.deg2rad(hfov_deg / 2)))
+                fy = IMAGE_HEIGHT / (2 * np.tan(np.deg2rad(vfov_deg / 2)))
+                cx = IMAGE_WIDTH * 0.5
+                cy = IMAGE_HEIGHT * 0.5
+                print(f"Using HFOV/VFOV from config: hfov={hfov_deg}, vfov={vfov_deg}")
+
+            # Distortion coefficients from yaml
+            dist_coeffs = cam_cfg.get("distortion_coeffs", [0, 0, 0, 0, 0])
+
+            # Set USD aperture/focal-length so the renderer matches the FOV
+            horizontal_aperture_mm = 36.0
+            focal_length_mm = fx * horizontal_aperture_mm / IMAGE_WIDTH
+            vertical_aperture_mm = IMAGE_HEIGHT * focal_length_mm / fy
+
+            camera = UsdGeom.Camera(camera_prim)
+            camera.CreateHorizontalApertureAttr().Set(horizontal_aperture_mm)
+            camera.CreateVerticalApertureAttr().Set(vertical_aperture_mm)
+            camera.CreateFocalLengthAttr().Set(focal_length_mm)
+            camera.CreateClippingRangeAttr().Set(Gf.Vec2f(0.1, 10000.0))
+
+            # Set opencvPinhole lens distortion model for correct CameraInfo publishing
+            camera_prim.CreateAttribute("omni:lensdistortion:model", Sdf.ValueTypeNames.String).Set("opencvPinhole")
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:imageSize", Sdf.ValueTypeNames.Int2).Set(Gf.Vec2i(IMAGE_WIDTH, IMAGE_HEIGHT))
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:fx", Sdf.ValueTypeNames.Float).Set(fx)
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:fy", Sdf.ValueTypeNames.Float).Set(fy)
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:cx", Sdf.ValueTypeNames.Float).Set(cx)
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:cy", Sdf.ValueTypeNames.Float).Set(cy)
+            # Set distortion coefficients (k1, k2, p1, p2, k3, ..., s4)
+            dist_attr_names = ["k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6", "s1", "s2", "s3", "s4"]
+            for i, attr_name in enumerate(dist_attr_names):
+                val = dist_coeffs[i] if i < len(dist_coeffs) else 0.0
+                camera_prim.CreateAttribute(f"omni:lensdistortion:opencvPinhole:{attr_name}", Sdf.ValueTypeNames.Float).Set(val)
+
+            print(f"Overrode camera intrinsics on {CAMERA_PRIM}: fx={fx:.1f}, fy={fy:.1f}, cx={cx:.1f}, cy={cy:.1f}")
+            print(f"Distortion coefficients: {dist_coeffs}")
 
         print("\nCamera ActionGraph created successfully!")
         print(f"Test with: ros2 topic echo /{ROS2_TOPIC}")
@@ -1088,7 +1205,7 @@ class DigitalTwin(omni.ext.IExt):
     def create_additional_camera(self):
         """Create additional camera based on selected view type"""
         import omni.usd
-        from pxr import Gf, UsdGeom
+        from pxr import Gf, Sdf, UsdGeom
         import numpy as np
 
         def set_camera_pose(prim_path: str, position_xyz, quat_xyzw):
@@ -1104,19 +1221,23 @@ class DigitalTwin(omni.ext.IExt):
             xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat)
 
         def configure_camera_properties(camera_prim, width, height):
-            """Configure camera properties based on resolution"""
-            # Calculate focal length and aperture based on resolution
-            # Using standard 35mm film equivalent calculations
-            # Horizontal aperture in mm (standard 35mm film is 36mm wide)
+            """Configure camera properties to match Intel RealSense camera intrinsics."""
+            # Intel RealSense specs: HFOV=69.4°, VFOV=42.5° at 1280x720
+            hfov_deg = 69.4
+            vfov_deg = 42.5
+
+            # Compute intrinsics: fx = width / (2 * tan(hfov/2))
+            fx = width / (2 * np.tan(np.deg2rad(hfov_deg / 2)))
+            fy = height / (2 * np.tan(np.deg2rad(vfov_deg / 2)))
+            cx = width * 0.5
+            cy = height * 0.5
+
+            # Derive USD aperture/focal-length so the renderer matches the FOV
+            # Keep horizontal_aperture fixed, compute focal_length from fx
             horizontal_aperture_mm = 36.0
-            # Vertical aperture calculated from aspect ratio
-            aspect_ratio = height / width
-            vertical_aperture_mm = horizontal_aperture_mm * aspect_ratio
-            
-            # Focal length (50mm is a standard "normal" lens)
-            focal_length_mm = 50.0
-            
-            # Convert mm to USD units (USD uses cm, but aperture is in mm in USD)
+            focal_length_mm = fx * horizontal_aperture_mm / width
+            vertical_aperture_mm = height * focal_length_mm / fy
+
             camera = UsdGeom.Camera(camera_prim)
             camera.CreateHorizontalApertureAttr().Set(horizontal_aperture_mm)
             camera.CreateVerticalApertureAttr().Set(vertical_aperture_mm)
@@ -1124,16 +1245,26 @@ class DigitalTwin(omni.ext.IExt):
             camera.CreateProjectionAttr().Set("perspective")
             camera.CreateClippingRangeAttr().Set(Gf.Vec2f(0.1, 10000.0))
 
+            # Set opencvPinhole lens distortion model so ROS2 CameraInfo
+            # publishes fx/fy/cx/cy directly
+            camera_prim.CreateAttribute("omni:lensdistortion:model", Sdf.ValueTypeNames.String).Set("opencvPinhole")
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:imageSize", Sdf.ValueTypeNames.Int2).Set(Gf.Vec2i(width, height))
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:fx", Sdf.ValueTypeNames.Float).Set(fx)
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:fy", Sdf.ValueTypeNames.Float).Set(fy)
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:cx", Sdf.ValueTypeNames.Float).Set(cx)
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:cy", Sdf.ValueTypeNames.Float).Set(cy)
+            # Zero distortion coefficients (k1-k6, p1, p2, s1-s4)
+            for attr_name in ["k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6", "s1", "s2", "s3", "s4"]:
+                camera_prim.CreateAttribute(f"omni:lensdistortion:opencvPinhole:{attr_name}", Sdf.ValueTypeNames.Float).Set(0.0)
+
         # Check which camera type is selected
         is_workspace = self._workspace_checkbox.model.get_value_as_bool()
         is_custom = self._custom_checkbox.model.get_value_as_bool()
 
         # Get selected resolution from combo box
         resolution_index = self._resolution_combo.model.get_item_value_model().get_value_as_int()
-        if resolution_index == 0:
-            resolution = (1280, 720)
-        else:
-            resolution = (1920, 1080)
+        resolutions = [(640, 480), (1280, 720), (1920, 1080)]
+        resolution = resolutions[resolution_index]
 
         stage = omni.usd.get_context().get_stage()
         if not stage:
@@ -1142,8 +1273,8 @@ class DigitalTwin(omni.ext.IExt):
 
         if is_workspace:
             prim_path = "/World/workspace_camera"
-            position = (1.80632, -2.25319, 1.70657)
-            # Euler XYZ: (52.147, 39.128, 26.127) degrees
+            position = (0.8572405778988392, -1.3321141046870788, 0.9906567613694909)
+            # Euler XYZ: (52.144, 39.13, 26.13) degrees
             quat_xyzw = (0.4714, 0.1994, 0.3347, 0.7912)  # x, y, z, w
 
             # Create camera prim using UsdGeom.Camera
@@ -1196,10 +1327,8 @@ class DigitalTwin(omni.ext.IExt):
 
         # Get selected resolution from combo box
         resolution_index = self._resolution_combo.model.get_item_value_model().get_value_as_int()
-        if resolution_index == 0:
-            width, height = 1280, 720
-        else:
-            width, height = 1920, 1080
+        resolutions = [(640, 480), (1280, 720), (1920, 1080)]
+        width, height = resolutions[resolution_index]
 
         if is_workspace:
             self._create_camera_actiongraph(
@@ -1323,11 +1452,15 @@ class DigitalTwin(omni.ext.IExt):
     def _get_prim_params(self, category):
         """Return prim settings dict for the given category (board/block/peg/socket)."""
         prefix = f"_{category}_"
-        return {
+        params = {
             "collision_approximation": getattr(self, f"{prefix}collision_approximation"),
             "rest_offset": getattr(self, f"{prefix}rest_offset"),
             "angular_damping": getattr(self, f"{prefix}angular_damping"),
         }
+        linear_damping = getattr(self, f"{prefix}linear_damping", None)
+        if linear_damping is not None:
+            params["linear_damping"] = linear_damping
+        return params
 
     def _sample_non_overlapping_objects(
         self,
@@ -1407,16 +1540,17 @@ class DigitalTwin(omni.ext.IExt):
         else:
             pos_value = Gf.Vec3d(*position)
         
-        omni.kit.commands.execute(
-            "ChangeProperty",
-            prop_path=f"{prim_path}.xformOp:translate",
-            value=pos_value,
-            prev=None,
-        )
+        # Set orientation first, then translate (matches assemble_objects order)
         omni.kit.commands.execute(
             "ChangeProperty",
             prop_path=f"{prim_path}.xformOp:orient",
             value=Gf.Quatf(*quat_wxyz),
+            prev=None,
+        )
+        omni.kit.commands.execute(
+            "ChangeProperty",
+            prop_path=f"{prim_path}.xformOp:translate",
+            value=pos_value,
             prev=None,
         )
 
@@ -1642,6 +1776,226 @@ class DigitalTwin(omni.ext.IExt):
             print(f"  Target world pos: ({target_world_pos[0]:.3f}, {target_world_pos[1]:.3f}, {target_world_pos[2]:.3f})")
             print(f"  Child local pos: ({local_pos[0]:.3f}, {local_pos[1]:.3f}, {local_pos[2]:.3f})")
 
+    def sync_real_poses(self):
+        """Subscribe to /objects_poses_real and update sim object poses to match."""
+        import rclpy
+        from tf2_msgs.msg import TFMessage
+
+        rclpy.init(args=None)
+        node = rclpy.create_node("_sync_real_poses_tmp")
+        try:
+            msg_received = [None]
+
+            def _cb(msg):
+                msg_received[0] = msg
+
+            sub = node.create_subscription(TFMessage, "/objects_poses_real", _cb, 1)
+            # Spin until we get one message (timeout after 3 seconds)
+            import time
+            t0 = time.time()
+            while msg_received[0] is None and (time.time() - t0) < 3.0:
+                rclpy.spin_once(node, timeout_sec=0.1)
+            node.destroy_subscription(sub)
+
+            if msg_received[0] is None:
+                print("[SyncRealPoses] No message received on /objects_poses_real within 3s")
+                return
+
+            # Load assembly data to snap objects near their assembled pose
+            import math
+            assembly_file = self._assembly_file_path
+            assembly_lookup = {}
+            if os.path.exists(assembly_file):
+                with open(assembly_file, 'r') as f:
+                    assembly_data = json.load(f)
+                for comp in assembly_data['components']:
+                    assembly_lookup[comp['name']] = comp
+
+            # Build dict of real poses by name
+            real_poses = {}
+            for tf in msg_received[0].transforms:
+                t = tf.transform.translation
+                r = tf.transform.rotation
+                real_poses[tf.child_frame_id] = {
+                    'position': (t.x, t.y, t.z),
+                    'quat_wxyz': (r.w, r.x, r.y, r.z),
+                }
+
+            # Find board's real-world position (used as assembly origin)
+            board_real_pos = None
+            type_map = self._load_object_type_map()
+            for name, pose in real_poses.items():
+                if type_map.get(name, 'block') == 'board':
+                    board_real_pos = pose['position']
+                    break
+
+            # Compute assembled world poses if we have both assembly data and board pose
+            assembled_world_poses = {}
+            if board_real_pos and assembly_lookup:
+                for comp_name, comp in assembly_lookup.items():
+                    p = comp['position']
+                    q = comp['rotation']['quaternion']
+                    assembled_world_poses[comp_name] = {
+                        'position': (
+                            board_real_pos[0] + p['x'],
+                            board_real_pos[1] + p['y'],
+                            board_real_pos[2] + p['z'],
+                        ),
+                        'quat_wxyz': (q['w'], q['x'], q['y'], q['z']),
+                    }
+
+            SNAP_THRESHOLD = 0.05  # 5cm — if real pose is within this of assembly pose, snap
+
+            stage = omni.usd.get_context().get_stage()
+            updated = []
+            snapped = []
+            for name, pose in real_poses.items():
+                prim_path = f"/World/Objects/{name}/{name}/{name}"
+                prim = stage.GetPrimAtPath(prim_path)
+                if not prim.IsValid():
+                    print(f"[SyncRealPoses] Prim not found: {prim_path}")
+                    continue
+
+                # Check if close to assembly pose — snap if so
+                if name in assembled_world_poses:
+                    ap = assembled_world_poses[name]['position']
+                    rp = pose['position']
+                    dist = math.sqrt(sum((a - b) ** 2 for a, b in zip(ap, rp)))
+                    if dist < SNAP_THRESHOLD:
+                        self._set_obj_prim_pose(prim_path, ap, assembled_world_poses[name]['quat_wxyz'])
+                        snapped.append(name)
+                        updated.append(name)
+                        continue
+
+                self._set_obj_prim_pose(prim_path, pose['position'], pose['quat_wxyz'])
+                updated.append(name)
+
+            print(f"[SyncRealPoses] Updated {len(updated)} objects: {updated}")
+            if snapped:
+                print(f"[SyncRealPoses] Snapped to assembly pose: {snapped}")
+        finally:
+            node.destroy_node()
+            rclpy.shutdown()
+
+    def add_aruco_markers(self, objects_path="/World/Objects"):
+        """Add ArUco marker meshes to all objects that have matching aruco JSON files."""
+        import omni.kit.commands
+        from pxr import Sdf, UsdShade, UsdGeom, Gf
+
+        ARUCO_DIR = os.path.expanduser("~/Projects/aruco-grasp-annotator/data/aruco")
+        ARUCO_PNG_DIR = os.path.join(ARUCO_DIR, "pngs")
+
+        stage = omni.usd.get_context().get_stage()
+        objects_prim = stage.GetPrimAtPath(objects_path)
+        if not objects_prim or not objects_prim.IsValid():
+            print(f"Error: {objects_path} not found")
+            return
+
+        total_added = 0
+        for child in objects_prim.GetChildren():
+            obj_name = child.GetName()
+            aruco_json = os.path.join(ARUCO_DIR, f"{obj_name}_aruco.json")
+            if not os.path.exists(aruco_json):
+                continue
+
+            with open(aruco_json, 'r') as f:
+                aruco_data = json.load(f)
+
+            # Find the mesh prim (e.g. /World/Objects/base1/base1/base1)
+            base_prim_path = f"{objects_path}/{obj_name}/{obj_name}/{obj_name}"
+            base_prim = stage.GetPrimAtPath(base_prim_path)
+            if not base_prim or not base_prim.IsValid():
+                print(f"Warning: mesh prim not found at {base_prim_path}, skipping")
+                continue
+
+            aruco_dict = aruco_data.get('aruco_dictionary', 'DICT_4X4_50')
+            dict_name = aruco_dict.replace('DICT_', '').split('_')[0].lower()
+            marker_size = aruco_data.get('size', 0.021)
+
+            for marker in aruco_data['markers']:
+                aruco_id = marker['aruco_id']
+                position = marker['T_object_to_marker']['position']
+                rotation = marker['T_object_to_marker']['rotation']
+
+                # Compensate positions for parent prim's scale
+                parent_scale_attr = base_prim.GetAttribute("xformOp:scale")
+                inv_scale = 1.0 / (parent_scale_attr.Get()[0] if parent_scale_attr and parent_scale_attr.Get() else 1.0)
+                scaled_x = position['x'] * inv_scale
+                scaled_y = position['y'] * inv_scale
+                scaled_z = position['z'] * inv_scale
+
+                cube_prim_path = f"{base_prim_path}/aruco_{aruco_id:03d}"
+
+                # Remove existing marker and recreate
+                if stage.GetPrimAtPath(cube_prim_path):
+                    stage.RemovePrim(cube_prim_path)
+
+                # Create cube mesh
+                omni.kit.commands.execute("CreateMeshPrimCommand",
+                                          prim_path=cube_prim_path,
+                                          prim_type="Cube")
+
+                cube_prim = stage.GetPrimAtPath(cube_prim_path)
+                if not cube_prim:
+                    print(f"Error: failed to create cube at {cube_prim_path}")
+                    continue
+
+                # Set transforms using existing attributes created by CreateMeshPrimCommand
+                cube_prim.GetAttribute("xformOp:translate").Set(Gf.Vec3d(scaled_x, scaled_y, scaled_z))
+
+                rotation_matrix = Gf.Matrix3d(
+                    Gf.Rotation(Gf.Vec3d(1, 0, 0), rotation['roll'] * 180.0 / 3.14159) *
+                    Gf.Rotation(Gf.Vec3d(0, 1, 0), rotation['pitch'] * 180.0 / 3.14159) *
+                    Gf.Rotation(Gf.Vec3d(0, 0, 1), rotation['yaw'] * 180.0 / 3.14159))
+                quat = rotation_matrix.ExtractRotation().GetQuat()
+                cube_prim.GetAttribute("xformOp:orient").Set(quat)
+
+                # Compensate for parent prim's scale (e.g. 0.01 from Fusion360 export)
+                parent_scale_attr = base_prim.GetAttribute("xformOp:scale")
+                parent_scale = parent_scale_attr.Get()[0] if parent_scale_attr and parent_scale_attr.Get() else 1.0
+                compensated = marker_size / parent_scale
+                cube_prim.GetAttribute("xformOp:scale").Set(Gf.Vec3d(compensated, compensated, 0.0001 / parent_scale))
+
+                # Create OmniPBR material, then move it into /World/Objects/Looks
+                looks_path = f"{objects_path}/Looks"
+                if not stage.GetPrimAtPath(looks_path):
+                    UsdGeom.Scope.Define(stage, looks_path)
+                out = []
+                omni.kit.commands.execute("CreateAndBindMdlMaterialFromLibrary",
+                                          mdl_name="OmniPBR.mdl",
+                                          mtl_name="OmniPBR",
+                                          mtl_created_list=out,
+                                          select_new_prim=False)
+                if not out:
+                    print(f"Error: failed to create material for marker {aruco_id}")
+                    continue
+
+                # Move material from /World/Looks/ to /World/Objects/Looks/
+                created_path = out[0]
+                target_mat_path = f"{looks_path}/aruco_{obj_name}_{aruco_id:03d}"
+                omni.kit.commands.execute("MovePrim",
+                                          path_from=created_path,
+                                          path_to=target_mat_path)
+
+                # Assign aruco texture
+                aruco_png = os.path.join(ARUCO_PNG_DIR, f"aruco_marker_{dict_name}_{aruco_id:03d}.png")
+                if os.path.exists(aruco_png):
+                    shader_prim = stage.GetPrimAtPath(target_mat_path + "/Shader")
+                    if shader_prim:
+                        texture_attr = shader_prim.CreateAttribute('inputs:diffuse_texture', Sdf.ValueTypeNames.Asset)
+                        texture_attr.Set(Sdf.AssetPath(f"file:{aruco_png}"))
+
+                # Bind material to cube
+                omni.kit.commands.execute("BindMaterial",
+                                          prim_path=cube_prim_path,
+                                          material_path=target_mat_path)
+
+                total_added += 1
+
+            print(f"Added {len(aruco_data['markers'])} ArUco markers to {obj_name}")
+
+        print(f"=== ArUco markers complete: {total_added} markers added ===")
+
     def delete_objects(self, folder_path="/World/Objects"):
         """Delete the Objects folder from the scene. Stops simulation first to avoid tensor view crash."""
         timeline = omni.timeline.get_timeline_interface()
@@ -1854,6 +2208,11 @@ class DigitalTwin(omni.ext.IExt):
                         physx_rb_api = PhysxSchema.PhysxRigidBodyAPI.Apply(mesh_prim)
                         physx_rb_api.CreateAngularDampingAttr().Set(angular_damping)
                         print(f"  Set angularDamping={angular_damping} on {mesh_path} [{category}]")
+                        # Apply linear damping (pegs only)
+                        if "linear_damping" in prim_params:
+                            linear_damping = prim_params["linear_damping"]
+                            physx_rb_api.CreateLinearDampingAttr().Set(linear_damping)
+                            print(f"  Set linearDamping={linear_damping} on {mesh_path} [{category}]")
                     else:
                         print(f"  Warning: Mesh prim not found at {mesh_path}")
 
@@ -2722,6 +3081,16 @@ class DigitalTwin(omni.ext.IExt):
                 "message": f"Failed to setup pose publisher: {str(e)}",
                 "traceback": traceback.format_exc()
             }
+
+    def _cmd_sync_real_poses(self) -> Dict[str, Any]:
+        """MCP handler for syncing real object poses to sim."""
+        try:
+            self.sync_real_poses()
+            return {"status": "success", "message": "Synced real poses to sim"}
+        except Exception as e:
+            carb.log_error(f"Error in sync_real_poses: {e}")
+            traceback.print_exc()
+            return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
 
     def on_shutdown(self):
         """Clean shutdown"""
