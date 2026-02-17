@@ -3,6 +3,7 @@ import omni.ui as ui
 import asyncio
 import numpy as np
 import os
+import sys
 import threading
 import glob
 import omni.client
@@ -15,6 +16,7 @@ import traceback
 from typing import Dict, Any
 
 from isaacsim.core.api.world import World
+from isaacsim.gui.components.element_wrappers import ScrollingWindow
 
 # MCP socket server port - change this for different extensions
 MCP_SERVER_PORT = 8766
@@ -152,6 +154,35 @@ import omni.usd
 from pxr import UsdGeom, Gf, Sdf, Usd, UsdPhysics, UsdShade, PhysxSchema
 from scipy.spatial.transform import Rotation as R
 
+
+class LogRedirector:
+    """Redirects stdout/stderr to both the original stream and a UI callback."""
+    def __init__(self, original, callback, throttle_seconds=0.0):
+        self._original = original
+        self._callback = callback
+        self._throttle = throttle_seconds
+        self._last_msgs = {}  # dedup cache: msg -> timestamp
+
+    def write(self, text):
+        self._original.write(text)
+        stripped = text.strip()
+        if not stripped:
+            return
+        if self._throttle > 0:
+            import time as _t
+            now = _t.monotonic()
+            if stripped in self._last_msgs and now - self._last_msgs[stripped] < self._throttle:
+                return
+            self._last_msgs[stripped] = now
+            if len(self._last_msgs) > 200:
+                cutoff = now - self._throttle * 3
+                self._last_msgs = {k: v for k, v in self._last_msgs.items() if v > cutoff}
+        self._callback(text.rstrip("\n"))
+
+    def flush(self):
+        self._original.flush()
+
+
 class DigitalTwin(omni.ext.IExt):
     def on_startup(self, ext_id):
         print("[DigitalTwin] Digital Twin startup")
@@ -254,7 +285,7 @@ class DigitalTwin(omni.ext.IExt):
         print("ROS2 bridge will be initialized by Isaac Sim when needed")
 
         # Create the window UI
-        self._window = ui.Window("UR5e Digital Twin", width=300, height=800)  # Increased height
+        self._window = ScrollingWindow(title="UR5e Digital Twin", width=300, height=800)
         with self._window.frame:
             with ui.VStack(spacing=5):
                 self.create_ui()
@@ -264,9 +295,8 @@ class DigitalTwin(omni.ext.IExt):
 
     def create_ui(self):
         with ui.VStack(spacing=5):
-            with ui.CollapsableFrame(title="Setup", collapsed=False, height=0):
+            with ui.CollapsableFrame(title="Simulation Setup", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
-                    ui.Label("Simulation Setup", alignment=ui.Alignment.LEFT)
                     with ui.HStack(spacing=5):
                         ui.Button("Load Scene", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_scene()))
                         self._viewport_toggle_btn = ui.Button("Disable Viewport", width=140, height=35, clicked_fn=self._toggle_viewport_rendering)
@@ -274,35 +304,28 @@ class DigitalTwin(omni.ext.IExt):
 
             with ui.CollapsableFrame(title="UR5e Control", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
-                    ui.Label("UR5e Robot Control", alignment=ui.Alignment.LEFT)
                     with ui.HStack(spacing=5):
-                        ui.Button("Load UR5e", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_ur5e()))
+                        ui.Button("Import UR5e", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_ur5e()))
                         ui.Button("Setup UR5e Action Graph", width=200, height=35, clicked_fn=lambda: asyncio.ensure_future(self.setup_action_graph()))
                         ui.Button("Setup UR5e Force Publisher", width=200, height=35, clicked_fn=self.setup_force_publish_action_graph)
 
             with ui.CollapsableFrame(title="RG2 Gripper", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
-                    ui.Label("RG2 Gripper Control", alignment=ui.Alignment.LEFT)
                     with ui.HStack(spacing=5):
                         ui.Button("Import RG2 Gripper", width=150, height=35, clicked_fn=self.import_rg2_gripper)
                         ui.Button("Attach Gripper to UR5e", width=180, height=35, clicked_fn=self.attach_rg2_to_ur5e)
-                    
-                    with ui.HStack(spacing=5):
                         ui.Button("Setup Gripper Action Graph", width=200, height=35, clicked_fn=self.setup_gripper_action_graph)
 
             # Intel RealSense Camera
             with ui.CollapsableFrame(title="Intel RealSense Camera", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
-                    ui.Label("Intel RealSense D455 Camera", alignment=ui.Alignment.LEFT)
                     with ui.HStack(spacing=5):
                         ui.Button("Import RealSense Camera", width=170, height=35, clicked_fn=self.import_realsense_camera)
                         ui.Button("Attach Camera to UR5e", width=160, height=35, clicked_fn=self.attach_camera_to_ur5e)
-                    
-                    with ui.HStack(spacing=5):
                         ui.Button("Setup Camera Action Graph", width=200, height=35, clicked_fn=self.setup_camera_action_graph)
 
             # NEW SECTION: Additional Camera
-            with ui.CollapsableFrame(title="Additional Camera", collapsed=False, height=0):
+            with ui.CollapsableFrame(title="Additional Camera", collapsed=True, height=0):
                 with ui.VStack(spacing=5, height=0):
                     ui.Label("Camera Configuration", alignment=ui.Alignment.LEFT)
                     
@@ -341,35 +364,200 @@ class DigitalTwin(omni.ext.IExt):
 
             with ui.CollapsableFrame(title="Objects", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
-                    with ui.HStack(spacing=5):
-                        ui.Label("Assembly:", alignment=ui.Alignment.LEFT, width=100)
-                        assembly_names = list(ASSEMBLIES.keys())
-                        self._assembly_combo = ui.ComboBox(0, *assembly_names, width=150)
-                        self._assembly_combo.model.add_item_changed_fn(
-                            lambda m, _: self._on_assembly_changed(m)
+                    with ui.CollapsableFrame(title="Import", name="subFrame", collapsed=False, height=0):
+                        with ui.VStack(spacing=5, height=0):
+                            with ui.HStack(spacing=5):
+                                ui.Label("Assembly:", alignment=ui.Alignment.LEFT, width=100)
+                                assembly_names = list(ASSEMBLIES.keys())
+                                self._assembly_combo = ui.ComboBox(0, *assembly_names, width=150)
+                                self._assembly_combo.model.add_item_changed_fn(
+                                    lambda m, _: self._on_assembly_changed(m)
+                                )
+                            with ui.HStack(spacing=5):
+                                ui.Button("Add Objects", width=150, height=35, clicked_fn=self.add_objects)
+                                ui.Button("Add ArUco Markers", width=180, height=35, clicked_fn=self.add_aruco_markers)
+                            with ui.HStack(spacing=5):
+                                ui.Button("Setup Pose Publisher", width=180, height=35, clicked_fn=self.create_pose_publisher)
+                                ui.Button("Delete Objects", width=150, height=35, clicked_fn=self.delete_objects)
+                    with ui.CollapsableFrame(title="Scene State", name="subFrame", collapsed=True, height=0):
+                        with ui.VStack(spacing=5, height=0):
+                            with ui.HStack(spacing=5):
+                                ui.Button("Sync Real Poses", width=180, height=35, clicked_fn=self.sync_real_poses)
+                            with ui.HStack(spacing=5):
+                                ui.Button("Assemble", width=120, height=35, clicked_fn=self.assemble_objects)
+                                ui.Button("Disassemble", width=120, height=35, clicked_fn=self.disassemble_objects)
+                                ui.Button("Randomize Poses", width=150, height=35, clicked_fn=self.randomize_object_poses)
+                            with ui.HStack(spacing=5):
+                                ui.Button("Save State", width=120, height=35,
+                                    clicked_fn=lambda: self._cmd_save_scene_state())
+                                ui.Button("Restore State", width=120, height=35,
+                                    clicked_fn=lambda: self._cmd_restore_scene_state())
+                                ui.Button("Clear State", width=120, height=35,
+                                    clicked_fn=lambda: self._cmd_clear_scene_state())
+
+            with ui.CollapsableFrame(title="Logs", collapsed=True, height=0):
+                with ui.VStack(spacing=3, height=0):
+                    self._log_tab_style = {
+                        "RadioButton": {
+                            "margin": 2, "border_radius": 2, "font_size": 16,
+                            "background_color": 0xFF212121, "color": 0xFF444444,
+                        },
+                        "RadioButton.Label": {"font_size": 16, "color": 0xFF777777},
+                        "RadioButton:checked": {"background_color": 0xFF3A3A3A, "color": 0xFF222222},
+                        "RadioButton.Label:checked": {"color": 0xFFCCCCCC},
+                    }
+                    self._log_tab_collection = ui.RadioCollection()
+                    with ui.HStack(spacing=3, height=30, style=self._log_tab_style):
+                        ui.RadioButton(text="Extension", width=80,
+                            radio_collection=self._log_tab_collection,
+                            clicked_fn=lambda: self._switch_log_tab("extension"))
+                        ui.RadioButton(text="System", width=80,
+                            radio_collection=self._log_tab_collection,
+                            clicked_fn=lambda: self._switch_log_tab("system"))
+                    self._log_stack = ui.ZStack(height=100)
+                    with self._log_stack:
+                        self._ext_log_scroll = ui.ScrollingFrame(
+                            horizontal_scrollbar_policy=ui.ScrollBarPolicy.SCROLLBAR_AS_NEEDED,
+                            vertical_scrollbar_policy=ui.ScrollBarPolicy.SCROLLBAR_ALWAYS_ON,
+                            style={"background_color": 0xFF24211F},
                         )
+                        with self._ext_log_scroll:
+                            self._ext_log_vstack = ui.VStack(spacing=0)
+                        self._sys_log_scroll = ui.ScrollingFrame(
+                            horizontal_scrollbar_policy=ui.ScrollBarPolicy.SCROLLBAR_AS_NEEDED,
+                            vertical_scrollbar_policy=ui.ScrollBarPolicy.SCROLLBAR_ALWAYS_ON,
+                            visible=False,
+                            style={"background_color": 0xFF24211F},
+                        )
+                        with self._sys_log_scroll:
+                            self._sys_log_vstack = ui.VStack(spacing=0)
                     with ui.HStack(spacing=5):
-                        ui.Button("Add Objects", width=150, height=35, clicked_fn=self.add_objects)
-                        ui.Button("Setup Pose Publisher", width=180, height=35, clicked_fn=self.create_pose_publisher)
-                        ui.Button("Delete Objects", width=150, height=35, clicked_fn=self.delete_objects)
-                    with ui.HStack(spacing=5):
-                        ui.Button("Assemble", width=120, height=35, clicked_fn=self.assemble_objects)
-                        ui.Button("Disassemble", width=120, height=35, clicked_fn=self.disassemble_objects)
-                        ui.Button("Randomize Poses", width=150, height=35, clicked_fn=self.randomize_object_poses)
-                    with ui.HStack(spacing=5):
-                        ui.Button("Add ArUco Markers", width=180, height=35, clicked_fn=self.add_aruco_markers)
-                        ui.Button("Sync Real Poses", width=180, height=35, clicked_fn=self.sync_real_poses)
-                    ui.Label("Scene State", alignment=ui.Alignment.LEFT)
-                    with ui.HStack(spacing=5):
-                        ui.Button("Save State", width=120, height=35,
-                            clicked_fn=lambda: self._cmd_save_scene_state())
-                        ui.Button("Restore State", width=120, height=35,
-                            clicked_fn=lambda: self._cmd_restore_scene_state())
-                        ui.Button("Clear State", width=120, height=35,
-                            clicked_fn=lambda: self._cmd_clear_scene_state())
+                        ui.Button("Copy Logs", width=120, height=30, clicked_fn=self._copy_logs)
+                        ui.Button("Clear Logs", width=120, height=30, clicked_fn=self._clear_logs)
+
+        self._active_log_tab = "extension"
+        self._ext_log_lines = []
+        self._sys_log_lines = []
+        self._setup_log_redirect()
 
         # Re-subscribe physics callbacks if action graphs already exist (e.g. after hot-reload)
         self._resubscribe_physics_callbacks()
+
+    def _setup_log_redirect(self):
+        # Unwrap any leftover redirector from a previous failed startup
+        if isinstance(sys.stdout, LogRedirector):
+            sys.stdout = sys.stdout._original
+        if isinstance(sys.stderr, LogRedirector):
+            sys.stderr = sys.stderr._original
+        self._orig_stdout = sys.stdout
+        self._orig_stderr = sys.stderr
+        sys.stdout = LogRedirector(self._orig_stdout, self._append_ext_log)
+        sys.stderr = LogRedirector(self._orig_stderr, lambda t: self._append_ext_log(f"[ERROR] {t}"), throttle_seconds=2.0)
+        logging = carb.logging.acquire_logging()
+        self._carb_log_sub = logging.add_logger(self._on_carb_log)
+
+    def _on_carb_log(self, source, level, filename, linenum, msg):
+        # carb levels: VERBOSE=-2, INFO=-1, WARN=0, ERROR=1, FATAL=2
+        import time as _t
+        now = _t.monotonic()
+        # Throttle: skip duplicate messages within 2 seconds
+        key = (source, level, msg)
+        last = getattr(self, '_carb_log_last', {})
+        if key in last and now - last[key] < 2.0:
+            return
+        last[key] = now
+        # Evict stale entries periodically
+        if len(last) > 200:
+            cutoff = now - 5.0
+            last = {k: v for k, v in last.items() if v > cutoff}
+        self._carb_log_last = last
+
+        if level >= carb.logging.LEVEL_ERROR:
+            self._append_sys_log(f"[ERROR] [{source}] {msg}")
+        elif level == carb.logging.LEVEL_WARN:
+            self._append_sys_log(f"[WARN] [{source}] {msg}")
+        # elif level == carb.logging.LEVEL_INFO:
+        #     self._append_sys_log(f"[INFO] [{source}] {msg}")
+        # else:
+        #     self._append_sys_log(f"[VERBOSE] [{source}] {msg}")
+
+    def _teardown_log_redirect(self):
+        sys.stdout = self._orig_stdout
+        sys.stderr = self._orig_stderr
+        if hasattr(self, "_carb_log_sub") and self._carb_log_sub is not None:
+            logging = carb.logging.acquire_logging()
+            logging.remove_logger(self._carb_log_sub)
+            self._carb_log_sub = None
+
+    def _log_color(self, text):
+        # Matches Isaac Sim script editor colors (0xAABBGGRR format)
+        if "[ERROR]" in text or "[FATAL]" in text:
+            return 0xFFAAB1F6  # #F6B1AA - light coral
+        elif "[WARN]" in text:
+            return 0xFF4ACBDF  # #DFCB4A - yellow/gold
+        # elif "[INFO]" in text:
+        #     return 0xFFEBBA79  # #79BAEB - light blue
+        # elif "[VERBOSE]" in text:
+        #     return 0xFFBABABA  # #BABABA - gray
+        return 0xFFFFFFFF  # white
+
+    def _add_log_label(self, vstack, scroll, text):
+        with vstack:
+            ui.Label(text, alignment=ui.Alignment.LEFT_TOP, word_wrap=True,
+                     style={"color": self._log_color(text), "font_size": 13, "margin": 0},
+                     height=0)
+        scroll.scroll_y = scroll.scroll_y_max + 100
+
+    def _rebuild_log_vstack(self, vstack, lines):
+        vstack.clear()
+        with vstack:
+            for line in lines:
+                ui.Label(line, alignment=ui.Alignment.LEFT_TOP, word_wrap=True,
+                         style={"color": self._log_color(line), "font_size": 13, "margin": 0},
+                         height=0)
+
+    def _append_ext_log(self, text):
+        self._ext_log_lines.append(text)
+        if len(self._ext_log_lines) > 500:
+            self._ext_log_lines = self._ext_log_lines[-500:]
+            self._rebuild_log_vstack(self._ext_log_vstack, self._ext_log_lines)
+            return
+        if hasattr(self, "_ext_log_vstack") and self._ext_log_vstack:
+            self._add_log_label(self._ext_log_vstack, self._ext_log_scroll, text)
+
+    def _append_sys_log(self, text):
+        self._sys_log_lines.append(text)
+        if len(self._sys_log_lines) > 500:
+            self._sys_log_lines = self._sys_log_lines[-500:]
+            self._rebuild_log_vstack(self._sys_log_vstack, self._sys_log_lines)
+            return
+        if hasattr(self, "_sys_log_vstack") and self._sys_log_vstack:
+            self._add_log_label(self._sys_log_vstack, self._sys_log_scroll, text)
+
+    def _switch_log_tab(self, tab):
+        self._active_log_tab = tab
+        is_ext = tab == "extension"
+        self._ext_log_scroll.visible = is_ext
+        self._sys_log_scroll.visible = not is_ext
+
+    def _copy_logs(self):
+        lines = self._ext_log_lines if self._active_log_tab == "extension" else self._sys_log_lines
+        try:
+            import subprocess
+            text = "\n".join(lines)
+            proc = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE)
+            proc.communicate(text.encode())
+        except Exception:
+            import omni.kit.clipboard
+            omni.kit.clipboard.copy("\n".join(lines))
+
+    def _clear_logs(self):
+        if self._active_log_tab == "extension":
+            self._ext_log_lines.clear()
+            self._ext_log_vstack.clear()
+        else:
+            self._sys_log_lines.clear()
+            self._sys_log_vstack.clear()
 
     def _resubscribe_physics_callbacks(self):
         """Re-subscribe physics callbacks for graphs that survived a hot-reload."""
@@ -551,6 +739,12 @@ class DigitalTwin(omni.ext.IExt):
 
         print("Setting up ROS 2 Action Graph...")
 
+        # Check that UR5e exists before creating graph
+        stage = omni.usd.get_context().get_stage()
+        if not stage.GetPrimAtPath("/World/UR5e"):
+            print("Error: UR5e not found at /World/UR5e. Load UR5e first.")
+            return
+
         # Ensure extensions are enabled
         enable_extension("isaacsim.ros2.bridge")
         enable_extension("isaacsim.core.nodes")
@@ -559,7 +753,6 @@ class DigitalTwin(omni.ext.IExt):
         graph_path = "/Graph/ActionGraph_UR5e"
 
         # Check if graph already exists
-        stage = omni.usd.get_context().get_stage()
         if stage.GetPrimAtPath(graph_path):
             print(f"Action Graph already exists at {graph_path}, skipping creation.")
             return
@@ -616,6 +809,12 @@ class DigitalTwin(omni.ext.IExt):
         import omni.physx
 
         print("Setting up Gripper Action Graph...")
+
+        # Check that RG2 gripper exists before creating graph
+        stage_check = omni.usd.get_context().get_stage()
+        if not stage_check.GetPrimAtPath("/World/RG2_Gripper"):
+            print("Error: RG2 gripper not found at /World/RG2_Gripper. Import and attach gripper first.")
+            return
 
         # Clean up any previous physics callback
         self._stop_gripper_physics()
@@ -688,30 +887,12 @@ class DigitalTwin(omni.ext.IExt):
         from isaacsim.core.utils.types import ArticulationActions
 
         try:
-            # Warmup: skip physics steps after a stop/play to let engine settle
-            if self._gripper_warmup > 0:
-                self._gripper_warmup -= 1
+            artic = self._lazy_init_articulation(
+                '_gripper_articulation', '/World/RG2_Gripper',
+                'gripper_ctrl', '_gripper_warmup')
+            if artic is None:
                 return
-
-            # Lazy-init ArticulationView on first physics step
-            if self._gripper_articulation is None:
-                try:
-                    import time as _t
-                    self._gripper_articulation = ArticulationView(
-                        prim_paths_expr="/World/RG2_Gripper",
-                        name=f"gripper_ctrl_{int(_t.time()*1000)}"
-                    )
-                    self._gripper_articulation.initialize()
-                except Exception:
-                    self._gripper_articulation = None
-                    return  # Physics not ready yet, try next step
-
-            if not self._gripper_articulation.is_physics_handle_valid():
-                # Handle went stale (e.g. after timeline stop/play cycle).
-                # Discard and wait for physics engine to settle before re-init.
-                self._gripper_articulation = None
-                self._gripper_warmup = 30  # ~0.25s at 120 Hz
-                return
+            self._gripper_articulation = artic
 
             # --- Read command from ROS2 subscriber ---
             try:
@@ -756,14 +937,49 @@ class DigitalTwin(omni.ext.IExt):
         except Exception as e:
             print(f"[Gripper callback] {e}")
 
+    def _stop_physics_callback(self, sub_attr, artic_attr, active_attr, warmup_attr):
+        """Stop a physics callback and clean up its resources."""
+        if hasattr(self, sub_attr) and getattr(self, sub_attr) is not None:
+            setattr(self, sub_attr, None)
+        if hasattr(self, artic_attr):
+            setattr(self, artic_attr, None)
+        setattr(self, active_attr, False)
+        setattr(self, warmup_attr, 0)
+
+    def _lazy_init_articulation(self, artic_attr, prim_path, name_prefix, warmup_attr):
+        """Lazy-init an ArticulationView, returning it or None if not ready.
+
+        Also handles warmup countdown and stale handle detection.
+        Returns the articulation if ready, None otherwise.
+        """
+        warmup = getattr(self, warmup_attr)
+        if warmup > 0:
+            setattr(self, warmup_attr, warmup - 1)
+            return None
+
+        artic = getattr(self, artic_attr)
+        if artic is None:
+            try:
+                import time as _t
+                from isaacsim.core.prims import Articulation as _AV
+                artic = _AV(prim_paths_expr=prim_path, name=f"{name_prefix}_{int(_t.time()*1000)}")
+                artic.initialize()
+                setattr(self, artic_attr, artic)
+            except Exception:
+                setattr(self, artic_attr, None)
+                return None
+
+        if not artic.is_physics_handle_valid():
+            setattr(self, artic_attr, None)
+            setattr(self, warmup_attr, 30)
+            return None
+
+        return artic
+
     def _stop_gripper_physics(self):
         """Stop the gripper physics callback and clean up resources."""
-        if hasattr(self, '_gripper_physx_sub') and self._gripper_physx_sub is not None:
-            self._gripper_physx_sub = None
-        if hasattr(self, '_gripper_articulation'):
-            self._gripper_articulation = None
-        self._gripper_publish_active = False
-        self._gripper_warmup = 0
+        self._stop_physics_callback('_gripper_physx_sub', '_gripper_articulation',
+                                    '_gripper_publish_active', '_gripper_warmup')
 
     def setup_force_publish_action_graph(self):
         """Setup force publishing as geometry_msgs/WrenchStamped on /force_torque_sensor_broadcaster/wrench_sim.
@@ -852,31 +1068,12 @@ class DigitalTwin(omni.ext.IExt):
         (wrist joint) as geometry_msgs/WrenchStamped.
         """
         try:
-            # Warmup: skip physics steps after a stop/play to let engine settle
-            if self._force_warmup > 0:
-                self._force_warmup -= 1
+            artic = self._lazy_init_articulation(
+                '_effort_articulation', '/World/UR5e',
+                'force_pub_ctrl', '_force_warmup')
+            if artic is None:
                 return
-
-            # Lazy-init ArticulationView (or re-init after stop/play cycle)
-            if self._effort_articulation is None:
-                try:
-                    import time as _t
-                    from isaacsim.core.prims import Articulation as _AV
-                    self._effort_articulation = _AV(
-                        prim_paths_expr="/World/UR5e",
-                        name=f"force_pub_ctrl_{int(_t.time()*1000)}"
-                    )
-                    self._effort_articulation.initialize()
-                except Exception:
-                    self._effort_articulation = None
-                    return  # Physics not ready yet
-
-            if not self._effort_articulation.is_physics_handle_valid():
-                # Handle went stale (e.g. after timeline stop/play cycle).
-                # Discard and wait for physics engine to settle before re-init.
-                self._effort_articulation = None
-                self._force_warmup = 30  # ~0.25s at 120 Hz
-                return
+            self._effort_articulation = artic
 
             # get_measured_joint_forces returns shape (num_articulations, num_joints, 6)
             # where 6 = [Fx, Fy, Fz, Tx, Ty, Tz]
@@ -896,12 +1093,8 @@ class DigitalTwin(omni.ext.IExt):
 
     def _stop_force_publish(self):
         """Stop the physics-rate force publisher and clean up resources."""
-        if hasattr(self, '_force_physx_sub') and self._force_physx_sub is not None:
-            self._force_physx_sub = None
-        if hasattr(self, '_effort_articulation'):
-            self._effort_articulation = None
-        self._force_publish_active = False
-        self._force_warmup = 0
+        self._stop_physics_callback('_force_physx_sub', '_effort_articulation',
+                                    '_force_publish_active', '_force_warmup')
 
     def import_rg2_gripper(self):
         from isaacsim.core.utils.stage import add_reference_to_stage
@@ -969,8 +1162,11 @@ class DigitalTwin(omni.ext.IExt):
         rg2_prim = stage.GetPrimAtPath(rg2_path)
         joint_prim = stage.GetPrimAtPath(joint_path)
 
-        if not ur5e_prim or not rg2_prim:
-            print("Error: UR5e or RG2 gripper prim not found.")
+        if not ur5e_prim or not ur5e_prim.IsValid():
+            print("Error: UR5e gripper prim not found at /World/UR5e/Gripper. Load UR5e first.")
+            return
+        if not rg2_prim or not rg2_prim.IsValid():
+            print("Error: RG2 gripper not found at /World/RG2_Gripper. Import gripper first.")
             return
 
         # Copy transforms from UR5e gripper to RG2
@@ -1058,13 +1254,27 @@ class DigitalTwin(omni.ext.IExt):
         import omni.kit.commands
         import omni.usd
         from pxr import Gf, Usd, UsdPhysics
-        
+
+        stage = omni.usd.get_context().get_stage()
+
+        # Check camera prim exists
+        if not stage.GetPrimAtPath("/World/rsd455").IsValid():
+            print("[ERROR] Camera prim /World/rsd455 not found — import the RealSense camera first")
+            return
+
+        # Check UR5e wrist link exists
+        if not stage.GetPrimAtPath("/World/UR5e/wrist_3_link").IsValid():
+            print("[ERROR] /World/UR5e/wrist_3_link not found — import the UR5e first")
+            return
+
         # Move the prim
-        omni.kit.commands.execute('MovePrim',
+        result = omni.kit.commands.execute('MovePrim',
                                  path_from="/World/rsd455",
                                  path_to="/World/UR5e/wrist_3_link/rsd455")
-        
-        # TODO: Fix prim position of /World/UR5e/wrist_3_link/rsd455/RSD455/Camera_OmniVision_OV9782_Color
+        if not result:
+            print("[ERROR] Failed to move camera prim to wrist_3_link")
+            return
+
         # Set transform properties
         omni.kit.commands.execute('ChangeProperty',
                                  prop_path="/World/UR5e/wrist_3_link/rsd455.xformOp:translate",
@@ -1076,8 +1286,6 @@ class DigitalTwin(omni.ext.IExt):
                                  prev=None)
 
         # Remove RigidBodyAPI only from the RSD455 prim to fix nested rigid body error.
-        # Only target this specific prim — other descendants may be needed.
-        stage = omni.usd.get_context().get_stage()
         rsd455_prim = stage.GetPrimAtPath("/World/UR5e/wrist_3_link/rsd455/RSD455")
         if rsd455_prim.IsValid() and rsd455_prim.HasAPI(UsdPhysics.RigidBodyAPI):
             UsdPhysics.RigidBodyAPI(rsd455_prim).GetRigidBodyEnabledAttr().Set(False)
@@ -1089,6 +1297,14 @@ class DigitalTwin(omni.ext.IExt):
     def setup_camera_action_graph(self):
         """Create ActionGraph for camera ROS2 publishing"""
         import yaml
+
+        CAMERA_PRIM = "/World/UR5e/wrist_3_link/rsd455/RSD455/Camera_OmniVision_OV9782_Color"
+
+        # Check that camera prim exists
+        stage = omni.usd.get_context().get_stage()
+        if not stage.GetPrimAtPath(CAMERA_PRIM):
+            print(f"Error: Camera prim not found at {CAMERA_PRIM}. Attach camera to UR5e first.")
+            return
 
         # Load camera config from robot_config.yaml
         config_path = os.path.expanduser(
@@ -1103,7 +1319,6 @@ class DigitalTwin(omni.ext.IExt):
             print(f"Warning: {config_path} not found, using defaults")
 
         # Configuration from yaml (with fallbacks)
-        CAMERA_PRIM = "/World/UR5e/wrist_3_link/rsd455/RSD455/Camera_OmniVision_OV9782_Color"
         IMAGE_WIDTH = cam_cfg.get("camera_width", 1280)
         IMAGE_HEIGHT = cam_cfg.get("camera_height", 720)
         ROS2_TOPIC = "intel_camera_rgb_sim"
@@ -1111,7 +1326,6 @@ class DigitalTwin(omni.ext.IExt):
         graph_path = "/Graph/ActionGraph_Camera"
 
         # Skip if already created
-        stage = omni.usd.get_context().get_stage()
         if stage.GetPrimAtPath(graph_path):
             print(f"ActionGraph already exists at {graph_path}, skipping creation.")
             return
@@ -1350,13 +1564,18 @@ class DigitalTwin(omni.ext.IExt):
         resolutions = [(640, 480), (1280, 720), (1920, 1080)]
         width, height = resolutions[resolution_index]
 
+        stage = omni.usd.get_context().get_stage()
+
         if is_workspace:
-            self._create_camera_actiongraph(
-                "/World/workspace_camera",
-                width, height,
-                "workspace_camera",
-                "WorkspaceCamera"
-            )
+            if not stage.GetPrimAtPath("/World/workspace_camera"):
+                print("Error: Workspace camera not found at /World/workspace_camera. Create it first.")
+            else:
+                self._create_camera_actiongraph(
+                    "/World/workspace_camera",
+                    width, height,
+                    "workspace_camera",
+                    "WorkspaceCamera"
+                )
 
         if is_custom:
             # Get custom prim path from text field
@@ -1377,12 +1596,15 @@ class DigitalTwin(omni.ext.IExt):
             # Convert topic name to a valid graph suffix: remove underscores, capitalize words
             graph_suffix = topic_name.replace("_", " ").replace("-", " ").title().replace(" ", "")
 
-            self._create_camera_actiongraph(
-                custom_prim_path,
-                width, height,
-                topic_name,
-                graph_suffix
-            )
+            if not stage.GetPrimAtPath(custom_prim_path):
+                print(f"Error: Camera prim not found at {custom_prim_path}. Create it first.")
+            else:
+                self._create_camera_actiongraph(
+                    custom_prim_path,
+                    width, height,
+                    topic_name,
+                    graph_suffix
+                )
 
     def _create_camera_actiongraph(self, camera_prim, width, height, topic, graph_suffix):
         """Helper method to create camera ActionGraph using og.Controller.edit().
@@ -1598,7 +1820,7 @@ class DigitalTwin(omni.ext.IExt):
         for child in objects_root.GetChildren():
             obj_name = child.GetName()
             if type_map.get(obj_name, 'block') == 'board':
-                child_path = f"{folder_path}/{obj_name}/{obj_name}/{obj_name}"
+                child_path = self._get_prim_path(obj_name, folder_path)
                 child_prim = stage.GetPrimAtPath(child_path)
                 if child_prim and child_prim.IsValid():
                     child_xform = UsdGeom.Xformable(child_prim)
@@ -1613,7 +1835,7 @@ class DigitalTwin(omni.ext.IExt):
             position = component['position']
             rotation = component['rotation']
 
-            prim_path = f"{folder_path}/{name}/{name}/{name}"
+            prim_path = self._get_prim_path(name, folder_path)
             prim = stage.GetPrimAtPath(prim_path)
             if not prim or not prim.IsValid():
                 print(f"Warning: Prim not found at {prim_path}, skipping {name}")
@@ -1659,7 +1881,7 @@ class DigitalTwin(omni.ext.IExt):
             if obj_name.endswith("Material"):
                 continue
 
-            child_path = f"{folder_path}/{obj_name}/{obj_name}/{obj_name}"
+            child_path = self._get_prim_path(obj_name, folder_path)
             child_prim = stage.GetPrimAtPath(child_path)
             if not child_prim or not child_prim.IsValid():
                 print(f"Warning: Prim not found at {child_path}, skipping {obj_name}")
@@ -1712,7 +1934,7 @@ class DigitalTwin(omni.ext.IExt):
         for child in objects_root.GetChildren():
             obj = child.GetName()
             parent_path = f"{folder_path}/{obj}"
-            child_path = f"{folder_path}/{obj}/{obj}/{obj}"
+            child_path = self._get_prim_path(obj, folder_path)
 
             parent_prim = stage.GetPrimAtPath(parent_path)
             child_prim = stage.GetPrimAtPath(child_path)
@@ -1870,7 +2092,7 @@ class DigitalTwin(omni.ext.IExt):
             updated = []
             snapped = []
             for name, pose in real_poses.items():
-                prim_path = f"/World/Objects/{name}/{name}/{name}"
+                prim_path = self._get_prim_path(name)
                 prim = stage.GetPrimAtPath(prim_path)
                 if not prim.IsValid():
                     print(f"[SyncRealPoses] Prim not found: {prim_path}")
@@ -1922,7 +2144,7 @@ class DigitalTwin(omni.ext.IExt):
                 aruco_data = json.load(f)
 
             # Find the mesh prim (e.g. /World/Objects/base1/base1/base1)
-            base_prim_path = f"{objects_path}/{obj_name}/{obj_name}/{obj_name}"
+            base_prim_path = self._get_prim_path(obj_name, objects_path)
             base_prim = stage.GetPrimAtPath(base_prim_path)
             if not base_prim or not base_prim.IsValid():
                 print(f"Warning: mesh prim not found at {base_prim_path}, skipping")
@@ -2203,7 +2425,7 @@ class DigitalTwin(omni.ext.IExt):
                             bound_count += 1
                             print(f"  Bound physics material to collision prim: {desc.GetPath()}")
                     # Set per-category prim settings on the mesh prim: {name}/{name}/{name}
-                    mesh_path = f"{target_path}/{child_name}/{child_name}/{child_name}"
+                    mesh_path = self._get_prim_path(child_name, target_path)
                     mesh_prim = stage.GetPrimAtPath(mesh_path)
                     if mesh_prim and mesh_prim.IsValid():
                         approx = prim_params["collision_approximation"]
@@ -2672,9 +2894,22 @@ class DigitalTwin(omni.ext.IExt):
         os.makedirs(resources_dir, exist_ok=True)
         return os.path.join(resources_dir, "scene_state.json")
 
-    def _get_prim_path(self, object_name: str) -> str:
-        """Get the full prim path for an object name."""
-        return f"/World/Objects/{object_name}/{object_name}/{object_name}"
+    def _get_prim_path(self, object_name: str, folder_path: str = "/World/Objects") -> str:
+        """Get the full nested prim path for an object name (folder/{name}/{name}/{name})."""
+        return f"{folder_path}/{object_name}/{object_name}/{object_name}"
+
+    def _resolve_scene_state_path(self, output_dir=None, json_file_path=None):
+        """Resolve the scene state JSON file path from MCP arguments.
+
+        Updates internal state from output_dir/json_file_path if provided,
+        then returns the resolved path.
+        """
+        if output_dir:
+            self._output_dir = os.path.abspath(output_dir)
+        if json_file_path is not None:
+            self._scene_state_file_path = json_file_path
+            return json_file_path
+        return self._get_scene_state_path()
 
     def _read_prim_pose(self, prim_path: str) -> Dict[str, Any]:
         """Helper method to read pose (position, quaternion, scale) from a prim."""
@@ -2827,15 +3062,7 @@ class DigitalTwin(omni.ext.IExt):
         try:
             from pxr import UsdGeom
 
-            # Update output dir if provided by MCP server
-            if output_dir:
-                self._output_dir = os.path.abspath(output_dir)
-
-            # Store the path if provided by MCP client
-            if json_file_path is not None:
-                self._scene_state_file_path = json_file_path
-            else:
-                json_file_path = self._get_scene_state_path()
+            json_file_path = self._resolve_scene_state_path(output_dir, json_file_path)
 
             stage = omni.usd.get_context().get_stage()
             if not stage:
@@ -2918,15 +3145,7 @@ class DigitalTwin(omni.ext.IExt):
             Dictionary with execution result.
         """
         try:
-            # Update output dir if provided by MCP server
-            if output_dir:
-                self._output_dir = os.path.abspath(output_dir)
-
-            # Store the path if provided by MCP client
-            if json_file_path is not None:
-                self._scene_state_file_path = json_file_path
-            else:
-                json_file_path = self._get_scene_state_path()
+            json_file_path = self._resolve_scene_state_path(output_dir, json_file_path)
 
             if not os.path.exists(json_file_path):
                 return {
@@ -2995,15 +3214,7 @@ class DigitalTwin(omni.ext.IExt):
             Dictionary with execution result.
         """
         try:
-            # Update output dir if provided by MCP server
-            if output_dir:
-                self._output_dir = os.path.abspath(output_dir)
-
-            # Store the path if provided by MCP client
-            if json_file_path is not None:
-                self._scene_state_file_path = json_file_path
-            else:
-                json_file_path = self._get_scene_state_path()
+            json_file_path = self._resolve_scene_state_path(output_dir, json_file_path)
 
             if os.path.exists(json_file_path):
                 os.remove(json_file_path)
@@ -3114,6 +3325,7 @@ class DigitalTwin(omni.ext.IExt):
 
     def on_shutdown(self):
         """Clean shutdown"""
+        self._teardown_log_redirect()
         print("[DigitalTwin] Digital Twin shutdown")
 
         # Stop MCP socket server
