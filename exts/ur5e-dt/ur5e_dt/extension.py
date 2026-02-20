@@ -187,6 +187,7 @@ class DigitalTwin(omni.ext.IExt):
     def on_startup(self, ext_id):
         print("[DigitalTwin] Digital Twin startup")
 
+        self._main_loop = asyncio.get_event_loop()
         self._timeline = omni.timeline.get_timeline_interface()
         self._ur5e_view = None
         self._articulation = None
@@ -214,6 +215,7 @@ class DigitalTwin(omni.ext.IExt):
         self._mcp_socket = None
         self._mcp_server_thread = None
         self._mcp_server_running = False
+        self._mcp_client_threads = []
 
         # Add Objects UI state
         self._selected_assembly = "fmb1"
@@ -257,7 +259,7 @@ class DigitalTwin(omni.ext.IExt):
 
         # Shared collision settings
         self._sdf_resolution = 300
-        self._contact_offset = 0.0005
+        self._contact_offset = 0.003
 
         # Per-category prim settings (collision approximation, rest offset, angular damping)
         # Board (type: "board", e.g. base1, base2, base3)
@@ -267,19 +269,18 @@ class DigitalTwin(omni.ext.IExt):
 
         # Block (subtype: "block", e.g. u_brown, fork_orange, line_green)
         self._block_collision_approximation = "sdf"
-        self._block_rest_offset = -0.0005
+        self._block_rest_offset = 0.0
         self._block_angular_damping = 30.0
 
         # Socket (subtype: "socket", e.g. inverted_u_brown)
         self._socket_collision_approximation = "sdf"
-        self._socket_rest_offset = -0.0005
+        self._socket_rest_offset = 0.0
         self._socket_angular_damping = 30.0
 
         # Peg (subtype: "peg", e.g. hex_blue, hex_red)
         self._peg_collision_approximation = "sdf"
-        self._peg_rest_offset = -0.0005
+        self._peg_rest_offset = 0.0
         self._peg_angular_damping = 50.0
-        self._peg_linear_damping = 5.0
 
         # Isaac Sim handles ROS2 initialization automatically through its bridge
         print("ROS2 bridge will be initialized by Isaac Sim when needed")
@@ -516,23 +517,30 @@ class DigitalTwin(omni.ext.IExt):
                          style={"color": self._log_color(line), "font_size": 13, "margin": 0},
                          height=0)
 
+    def _run_on_main_thread(self, fn):
+        """Schedule fn to run on the main thread, safe from any thread."""
+        if threading.current_thread() is threading.main_thread():
+            fn()
+        else:
+            self._main_loop.call_soon_threadsafe(fn)
+
     def _append_ext_log(self, text):
         self._ext_log_lines.append(text)
         if len(self._ext_log_lines) > 500:
             self._ext_log_lines = self._ext_log_lines[-500:]
-            self._rebuild_log_vstack(self._ext_log_vstack, self._ext_log_lines)
+            self._run_on_main_thread(lambda: self._rebuild_log_vstack(self._ext_log_vstack, self._ext_log_lines))
             return
         if hasattr(self, "_ext_log_vstack") and self._ext_log_vstack:
-            self._add_log_label(self._ext_log_vstack, self._ext_log_scroll, text)
+            self._run_on_main_thread(lambda: self._add_log_label(self._ext_log_vstack, self._ext_log_scroll, text))
 
     def _append_sys_log(self, text):
         self._sys_log_lines.append(text)
         if len(self._sys_log_lines) > 500:
             self._sys_log_lines = self._sys_log_lines[-500:]
-            self._rebuild_log_vstack(self._sys_log_vstack, self._sys_log_lines)
+            self._run_on_main_thread(lambda: self._rebuild_log_vstack(self._sys_log_vstack, self._sys_log_lines))
             return
         if hasattr(self, "_sys_log_vstack") and self._sys_log_vstack:
-            self._add_log_label(self._sys_log_vstack, self._sys_log_scroll, text)
+            self._run_on_main_thread(lambda: self._add_log_label(self._sys_log_vstack, self._sys_log_scroll, text))
 
     def _switch_log_tab(self, tab):
         self._active_log_tab = tab
@@ -564,6 +572,8 @@ class DigitalTwin(omni.ext.IExt):
         import omni.physx
 
         stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return
 
         # Gripper action graph
         gripper_graph = "/Graph/ActionGraph_RG2"
@@ -571,6 +581,7 @@ class DigitalTwin(omni.ext.IExt):
             self._gripper_graph_path = gripper_graph
             self._gripper_sub_attr_path = f"{gripper_graph}/subscriber.outputs:data"
             self._gripper_pub_attr_path = f"{gripper_graph}/ros2_publisher.inputs:data"
+            self._gripper_effort_pub_attr_path = f"{gripper_graph}/effort_publisher.inputs:data"
             self._gripper_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
                 self._on_physics_step_gripper
             )
@@ -827,7 +838,7 @@ class DigitalTwin(omni.ext.IExt):
         if stage.GetPrimAtPath(graph_path):
             stage.RemovePrim(graph_path)
 
-        # Create graph with only ROS2 nodes — no ScriptNodes
+        # Create graph with ROS2 nodes — width publisher + effort publisher
         (graph, nodes, _, _) = og.Controller.edit(
             {"graph_path": graph_path, "evaluator_name": "execution"},
             {
@@ -836,6 +847,7 @@ class DigitalTwin(omni.ext.IExt):
                     ("context", "isaacsim.ros2.bridge.ROS2Context"),
                     ("subscriber", "isaacsim.ros2.bridge.ROS2Subscriber"),
                     ("ros2_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
+                    ("effort_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
                 ],
                 keys.SET_VALUES: [
                     ("subscriber.inputs:messageName", "String"),
@@ -844,24 +856,32 @@ class DigitalTwin(omni.ext.IExt):
                     ("ros2_publisher.inputs:messageName", "Float64"),
                     ("ros2_publisher.inputs:messagePackage", "std_msgs"),
                     ("ros2_publisher.inputs:topicName", "gripper_width_sim"),
+                    ("effort_publisher.inputs:messageName", "Float64"),
+                    ("effort_publisher.inputs:messagePackage", "std_msgs"),
+                    ("effort_publisher.inputs:topicName", "gripper_effort_sim"),
                 ],
                 keys.CONNECT: [
                     ("tick.outputs:tick", "subscriber.inputs:execIn"),
                     ("tick.outputs:tick", "ros2_publisher.inputs:execIn"),
+                    ("tick.outputs:tick", "effort_publisher.inputs:execIn"),
                     ("context.outputs:context", "subscriber.inputs:context"),
                     ("context.outputs:context", "ros2_publisher.inputs:context"),
+                    ("context.outputs:context", "effort_publisher.inputs:context"),
                 ],
             }
         )
 
-        # Create custom data attribute on publisher for gripper width
+        # Create custom data attributes on publishers
         publisher_prim = stage.GetPrimAtPath(f"{graph_path}/ros2_publisher")
         publisher_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
+        effort_prim = stage.GetPrimAtPath(f"{graph_path}/effort_publisher")
+        effort_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
 
         # Store attribute paths for the physics callback
         self._gripper_graph_path = graph_path
         self._gripper_sub_attr_path = f"{graph_path}/subscriber.outputs:data"
         self._gripper_pub_attr_path = f"{graph_path}/ros2_publisher.inputs:data"
+        self._gripper_effort_pub_attr_path = f"{graph_path}/effort_publisher.inputs:data"
         self._gripper_articulation = None
 
         # Subscribe to physics step events — gripper control runs at physics rate
@@ -877,8 +897,9 @@ class DigitalTwin(omni.ext.IExt):
         print("ros2 topic pub /gripper_command std_msgs/String 'data: \"close\"'")
         print("ros2 topic pub /gripper_command std_msgs/String 'data: \"1100\"'")
         print("ros2 topic pub /gripper_command std_msgs/String 'data: \"550\"'")
-        print("\nMonitor gripper width:")
+        print("\nMonitor gripper:")
         print("ros2 topic echo /gripper_width_sim")
+        print("ros2 topic echo /gripper_effort_sim")
 
     def _on_physics_step_gripper(self, dt):
         """Physics step callback — read ROS2 command, apply to gripper, publish state."""
@@ -927,12 +948,39 @@ class DigitalTwin(omni.ext.IExt):
             # --- Read gripper state and publish ---
             joint_positions = self._gripper_articulation.get_joint_positions()
             if joint_positions is not None and joint_positions.shape[1] >= 2:
-                actual_angle = float(np.mean(joint_positions[0, :2]))
-                actual_ratio = (actual_angle + np.pi / 4) / (np.pi / 4 + np.pi / 9)
-                actual_width_mm = float(np.clip(actual_ratio * 100.0, 0.0, 100.0))
+                left_angle = float(joint_positions[0, 0])
+                right_angle = float(joint_positions[0, 1])
+
+                def _angle_to_mm(angle):
+                    ratio = (angle + np.pi / 4) / (np.pi / 4 + np.pi / 9)
+                    return ratio * 100.0
+
+                left_mm = _angle_to_mm(left_angle)
+                right_mm = _angle_to_mm(right_angle)
+                asymmetry = abs(left_mm - right_mm)
+
+                # Width topic: always publish real width, or -1 if jammed
+                if asymmetry > 15.0:
+                    publish_value = -1.0
+                else:
+                    avg = (left_mm + right_mm) / 2.0
+                    publish_value = float(np.clip(avg, 0.0, 100.0))
+
                 og.Controller.set(
                     og.Controller.attribute(self._gripper_pub_attr_path),
-                    actual_width_mm
+                    publish_value
+                )
+
+                # Effort topic: always publish total measured effort
+                measured_efforts = self._gripper_articulation.get_measured_joint_efforts()
+                if measured_efforts is not None and measured_efforts.shape[1] >= 2:
+                    total_effort = abs(float(measured_efforts[0, 0])) + abs(float(measured_efforts[0, 1]))
+                else:
+                    total_effort = 0.0
+
+                og.Controller.set(
+                    og.Controller.attribute(self._gripper_effort_pub_attr_path),
+                    total_effort
                 )
         except Exception as e:
             print(f"[Gripper callback] {e}")
@@ -1669,12 +1717,34 @@ class DigitalTwin(omni.ext.IExt):
             print(f"Error creating ActionGraph: {e}")
             traceback.print_exc()
 
+    def _sync_selected_assembly(self, folder_path="/World/Objects"):
+        """Auto-detect the active assembly from scene contents and update _selected_assembly."""
+        stage = omni.usd.get_context().get_stage()
+        objects_root = stage.GetPrimAtPath(folder_path)
+        if not objects_root or not objects_root.IsValid():
+            return
+        scene_names = {child.GetName() for child in objects_root.GetChildren()}
+        for key, assembly_def in ASSEMBLIES.items():
+            assembly_file = assembly_def["assembly_file"]
+            if assembly_file and os.path.exists(assembly_file):
+                with open(assembly_file, 'r') as f:
+                    components = json.load(f).get('components', [])
+                board_names = [c['name'] for c in components if c.get('type') == 'board']
+                if any(name in scene_names for name in board_names):
+                    if self._selected_assembly != key:
+                        print(f"Auto-detected active assembly: {key} (was {self._selected_assembly})")
+                        self._selected_assembly = key
+                    return
+
     def _load_object_type_map(self):
         """Read the assembly JSON and return a dict mapping object name -> category (board/block/peg/socket).
 
+        Auto-detects the active assembly from scene contents first, so the correct
+        file is always used regardless of _selected_assembly state.
         JSON uses type="board" for boards, and type="object" with subtype for the rest.
         Returns the effective category for prim settings lookup.
         """
+        self._sync_selected_assembly()
         type_map = {}
         assembly_file = self._assembly_file_path
         if assembly_file and os.path.exists(assembly_file):
@@ -1699,9 +1769,6 @@ class DigitalTwin(omni.ext.IExt):
             "rest_offset": getattr(self, f"{prefix}rest_offset"),
             "angular_damping": getattr(self, f"{prefix}angular_damping"),
         }
-        linear_damping = getattr(self, f"{prefix}linear_damping", None)
-        if linear_damping is not None:
-            params["linear_damping"] = linear_damping
         return params
 
     def _sample_non_overlapping_objects(
@@ -1800,10 +1867,9 @@ class DigitalTwin(omni.ext.IExt):
         """Assemble objects based on JSON assembly data, positioned relative to the current board pose."""
         assembly_file = self._assembly_file_path
         if not os.path.exists(assembly_file):
-            print(f"Error: Assembly file not found: {assembly_file}")
-            return
+            print(f"[assemble] Error: Assembly file not found: {assembly_file}")
+            return 0, 0
 
-        print(f"Loading assembly data from {assembly_file}...")
         with open(assembly_file, 'r') as f:
             assembly_data = json.load(f)
 
@@ -1813,8 +1879,8 @@ class DigitalTwin(omni.ext.IExt):
         type_map = self._load_object_type_map()
         objects_root = stage.GetPrimAtPath(folder_path)
         if not objects_root.IsValid():
-            print(f"Warning: {folder_path} does not exist")
-            return
+            print(f"[assemble] Error: {folder_path} does not exist")
+            return 0, 0
 
         base_world_pos = Gf.Vec3d(0, 0, 0)
         for child in objects_root.GetChildren():
@@ -1826,10 +1892,11 @@ class DigitalTwin(omni.ext.IExt):
                     child_xform = UsdGeom.Xformable(child_prim)
                     world_transform = child_xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
                     base_world_pos = world_transform.ExtractTranslation()
-                    print(f"Board '{obj_name}' at world pos: ({base_world_pos[0]:.4f}, {base_world_pos[1]:.4f}, {base_world_pos[2]:.4f})")
                 break
 
         # Position each component from assembly data
+        assembled = 0
+        skipped = 0
         for component in assembly_data['components']:
             name = component['name']
             position = component['position']
@@ -1838,7 +1905,7 @@ class DigitalTwin(omni.ext.IExt):
             prim_path = self._get_prim_path(name, folder_path)
             prim = stage.GetPrimAtPath(prim_path)
             if not prim or not prim.IsValid():
-                print(f"Warning: Prim not found at {prim_path}, skipping {name}")
+                skipped += 1
                 continue
 
             # Assembly position offset relative to base
@@ -1863,19 +1930,23 @@ class DigitalTwin(omni.ext.IExt):
                 value=assembly_pos,
                 prev=None)
 
-            print(f"Assembled {name} at ({assembly_pos[0]:.4f}, {assembly_pos[1]:.4f}, {assembly_pos[2]:.4f})")
+            assembled += 1
 
-        print("Assembly complete!")
+        msg = f"[assemble] Assembled {assembled} objects ({self._selected_assembly})"
+        if skipped:
+            msg += f", {skipped} skipped (prim not found)"
+        print(msg)
+        return assembled, skipped
 
     def disassemble_objects(self, folder_path="/World/Objects"):
         """Lay out objects spaced apart along the X-axis (like initial add_objects positioning)."""
         stage = omni.usd.get_context().get_stage()
         objects_root = stage.GetPrimAtPath(folder_path)
         if not objects_root.IsValid():
-            print(f"Warning: {folder_path} does not exist")
-            return
+            print(f"[disassemble] Error: {folder_path} does not exist")
+            return 0
 
-        i = 0
+        count = 0
         for child in objects_root.GetChildren():
             obj_name = child.GetName()
             if obj_name.endswith("Material"):
@@ -1884,16 +1955,15 @@ class DigitalTwin(omni.ext.IExt):
             child_path = self._get_prim_path(obj_name, folder_path)
             child_prim = stage.GetPrimAtPath(child_path)
             if not child_prim or not child_prim.IsValid():
-                print(f"Warning: Prim not found at {child_path}, skipping {obj_name}")
                 continue
 
             # Calculate spaced position: first at center, then alternating +X and -X
-            if i == 0:
+            if count == 0:
                 x_position = 0.0
-            elif i % 2 == 1:
-                x_position = self._object_spacing * ((i + 1) // 2)
+            elif count % 2 == 1:
+                x_position = self._object_spacing * ((count + 1) // 2)
             else:
-                x_position = -self._object_spacing * (i // 2)
+                x_position = -self._object_spacing * (count // 2)
 
             pos = Gf.Vec3d(x_position, self._y_offset, self._z_offset)
 
@@ -1908,10 +1978,10 @@ class DigitalTwin(omni.ext.IExt):
                 value=Gf.Quatf(1, 0, 0, 0),
                 prev=None)
 
-            print(f"Disassembled {obj_name} to ({x_position:.3f}, {self._y_offset:.3f}, {self._z_offset:.3f})")
-            i += 1
+            count += 1
 
-        print("Disassembly complete!")
+        print(f"[disassemble] Disassembled {count} objects")
+        return count
 
     def randomize_object_poses(self, folder_path="/World/Objects"):
         """
@@ -1922,14 +1992,13 @@ class DigitalTwin(omni.ext.IExt):
         stage = omni.usd.get_context().get_stage()
         objects_root = stage.GetPrimAtPath(folder_path)
         if not objects_root.IsValid():
-            print(f"Warning: {folder_path} does not exist")
-            return
+            print(f"[randomize] Error: {folder_path} does not exist")
+            return 0, 0
 
-        # Collect object info: parent path, child path, parent's current world position, and child's current Z
-        # Also collect board positions to respect during randomization
+        # Collect object info and board positions
         type_map = self._load_object_type_map()
         object_info = []
-        board_positions = []  # Store board world positions
+        board_positions = []
 
         for child in objects_root.GetChildren():
             obj = child.GetName()
@@ -1942,23 +2011,18 @@ class DigitalTwin(omni.ext.IExt):
             if not parent_prim.IsValid() or not child_prim.IsValid():
                 continue
 
-            # Get child's current world transform
             child_xform = UsdGeom.Xformable(child_prim)
             child_world_transform = child_xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
             child_world_pos = child_world_transform.ExtractTranslation()
 
-            # Check if this is a board object
             if type_map.get(obj, 'block') == 'board':
-                # Store board position for separation checking
                 board_positions.append(child_world_pos)
-                print(f"Skipping {obj} (board) at world pos: ({child_world_pos[0]:.3f}, {child_world_pos[1]:.3f}, {child_world_pos[2]:.3f})")
                 continue
-            
-            # Get parent's current world transform and position
+
             parent_xform = UsdGeom.Xformable(parent_prim)
             parent_world_transform = parent_xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
             parent_world_pos = parent_world_transform.ExtractTranslation()
-            
+
             object_info.append({
                 "parent_path": parent_path,
                 "child_path": child_path,
@@ -1966,57 +2030,35 @@ class DigitalTwin(omni.ext.IExt):
                 "parent_world_transform": parent_world_transform,
                 "current_z": child_world_pos[2]
             })
-            print(f"Found: {child_path}")
-            print(f"  Parent world pos: ({parent_world_pos[0]:.3f}, {parent_world_pos[1]:.3f}, {parent_world_pos[2]:.3f})")
-            print(f"  Child world pos: ({child_world_pos[0]:.3f}, {child_world_pos[1]:.3f}, {child_world_pos[2]:.3f})")
 
         if not object_info:
-            print("No valid objects found")
-            return
+            print("[randomize] Error: No valid objects found")
+            return 0, len(board_positions)
 
-        # Get Z values for preserving current heights
         z_values = [info["current_z"] for info in object_info]
-        
-        # Randomize positions in world frame
-        # Pass board positions so randomization respects them for minimum separation
+
         poses = self._sample_non_overlapping_objects(
             num_objects=len(object_info),
             z_values=z_values,
             fixed_positions=board_positions
         )
 
-        if board_positions:
-            print(f"Randomization will respect {len(board_positions)} board positions for minimum separation")
-
         # Apply randomized poses
         for obj_info, pose in zip(object_info, poses):
-            parent_path = obj_info["parent_path"]
             child_path = obj_info["child_path"]
             parent_world_transform = obj_info["parent_world_transform"]
-            parent_world_pos = obj_info["parent_world_pos"]
-            
-            # Target world position (randomized)
+
             target_world_pos = Gf.Vec3d(pose["position"][0], pose["position"][1], pose["position"][2])
-            
-            # Calculate local position relative to parent
-            # The parent's world transform already accounts for its current position
-            # Local = Parent^-1 * Target_World
-            # This correctly transforms the target world position to local coordinates
-            # accounting for where the parent currently is
             parent_inverse = parent_world_transform.GetInverse()
             local_pos = parent_inverse.Transform(target_world_pos)
-            
-            # Convert yaw to quaternion
+
             quat_xyzw = R.from_euler("xyz", [0.0, 0.0, pose["yaw_deg"]], degrees=True).as_quat()
             quat_wxyz = np.roll(quat_xyzw, 1)
-            
-            # Apply local transform to child prim (parent prim stays unchanged)
+
             self._set_obj_prim_pose(child_path, local_pos, quat_wxyz)
-            
-            print(f"Randomized {child_path}:")
-            print(f"  Parent world pos (unchanged): ({parent_world_pos[0]:.3f}, {parent_world_pos[1]:.3f}, {parent_world_pos[2]:.3f})")
-            print(f"  Target world pos: ({target_world_pos[0]:.3f}, {target_world_pos[1]:.3f}, {target_world_pos[2]:.3f})")
-            print(f"  Child local pos: ({local_pos[0]:.3f}, {local_pos[1]:.3f}, {local_pos[2]:.3f})")
+
+        print(f"[randomize] Randomized {len(object_info)} objects, {len(board_positions)} boards skipped")
+        return len(object_info), len(board_positions)
 
     def sync_real_poses(self):
         """Subscribe to /objects_poses_real and update sim object poses to match."""
@@ -2450,11 +2492,6 @@ class DigitalTwin(omni.ext.IExt):
                         physx_rb_api = PhysxSchema.PhysxRigidBodyAPI.Apply(mesh_prim)
                         physx_rb_api.CreateAngularDampingAttr().Set(angular_damping)
                         print(f"  Set angularDamping={angular_damping} on {mesh_path} [{category}]")
-                        # Apply linear damping (pegs only)
-                        if "linear_damping" in prim_params:
-                            linear_damping = prim_params["linear_damping"]
-                            physx_rb_api.CreateLinearDampingAttr().Set(linear_damping)
-                            print(f"  Set linearDamping={linear_damping} on {mesh_path} [{category}]")
                     else:
                         print(f"  Warning: Mesh prim not found at {mesh_path}")
 
@@ -2637,7 +2674,7 @@ class DigitalTwin(omni.ext.IExt):
             self._stop_mcp_server()
 
     def _stop_mcp_server(self):
-        """Stop the MCP socket server."""
+        """Stop the MCP socket server and wait for all client threads to finish."""
         self._mcp_server_running = False
 
         if self._mcp_socket:
@@ -2650,10 +2687,20 @@ class DigitalTwin(omni.ext.IExt):
         if self._mcp_server_thread:
             try:
                 if self._mcp_server_thread.is_alive():
-                    self._mcp_server_thread.join(timeout=1.0)
+                    self._mcp_server_thread.join(timeout=2.0)
             except:
                 pass
             self._mcp_server_thread = None
+
+        # Wait for all client handler threads to finish so they don't
+        # race on the USD stage after hot-reload creates a new instance
+        for t in self._mcp_client_threads:
+            try:
+                if t.is_alive():
+                    t.join(timeout=2.0)
+            except:
+                pass
+        self._mcp_client_threads = []
 
         print("[MCP] Server stopped")
 
@@ -2673,6 +2720,9 @@ class DigitalTwin(omni.ext.IExt):
                     )
                     client_thread.daemon = True
                     client_thread.start()
+                    # Track thread and prune finished ones
+                    self._mcp_client_threads = [t for t in self._mcp_client_threads if t.is_alive()]
+                    self._mcp_client_threads.append(client_thread)
                 except socket.timeout:
                     continue
                 except OSError:
@@ -3020,32 +3070,26 @@ class DigitalTwin(omni.ext.IExt):
                     "message": f"Assembly file not found: {assembly_file}"
                 }
 
-            self.assemble_objects()
-            return {
-                "status": "success",
-                "message": f"Objects assembled using {assembly}"
-            }
+            assembled, skipped = self.assemble_objects()
+            msg = f"Assembled {assembled} objects ({assembly})"
+            if skipped:
+                msg += f", {skipped} skipped (prim not found)"
+            return {"status": "success", "message": msg}
         except Exception as e:
             traceback.print_exc()
-            return {
-                "status": "error",
-                "message": f"Failed to assemble objects: {str(e)}"
-            }
+            return {"status": "error", "message": f"Failed to assemble objects: {str(e)}"}
 
     def _cmd_randomize_object_poses(self) -> Dict[str, Any]:
         """MCP handler for randomizing object poses."""
         try:
-            self.randomize_object_poses()
+            randomized, boards_skipped = self.randomize_object_poses()
             return {
                 "status": "success",
-                "message": "Object poses randomized successfully"
+                "message": f"Randomized {randomized} objects, {boards_skipped} boards skipped"
             }
         except Exception as e:
             traceback.print_exc()
-            return {
-                "status": "error",
-                "message": f"Failed to randomize object poses: {str(e)}"
-            }
+            return {"status": "error", "message": f"Failed to randomize object poses: {str(e)}"}
 
     def _cmd_save_scene_state(self, json_file_path: str = None, output_dir: str = None) -> Dict[str, Any]:
         """Save scene state (object poses) to a JSON file.
@@ -3087,8 +3131,6 @@ class DigitalTwin(omni.ext.IExt):
                     "message": "No objects found in /World/Objects"
                 }
 
-            print(f"[MCP] Auto-discovered {len(object_names)} object(s) in /World/Objects: {object_names}")
-
             resources_dir = os.path.dirname(json_file_path)
             os.makedirs(resources_dir, exist_ok=True)
 
@@ -3102,29 +3144,28 @@ class DigitalTwin(omni.ext.IExt):
                 if pose:
                     poses[object_name] = pose
                     saved_count += 1
-                    print(f"[MCP] ✓ Saved pose for {object_name} ({prim_path})")
                 else:
                     failed_names.append(object_name)
-                    print(f"[MCP] ⚠ Failed to read pose for {object_name} ({prim_path})")
 
             with open(json_file_path, 'w') as f:
                 json.dump(poses, f, indent=4)
 
             abs_path = os.path.abspath(json_file_path)
-            message = f"Saved {saved_count} object pose(s) to {abs_path}"
+            msg = f"[save_state] Saved {saved_count} objects to {abs_path}"
             if failed_names:
-                message += f". Failed to save {len(failed_names)} object(s): {failed_names}"
+                msg += f", {len(failed_names)} failed: {failed_names}"
+            print(msg)
 
             return {
                 "status": "success",
-                "message": message,
+                "message": msg,
                 "saved_count": saved_count,
                 "failed_names": failed_names,
                 "json_file_path": json_file_path
             }
 
         except Exception as e:
-            carb.log_error(f"Error in save_scene_state: {e}")
+            print(f"[save_state] Error: {str(e)}")
             traceback.print_exc()
             return {
                 "status": "error",
@@ -3175,25 +3216,24 @@ class DigitalTwin(omni.ext.IExt):
                 prim_path = self._get_prim_path(object_name)
                 if self._write_prim_pose(prim_path, pose_data):
                     restored_count += 1
-                    print(f"[MCP] ✓ Restored pose for {object_name} ({prim_path})")
                 else:
                     failed_names.append(object_name)
-                    print(f"[MCP] ⚠ Failed to restore pose for {object_name} ({prim_path})")
 
-            message = f"Restored {restored_count} object pose(s) from {json_file_path}"
+            msg = f"[restore_state] Restored {restored_count} objects from {json_file_path}"
             if failed_names:
-                message += f". Failed to restore {len(failed_names)} object(s): {failed_names}"
+                msg += f", {len(failed_names)} failed: {failed_names}"
+            print(msg)
 
             return {
                 "status": "success",
-                "message": message,
+                "message": msg,
                 "restored_count": restored_count,
                 "failed_names": failed_names,
                 "json_file_path": json_file_path
             }
 
         except Exception as e:
-            carb.log_error(f"Error in restore_scene_state: {e}")
+            print(f"[restore_state] Error: {str(e)}")
             traceback.print_exc()
             return {
                 "status": "error",
@@ -3218,19 +3258,21 @@ class DigitalTwin(omni.ext.IExt):
 
             if os.path.exists(json_file_path):
                 os.remove(json_file_path)
+                print(f"[clear_state] Deleted {json_file_path}")
                 return {
                     "status": "success",
                     "message": f"Deleted scene state file: {json_file_path}",
                     "json_file_path": json_file_path
                 }
             else:
+                print(f"[clear_state] File not found: {json_file_path}")
                 return {
                     "status": "error",
                     "message": f"Scene state file not found: {json_file_path}"
                 }
 
         except Exception as e:
-            carb.log_error(f"Error in clear_scene_state: {e}")
+            print(f"[clear_state] Error: {str(e)}")
             traceback.print_exc()
             return {
                 "status": "error",
