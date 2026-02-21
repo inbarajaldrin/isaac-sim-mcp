@@ -99,10 +99,6 @@ MCP_TOOL_REGISTRY = {
         "description": "Restores previously saved object poses from a JSON file to the scene.",
         "parameters": {}
     },
-    "clear_scene_state": {
-        "description": "Delete the scene state JSON file, removing all saved object poses.",
-        "parameters": {}
-    },
     "add_objects": {
         "description": "Add objects to the scene from a predefined assembly folder.",
         "parameters": {
@@ -136,7 +132,6 @@ MCP_HANDLERS = {
     "randomize_object_poses": "_cmd_randomize_object_poses",
     "save_scene_state": "_cmd_save_scene_state",
     "restore_scene_state": "_cmd_restore_scene_state",
-    "clear_scene_state": "_cmd_clear_scene_state",
     "add_objects": "_cmd_add_objects",
     "delete_objects": "_cmd_delete_objects",
     "setup_pose_publisher": "_cmd_setup_pose_publisher",
@@ -222,9 +217,6 @@ class DigitalTwin(omni.ext.IExt):
         self._object_spacing = 0.25  # Spacing between objects along X-axis in meters
         self._y_offset = -0.4  # Y offset for all objects
         self._z_offset = 0.0495  # Z offset for all objects
-
-        # Scene state file path (can be set by MCP client)
-        self._scene_state_file_path = None
 
         # Output directory pushed by MCP server on connect (None = use default)
         self._output_dir = None
@@ -393,8 +385,6 @@ class DigitalTwin(omni.ext.IExt):
                                     clicked_fn=lambda: self._cmd_save_scene_state())
                                 ui.Button("Restore State", width=120, height=35,
                                     clicked_fn=lambda: self._cmd_restore_scene_state())
-                                ui.Button("Clear State", width=120, height=35,
-                                    clicked_fn=lambda: self._cmd_clear_scene_state())
 
             with ui.CollapsableFrame(title="Logs", collapsed=True, height=0):
                 with ui.VStack(spacing=3, height=0):
@@ -1774,9 +1764,9 @@ class DigitalTwin(omni.ext.IExt):
     def _sample_non_overlapping_objects(
         self,
         num_objects,
-        x_range=(-0.2, 0.5),
+        x_range=(-0.2, 0.3),
         y_range=(-0.5, -0.3),
-        min_sep=0.2,
+        min_sep=0.18,
         yaw_range=(-180.0, 180.0),
         z_values=None,
         fixed_positions=None,
@@ -2923,43 +2913,36 @@ class DigitalTwin(omni.ext.IExt):
 
     # ==================== Scene Management Handlers ====================
 
-    def _get_scene_state_path(self) -> str:
-        """Get the path to scene_state.json file.
+    def _get_scene_state_dir(self) -> str:
+        """Get the directory for scene state JSON files.
 
-        If a path was previously set by MCP client, use that.
-        Otherwise, use the default resources directory.
+        Uses the output dir pushed by MCP server, or falls back to default resources dir.
         """
-        if self._scene_state_file_path:
-            # Use the path set by MCP client
-            parent_dir = os.path.dirname(self._scene_state_file_path)
-            if parent_dir:
-                os.makedirs(parent_dir, exist_ok=True)
-            return self._scene_state_file_path
-
-        # Use output dir pushed by MCP server, or fall back to default
         if self._output_dir:
-            resources_dir = os.path.join(self._output_dir, "resources")
+            scene_dir = os.path.join(self._output_dir, "resources", "scene_states")
         else:
-            resources_dir = RESOURCES_DIR
-        os.makedirs(resources_dir, exist_ok=True)
-        return os.path.join(resources_dir, "scene_state.json")
+            scene_dir = os.path.join(RESOURCES_DIR, "scene_states")
+        os.makedirs(scene_dir, exist_ok=True)
+        return scene_dir
+
+    def _get_latest_scene_state_path(self) -> str:
+        """Find the most recent scene state file by timestamp in the filename."""
+        scene_dir = self._get_scene_state_dir()
+        import glob as glob_mod
+        files = glob_mod.glob(os.path.join(scene_dir, "scene_state_*.json"))
+        if not files:
+            return None
+        files.sort()
+        return files[-1]
 
     def _get_prim_path(self, object_name: str, folder_path: str = "/World/Objects") -> str:
         """Get the full nested prim path for an object name (folder/{name}/{name}/{name})."""
         return f"{folder_path}/{object_name}/{object_name}/{object_name}"
 
-    def _resolve_scene_state_path(self, output_dir=None, json_file_path=None):
-        """Resolve the scene state JSON file path from MCP arguments.
-
-        Updates internal state from output_dir/json_file_path if provided,
-        then returns the resolved path.
-        """
+    def _resolve_output_dir(self, output_dir=None):
+        """Update internal output_dir if provided by MCP server."""
         if output_dir:
             self._output_dir = os.path.abspath(output_dir)
-        if json_file_path is not None:
-            self._scene_state_file_path = json_file_path
-            return json_file_path
-        return self._get_scene_state_path()
 
     def _read_prim_pose(self, prim_path: str) -> Dict[str, Any]:
         """Helper method to read pose (position, quaternion, scale) from a prim."""
@@ -3092,12 +3075,12 @@ class DigitalTwin(omni.ext.IExt):
             return {"status": "error", "message": f"Failed to randomize object poses: {str(e)}"}
 
     def _cmd_save_scene_state(self, json_file_path: str = None, output_dir: str = None) -> Dict[str, Any]:
-        """Save scene state (object poses) to a JSON file.
+        """Save scene state (object poses) to a timestamped JSON file.
 
-        Automatically discovers and saves all objects in /World/Objects.
+        Each save creates a new file with a timestamp. Restore always loads the latest.
 
         Args:
-            json_file_path: Optional path to the JSON file. If not provided, uses default.
+            json_file_path: Ignored (kept for API compatibility).
             output_dir: Optional output directory pushed by MCP server.
 
         Returns:
@@ -3105,8 +3088,12 @@ class DigitalTwin(omni.ext.IExt):
         """
         try:
             from pxr import UsdGeom
+            from datetime import datetime
 
-            json_file_path = self._resolve_scene_state_path(output_dir, json_file_path)
+            self._resolve_output_dir(output_dir)
+            scene_dir = self._get_scene_state_dir()
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            save_path = os.path.join(scene_dir, f"scene_state_{timestamp}.json")
 
             stage = omni.usd.get_context().get_stage()
             if not stage:
@@ -3131,9 +3118,6 @@ class DigitalTwin(omni.ext.IExt):
                     "message": "No objects found in /World/Objects"
                 }
 
-            resources_dir = os.path.dirname(json_file_path)
-            os.makedirs(resources_dir, exist_ok=True)
-
             poses = {}
             saved_count = 0
             failed_names = []
@@ -3147,10 +3131,10 @@ class DigitalTwin(omni.ext.IExt):
                 else:
                     failed_names.append(object_name)
 
-            with open(json_file_path, 'w') as f:
+            with open(save_path, 'w') as f:
                 json.dump(poses, f, indent=4)
 
-            abs_path = os.path.abspath(json_file_path)
+            abs_path = os.path.abspath(save_path)
             msg = f"[save_state] Saved {saved_count} objects to {abs_path}"
             if failed_names:
                 msg += f", {len(failed_names)} failed: {failed_names}"
@@ -3161,7 +3145,7 @@ class DigitalTwin(omni.ext.IExt):
                 "message": msg,
                 "saved_count": saved_count,
                 "failed_names": failed_names,
-                "json_file_path": json_file_path
+                "json_file_path": save_path
             }
 
         except Exception as e:
@@ -3174,28 +3158,29 @@ class DigitalTwin(omni.ext.IExt):
             }
 
     def _cmd_restore_scene_state(self, json_file_path: str = None, output_dir: str = None) -> Dict[str, Any]:
-        """Restore scene state (object poses) from a JSON file.
+        """Restore scene state (object poses) from the latest timestamped JSON file.
 
-        Automatically restores all objects that were saved in the scene state file.
+        Automatically finds the most recent save and restores all objects from it.
 
         Args:
-            json_file_path: Optional path to the JSON file. If not provided, uses default.
+            json_file_path: Ignored (kept for API compatibility).
             output_dir: Optional output directory pushed by MCP server.
 
         Returns:
             Dictionary with execution result.
         """
         try:
-            json_file_path = self._resolve_scene_state_path(output_dir, json_file_path)
+            self._resolve_output_dir(output_dir)
+            latest_path = self._get_latest_scene_state_path()
 
-            if not os.path.exists(json_file_path):
+            if not latest_path:
                 return {
                     "status": "error",
-                    "message": f"JSON file not found: {json_file_path}"
+                    "message": f"No scene state files found in {self._get_scene_state_dir()}"
                 }
 
             try:
-                with open(json_file_path, 'r') as f:
+                with open(latest_path, 'r') as f:
                     poses = json.load(f)
             except json.JSONDecodeError as e:
                 return {
@@ -3219,7 +3204,7 @@ class DigitalTwin(omni.ext.IExt):
                 else:
                     failed_names.append(object_name)
 
-            msg = f"[restore_state] Restored {restored_count} objects from {json_file_path}"
+            msg = f"[restore_state] Restored {restored_count} objects from {latest_path}"
             if failed_names:
                 msg += f", {len(failed_names)} failed: {failed_names}"
             print(msg)
@@ -3229,7 +3214,7 @@ class DigitalTwin(omni.ext.IExt):
                 "message": msg,
                 "restored_count": restored_count,
                 "failed_names": failed_names,
-                "json_file_path": json_file_path
+                "json_file_path": latest_path
             }
 
         except Exception as e:
@@ -3238,45 +3223,6 @@ class DigitalTwin(omni.ext.IExt):
             return {
                 "status": "error",
                 "message": f"Failed to restore scene state: {str(e)}",
-                "traceback": traceback.format_exc()
-            }
-
-    def _cmd_clear_scene_state(self, json_file_path: str = None, output_dir: str = None) -> Dict[str, Any]:
-        """Clear/delete the scene state JSON file.
-
-        Deletes the entire scene state file, removing all saved object poses.
-
-        Args:
-            json_file_path: Optional path to the JSON file. If not provided, uses default.
-            output_dir: Optional output directory pushed by MCP server.
-
-        Returns:
-            Dictionary with execution result.
-        """
-        try:
-            json_file_path = self._resolve_scene_state_path(output_dir, json_file_path)
-
-            if os.path.exists(json_file_path):
-                os.remove(json_file_path)
-                print(f"[clear_state] Deleted {json_file_path}")
-                return {
-                    "status": "success",
-                    "message": f"Deleted scene state file: {json_file_path}",
-                    "json_file_path": json_file_path
-                }
-            else:
-                print(f"[clear_state] File not found: {json_file_path}")
-                return {
-                    "status": "error",
-                    "message": f"Scene state file not found: {json_file_path}"
-                }
-
-        except Exception as e:
-            print(f"[clear_state] Error: {str(e)}")
-            traceback.print_exc()
-            return {
-                "status": "error",
-                "message": f"Failed to clear scene state: {str(e)}",
                 "traceback": traceback.format_exc()
             }
 
