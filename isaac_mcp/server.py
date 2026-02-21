@@ -363,10 +363,8 @@ def _tool_implementation(name: str, params: Dict[str, Any]) -> str:
     """Shared implementation for all dynamic tools."""
     global _isaac_connection
 
-    # Add json_file_path and output_dir for scene state tools
-    if name in ["save_scene_state", "restore_scene_state", "clear_scene_state"]:
-        resources_dir = os.path.abspath(RESOURCES_DIR)
-        params["json_file_path"] = os.path.join(resources_dir, "scene_state.json")
+    # Add output_dir for scene state tools
+    if name in ["save_scene_state", "restore_scene_state"]:
         if BASE_OUTPUT_DIR:
             params["output_dir"] = BASE_OUTPUT_DIR
 
