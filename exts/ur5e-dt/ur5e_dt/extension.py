@@ -272,17 +272,17 @@ class DigitalTwin(omni.ext.IExt):
 
         # Block (subtype: "block", e.g. u_brown, fork_orange, line_green)
         self._block_collision_approximation = "sdf"
-        self._block_rest_offset = 0.0
+        self._block_rest_offset = -0.0005
         self._block_angular_damping = 30.0
 
         # Socket (subtype: "socket", e.g. inverted_u_brown)
         self._socket_collision_approximation = "sdf"
-        self._socket_rest_offset = 0.0
+        self._socket_rest_offset = -0.0005
         self._socket_angular_damping = 30.0
 
         # Peg (subtype: "peg", e.g. hex_blue, hex_red)
         self._peg_collision_approximation = "sdf"
-        self._peg_rest_offset = 0.0
+        self._peg_rest_offset = -0.0005
         self._peg_angular_damping = 50.0
 
         # Isaac Sim handles ROS2 initialization automatically through its bridge
