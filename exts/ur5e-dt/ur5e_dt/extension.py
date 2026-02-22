@@ -91,6 +91,15 @@ MCP_TOOL_REGISTRY = {
         "description": "Randomize the positions of non-base objects in /World/Objects.",
         "parameters": {}
     },
+    "randomize_single_object": {
+        "description": "Randomize the position of a single named object in a clear workspace area, keeping all other objects fixed.",
+        "parameters": {
+            "object_name": {
+                "type": "string",
+                "description": "Name of the object to randomize (e.g. 'inverted_u_yellow')"
+            }
+        }
+    },
     "save_scene_state": {
         "description": "Saves current object poses to a JSON file so it can be retrieved later.",
         "parameters": {}
@@ -130,6 +139,7 @@ MCP_HANDLERS = {
     "stop_scene": "_cmd_stop_scene",
     "assemble_objects": "_cmd_assemble_objects",
     "randomize_object_poses": "_cmd_randomize_object_poses",
+    "randomize_single_object": "_cmd_randomize_single_object",
     "save_scene_state": "_cmd_save_scene_state",
     "restore_scene_state": "_cmd_restore_scene_state",
     "add_objects": "_cmd_add_objects",
@@ -2065,6 +2075,78 @@ class DigitalTwin(omni.ext.IExt):
         print(f"[randomize] Randomized {len(object_info)} objects, {len(board_positions)} boards skipped")
         return len(object_info), len(board_positions)
 
+    def randomize_single_object(self, object_name, folder_path="/World/Objects",
+                                x_range=(-0.35, -0.31), y_range=(-0.5, -0.3),
+                                min_sep=0.18, yaw_range=(-180.0, 180.0), max_attempts=1000):
+        """Randomize a single object's pose in a clear workspace area, keeping all others fixed.
+
+        Args:
+            object_name: Name of the object to randomize.
+            folder_path: Parent prim path for objects.
+            x_range: X range for randomization (clear workspace area).
+            y_range: Y range for randomization (clear workspace area).
+            min_sep: Minimum separation from all other objects.
+            yaw_range: Yaw rotation range in degrees.
+            max_attempts: Maximum placement attempts.
+        """
+        stage = omni.usd.get_context().get_stage()
+        objects_root = stage.GetPrimAtPath(folder_path)
+        if not objects_root.IsValid():
+            raise ValueError(f"{folder_path} does not exist")
+
+        # Verify the target object exists
+        target_parent_path = f"{folder_path}/{object_name}"
+        target_child_path = self._get_prim_path(object_name, folder_path)
+        target_parent_prim = stage.GetPrimAtPath(target_parent_path)
+        target_child_prim = stage.GetPrimAtPath(target_child_path)
+        if not target_parent_prim.IsValid() or not target_child_prim.IsValid():
+            raise ValueError(f"Object '{object_name}' not found at {target_child_path}")
+
+        # Collect world positions of all OTHER objects as fixed positions to avoid
+        fixed_positions = []
+        for child in objects_root.GetChildren():
+            name = child.GetName()
+            if name == object_name:
+                continue
+            child_path = self._get_prim_path(name, folder_path)
+            child_prim = stage.GetPrimAtPath(child_path)
+            if child_prim.IsValid():
+                xform = UsdGeom.Xformable(child_prim)
+                world_pos = xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default()).ExtractTranslation()
+                fixed_positions.append(world_pos)
+
+        # Get current Z of target object
+        target_xform = UsdGeom.Xformable(target_child_prim)
+        target_world_pos = target_xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default()).ExtractTranslation()
+        target_z = target_world_pos[2]
+
+        # Sample one non-overlapping position
+        poses = self._sample_non_overlapping_objects(
+            num_objects=1,
+            x_range=x_range,
+            y_range=y_range,
+            min_sep=min_sep,
+            yaw_range=yaw_range,
+            z_values=[target_z],
+            fixed_positions=fixed_positions,
+            max_attempts=max_attempts,
+        )
+
+        # Apply the pose
+        pose = poses[0]
+        parent_xform = UsdGeom.Xformable(target_parent_prim)
+        parent_world_transform = parent_xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+
+        target_world = Gf.Vec3d(pose["position"][0], pose["position"][1], pose["position"][2])
+        local_pos = parent_world_transform.GetInverse().Transform(target_world)
+
+        quat_xyzw = R.from_euler("xyz", [0.0, 0.0, pose["yaw_deg"]], degrees=True).as_quat()
+        quat_wxyz = np.roll(quat_xyzw, 1)
+
+        self._set_obj_prim_pose(target_child_path, local_pos, quat_wxyz)
+
+        print(f"[randomize_single] Placed '{object_name}' at world ({pose['position'][0]:.3f}, {pose['position'][1]:.3f}, {pose['position'][2]:.4f}), yaw={pose['yaw_deg']:.1f}°")
+
     def sync_real_poses(self):
         """Subscribe to /objects_poses_real and update sim object poses to match."""
         import rclpy
@@ -3088,6 +3170,20 @@ class DigitalTwin(omni.ext.IExt):
         except Exception as e:
             traceback.print_exc()
             return {"status": "error", "message": f"Failed to randomize object poses: {str(e)}"}
+
+    def _cmd_randomize_single_object(self, object_name: str = None) -> Dict[str, Any]:
+        """MCP handler for randomizing a single object's pose."""
+        if not object_name:
+            return {"status": "error", "message": "object_name is required"}
+        try:
+            self.randomize_single_object(object_name)
+            return {
+                "status": "success",
+                "message": f"Randomized '{object_name}' in clear workspace area"
+            }
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": f"Failed to randomize '{object_name}': {str(e)}"}
 
     def _cmd_save_scene_state(self, json_file_path: str = None, output_dir: str = None) -> Dict[str, Any]:
         """Save scene state (object poses) to a timestamped JSON file.
