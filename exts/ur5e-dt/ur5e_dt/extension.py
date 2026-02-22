@@ -196,6 +196,7 @@ class DigitalTwin(omni.ext.IExt):
         self._gripper_graph_path = None
         self._gripper_sub_attr_path = None
         self._gripper_pub_attr_path = None
+        self._gripper_asym_pub_attr_path = None
         self._gripper_publish_active = False
         self._gripper_warmup = 0  # skip N physics steps before re-init
 
@@ -572,6 +573,7 @@ class DigitalTwin(omni.ext.IExt):
             self._gripper_sub_attr_path = f"{gripper_graph}/subscriber.outputs:data"
             self._gripper_pub_attr_path = f"{gripper_graph}/ros2_publisher.inputs:data"
             self._gripper_effort_pub_attr_path = f"{gripper_graph}/effort_publisher.inputs:data"
+            self._gripper_asym_pub_attr_path = f"{gripper_graph}/asymmetry_publisher.inputs:data"
             self._gripper_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
                 self._on_physics_step_gripper
             )
@@ -838,6 +840,7 @@ class DigitalTwin(omni.ext.IExt):
                     ("subscriber", "isaacsim.ros2.bridge.ROS2Subscriber"),
                     ("ros2_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
                     ("effort_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
+                    ("asymmetry_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
                 ],
                 keys.SET_VALUES: [
                     ("subscriber.inputs:messageName", "String"),
@@ -849,14 +852,19 @@ class DigitalTwin(omni.ext.IExt):
                     ("effort_publisher.inputs:messageName", "Float64"),
                     ("effort_publisher.inputs:messagePackage", "std_msgs"),
                     ("effort_publisher.inputs:topicName", "gripper_effort_sim"),
+                    ("asymmetry_publisher.inputs:messageName", "Float64"),
+                    ("asymmetry_publisher.inputs:messagePackage", "std_msgs"),
+                    ("asymmetry_publisher.inputs:topicName", "gripper_asymmetry_sim"),
                 ],
                 keys.CONNECT: [
                     ("tick.outputs:tick", "subscriber.inputs:execIn"),
                     ("tick.outputs:tick", "ros2_publisher.inputs:execIn"),
                     ("tick.outputs:tick", "effort_publisher.inputs:execIn"),
+                    ("tick.outputs:tick", "asymmetry_publisher.inputs:execIn"),
                     ("context.outputs:context", "subscriber.inputs:context"),
                     ("context.outputs:context", "ros2_publisher.inputs:context"),
                     ("context.outputs:context", "effort_publisher.inputs:context"),
+                    ("context.outputs:context", "asymmetry_publisher.inputs:context"),
                 ],
             }
         )
@@ -866,12 +874,15 @@ class DigitalTwin(omni.ext.IExt):
         publisher_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
         effort_prim = stage.GetPrimAtPath(f"{graph_path}/effort_publisher")
         effort_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
+        asym_prim = stage.GetPrimAtPath(f"{graph_path}/asymmetry_publisher")
+        asym_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
 
         # Store attribute paths for the physics callback
         self._gripper_graph_path = graph_path
         self._gripper_sub_attr_path = f"{graph_path}/subscriber.outputs:data"
         self._gripper_pub_attr_path = f"{graph_path}/ros2_publisher.inputs:data"
         self._gripper_effort_pub_attr_path = f"{graph_path}/effort_publisher.inputs:data"
+        self._gripper_asym_pub_attr_path = f"{graph_path}/asymmetry_publisher.inputs:data"
         self._gripper_articulation = None
 
         # Subscribe to physics step events — gripper control runs at physics rate
@@ -890,6 +901,7 @@ class DigitalTwin(omni.ext.IExt):
         print("\nMonitor gripper:")
         print("ros2 topic echo /gripper_width_sim")
         print("ros2 topic echo /gripper_effort_sim")
+        print("ros2 topic echo /gripper_asymmetry_sim")
 
     def _on_physics_step_gripper(self, dt):
         """Physics step callback — read ROS2 command, apply to gripper, publish state."""
@@ -949,16 +961,19 @@ class DigitalTwin(omni.ext.IExt):
                 right_mm = _angle_to_mm(right_angle)
                 asymmetry = abs(left_mm - right_mm)
 
-                # Width topic: always publish real width, or -1 if jammed
-                if asymmetry > 15.0:
-                    publish_value = -1.0
-                else:
-                    avg = (left_mm + right_mm) / 2.0
-                    publish_value = float(np.clip(avg, 0.0, 100.0))
+                # Width topic: always publish real average width
+                avg = (left_mm + right_mm) / 2.0
+                publish_value = float(np.clip(avg, 0.0, 100.0))
 
                 og.Controller.set(
                     og.Controller.attribute(self._gripper_pub_attr_path),
                     publish_value
+                )
+
+                # Asymmetry topic: publish raw asymmetry in mm
+                og.Controller.set(
+                    og.Controller.attribute(self._gripper_asym_pub_attr_path),
+                    float(asymmetry)
                 )
 
                 # Effort topic: always publish total measured effort
