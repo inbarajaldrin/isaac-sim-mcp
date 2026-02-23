@@ -101,12 +101,22 @@ MCP_TOOL_REGISTRY = {
         }
     },
     "save_scene_state": {
-        "description": "Saves current object poses to a JSON file so it can be retrieved later.",
-        "parameters": {}
+        "description": "Saves current object poses to a JSON file so it can be retrieved later. If json_file_path is not provided, a timestamped filename is used automatically.",
+        "parameters": {
+            "json_file_path": {
+                "type": "string",
+                "description": "Optional filename for the saved JSON (e.g. 'assembled.json'). Saved inside the scene_states directory. If omitted, a timestamped name is generated."
+            }
+        }
     },
     "restore_scene_state": {
-        "description": "Restores previously saved object poses from a JSON file to the scene.",
-        "parameters": {}
+        "description": "Restores previously saved object poses from a JSON file to the scene. If json_file_path is not provided, the most recent save is restored.",
+        "parameters": {
+            "json_file_path": {
+                "type": "string",
+                "description": "Optional filename of the JSON to restore (e.g. 'assembled.json'). Looked up inside the scene_states directory. If omitted, the latest timestamped save is used."
+            }
+        }
     },
     "add_objects": {
         "description": "Add objects to the scene from a predefined assembly folder.",
@@ -3186,12 +3196,13 @@ class DigitalTwin(omni.ext.IExt):
             return {"status": "error", "message": f"Failed to randomize '{object_name}': {str(e)}"}
 
     def _cmd_save_scene_state(self, json_file_path: str = None, output_dir: str = None) -> Dict[str, Any]:
-        """Save scene state (object poses) to a timestamped JSON file.
+        """Save scene state (object poses) to a JSON file.
 
-        Each save creates a new file with a timestamp. Restore always loads the latest.
+        If json_file_path is provided, saves to that filename inside scene_states dir.
+        Otherwise creates a timestamped file.
 
         Args:
-            json_file_path: Ignored (kept for API compatibility).
+            json_file_path: Optional filename (e.g. 'assembled.json'). If omitted, timestamped.
             output_dir: Optional output directory pushed by MCP server.
 
         Returns:
@@ -3203,8 +3214,13 @@ class DigitalTwin(omni.ext.IExt):
 
             self._resolve_output_dir(output_dir)
             scene_dir = self._get_scene_state_dir()
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            save_path = os.path.join(scene_dir, f"scene_state_{timestamp}.json")
+            if json_file_path:
+                if not json_file_path.endswith(".json"):
+                    json_file_path += ".json"
+                save_path = os.path.join(scene_dir, os.path.basename(json_file_path))
+            else:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                save_path = os.path.join(scene_dir, f"scene_state_{timestamp}.json")
 
             stage = omni.usd.get_context().get_stage()
             if not stage:
@@ -3269,12 +3285,13 @@ class DigitalTwin(omni.ext.IExt):
             }
 
     def _cmd_restore_scene_state(self, json_file_path: str = None, output_dir: str = None) -> Dict[str, Any]:
-        """Restore scene state (object poses) from the latest timestamped JSON file.
+        """Restore scene state (object poses) from a JSON file.
 
-        Automatically finds the most recent save and restores all objects from it.
+        If json_file_path is provided, loads that specific file from scene_states dir.
+        Otherwise finds the most recent timestamped save.
 
         Args:
-            json_file_path: Ignored (kept for API compatibility).
+            json_file_path: Optional filename (e.g. 'assembled.json'). If omitted, uses latest.
             output_dir: Optional output directory pushed by MCP server.
 
         Returns:
@@ -3282,7 +3299,19 @@ class DigitalTwin(omni.ext.IExt):
         """
         try:
             self._resolve_output_dir(output_dir)
-            latest_path = self._get_latest_scene_state_path()
+
+            if json_file_path:
+                if not json_file_path.endswith(".json"):
+                    json_file_path += ".json"
+                restore_path = os.path.join(self._get_scene_state_dir(), os.path.basename(json_file_path))
+                if not os.path.exists(restore_path):
+                    return {
+                        "status": "error",
+                        "message": f"Scene state file not found: {restore_path}"
+                    }
+                latest_path = restore_path
+            else:
+                latest_path = self._get_latest_scene_state_path()
 
             if not latest_path:
                 return {
