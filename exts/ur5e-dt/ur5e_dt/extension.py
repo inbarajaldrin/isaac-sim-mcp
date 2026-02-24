@@ -1579,7 +1579,7 @@ class DigitalTwin(omni.ext.IExt):
             return
 
         if is_workspace:
-            prim_path = "/World/workspace_camera"
+            prim_path = "/World/workspace_camera_sim"
             position = (0.8572405778988392, -1.3321141046870788, 0.9906567613694909)
             # Euler XYZ: (52.144, 39.13, 26.13) degrees
             quat_xyzw = (0.4714, 0.1994, 0.3347, 0.7912)  # x, y, z, w
@@ -1640,14 +1640,14 @@ class DigitalTwin(omni.ext.IExt):
         stage = omni.usd.get_context().get_stage()
 
         if is_workspace:
-            if not stage.GetPrimAtPath("/World/workspace_camera"):
-                print("Error: Workspace camera not found at /World/workspace_camera. Create it first.")
+            if not stage.GetPrimAtPath("/World/workspace_camera_sim"):
+                print("Error: Workspace camera not found at /World/workspace_camera_sim. Create it first.")
             else:
                 self._create_camera_actiongraph(
-                    "/World/workspace_camera",
+                    "/World/workspace_camera_sim",
                     width, height,
-                    "workspace_camera",
-                    "WorkspaceCamera"
+                    "workspace_camera_sim",
+                    "WorkspaceCameraSim"
                 )
 
         if is_custom:
