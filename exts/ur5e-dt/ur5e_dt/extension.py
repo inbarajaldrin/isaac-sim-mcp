@@ -238,6 +238,7 @@ class DigitalTwin(omni.ext.IExt):
         self._object_spacing = 0.25  # Spacing between objects along X-axis in meters
         self._y_offset = -0.4  # Y offset for all objects
         self._z_offset = 0.0495  # Z offset for all objects
+        self._hidden_objects = {}  # {name: {ref_path, body_pose, category}}
 
         # Output directory pushed by MCP server on connect (None = use default)
         self._output_dir = None
@@ -406,6 +407,8 @@ class DigitalTwin(omni.ext.IExt):
                                     clicked_fn=lambda: self._cmd_save_scene_state())
                                 ui.Button("Restore State", width=120, height=35,
                                     clicked_fn=lambda: self._cmd_restore_scene_state())
+                            with ui.CollapsableFrame(title="Exclude / Include Objects", collapsed=True, height=0):
+                                self._visibility_frame = ui.Frame(build_fn=self._build_visibility_ui)
 
             with ui.CollapsableFrame(title="Logs", collapsed=True, height=0):
                 with ui.VStack(spacing=3, height=0):
@@ -2376,6 +2379,273 @@ class DigitalTwin(omni.ext.IExt):
             print(f"Added {len(aruco_data['markers'])} ArUco markers to {obj_name}")
 
         print(f"=== ArUco markers complete: {total_added} markers added ===")
+
+    # ── Object Visibility (hide = delete + store, unhide = restore) ────────
+
+    def _get_scene_object_names(self, folder_path="/World/Objects"):
+        """Return names of objects currently under /World/Objects (excludes PhysicsMaterial)."""
+        stage = omni.usd.get_context().get_stage()
+        objects_prim = stage.GetPrimAtPath(folder_path)
+        if not objects_prim or not objects_prim.IsValid():
+            return []
+        return [
+            child.GetName() for child in objects_prim.GetChildren()
+            if child.IsA(UsdGeom.Xformable) and child.GetName() != "PhysicsMaterial"
+        ]
+
+    def _build_visibility_ui(self):
+        """Build (or rebuild) the combo boxes for exclude/include.
+
+        Always reads current scene objects and excluded list so the UI
+        is up-to-date on first open and after every action.
+        """
+        scene_objects = self._get_scene_object_names()
+        excluded_names = list(self._hidden_objects.keys())
+        with ui.VStack(spacing=5, height=0):
+            with ui.HStack(spacing=5):
+                ui.Label("Object:", alignment=ui.Alignment.LEFT, width=80)
+                if scene_objects:
+                    self._vis_object_combo = ui.ComboBox(0, *scene_objects, width=150)
+                else:
+                    self._vis_object_combo = ui.ComboBox(0, "(none)", width=150)
+                ui.Button("Exclude", width=80, height=30, clicked_fn=self._on_hide_clicked)
+            with ui.HStack(spacing=5):
+                ui.Label("Excluded:", alignment=ui.Alignment.LEFT, width=80)
+                if excluded_names:
+                    self._vis_hidden_combo = ui.ComboBox(0, *excluded_names, width=150)
+                else:
+                    self._vis_hidden_combo = ui.ComboBox(0, "(none)", width=150)
+                ui.Button("Include", width=80, height=30, clicked_fn=self._on_unhide_clicked)
+
+    def _on_hide_clicked(self):
+        scene_objects = self._get_scene_object_names()
+        if not scene_objects:
+            print("No objects to exclude")
+            return
+        idx = self._vis_object_combo.model.get_item_value_model().as_int
+        if idx < len(scene_objects):
+            self.hide_object(scene_objects[idx])
+        self._visibility_frame.rebuild()
+
+    def _on_unhide_clicked(self):
+        hidden_names = list(self._hidden_objects.keys())
+        if not hidden_names:
+            print("No excluded objects to include")
+            return
+        idx = self._vis_hidden_combo.model.get_item_value_model().as_int
+        if idx < len(hidden_names):
+            self.unhide_object(hidden_names[idx])
+        self._visibility_frame.rebuild()
+
+
+    def _save_all_object_poses(self, folder_path="/World/Objects", exclude=None):
+        """Snapshot body poses of all objects under folder_path (excluding *exclude*)."""
+        poses = {}
+        for name in self._get_scene_object_names(folder_path):
+            if name == exclude:
+                continue
+            body_path = self._get_prim_path(name, folder_path)
+            pose = self._read_prim_pose(body_path)
+            if pose:
+                poses[name] = pose
+        return poses
+
+    def _restore_object_poses(self, poses, folder_path="/World/Objects"):
+        """Write back a snapshot produced by _save_all_object_poses.
+
+        Uses two-step ChangeProperty (orient first, then translate) consistent
+        with assemble_objects.
+        """
+        for name, pose_data in poses.items():
+            body_path = self._get_prim_path(name, folder_path)
+            stage = omni.usd.get_context().get_stage()
+            prim = stage.GetPrimAtPath(body_path)
+            if not prim or not prim.IsValid():
+                continue
+            quat = pose_data.get("quaternion", {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0})
+            pos = pose_data.get("position", {"x": 0.0, "y": 0.0, "z": 0.0})
+            omni.kit.commands.execute("ChangeProperty",
+                                     prop_path=f"{body_path}.xformOp:orient",
+                                     value=Gf.Quatf(float(quat["w"]), float(quat["x"]),
+                                                    float(quat["y"]), float(quat["z"])),
+                                     prev=None)
+            omni.kit.commands.execute("ChangeProperty",
+                                     prop_path=f"{body_path}.xformOp:translate",
+                                     value=Gf.Vec3d(pos["x"], pos["y"], pos["z"]),
+                                     prev=None)
+
+    def hide_object(self, object_name, folder_path="/World/Objects"):
+        """Hide an object: save its reference path + pose, then delete the prim.
+
+        Stops the simulation, saves poses of all remaining objects, deletes the
+        target, restores the remaining poses, and resumes playback.
+        """
+        stage = omni.usd.get_context().get_stage()
+
+        prim_path = f"{folder_path}/{object_name}"
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim or not prim.IsValid():
+            print(f"Object {object_name} not found at {prim_path}")
+            return
+
+        # Read the USD reference file path from the root layer spec
+        ref_path = None
+        prim_spec = stage.GetRootLayer().GetPrimAtPath(prim_path)
+        if prim_spec:
+            refs = prim_spec.referenceList.prependedItems
+            if refs:
+                ref_path = refs[0].assetPath
+        if not ref_path:
+            print(f"Warning: Could not read reference path for {object_name}, unhide will not work")
+
+        # Read the body pose of the object being hidden
+        body_prim_path = self._get_prim_path(object_name, folder_path)
+        body_pose = self._read_prim_pose(body_prim_path)
+
+        # Determine category for physics re-application on unhide
+        type_map = self._load_object_type_map()
+        category = type_map.get(object_name, "block")
+
+        # Snapshot poses of all *other* objects before stopping
+        other_poses = self._save_all_object_poses(folder_path, exclude=object_name)
+
+        # Stop simulation, delete prim, restore others, resume
+        timeline = omni.timeline.get_timeline_interface()
+        was_playing = timeline.is_playing()
+        if was_playing:
+            timeline.stop()
+
+        self._hidden_objects[object_name] = {
+            "ref_path": ref_path,
+            "body_pose": body_pose,
+            "category": category,
+        }
+
+        stage.RemovePrim(prim_path)
+        print(f"Hidden (deleted) object: {object_name}")
+
+        # Restore other objects to their pre-stop poses and resume
+        self._restore_object_poses(other_poses, folder_path)
+        if was_playing:
+            timeline.play()
+
+    def unhide_object(self, object_name, folder_path="/World/Objects"):
+        """Unhide an object: recreate it from saved reference + pose and reapply physics.
+
+        Saves poses of all existing objects, stops simulation, recreates the
+        target prim (with physics), restores *all* object poses (including the
+        newly-restored one), and resumes playback.
+        """
+        if object_name not in self._hidden_objects:
+            print(f"Object {object_name} is not in the hidden list")
+            return
+
+        data = self._hidden_objects[object_name]
+        ref_path = data["ref_path"]
+        body_pose = data["body_pose"]
+        category = data["category"]
+
+        if not ref_path:
+            print(f"Error: No reference path saved for {object_name}, cannot restore")
+            del self._hidden_objects[object_name]
+            return
+
+        stage = omni.usd.get_context().get_stage()
+
+        prim_path = f"{folder_path}/{object_name}"
+        if stage.GetPrimAtPath(prim_path).IsValid():
+            print(f"Object {object_name} already exists in scene, removing from hidden list")
+            del self._hidden_objects[object_name]
+            return
+
+        # Snapshot poses of all existing objects before stopping
+        other_poses = self._save_all_object_poses(folder_path)
+
+        # Stop simulation
+        timeline = omni.timeline.get_timeline_interface()
+        was_playing = timeline.is_playing()
+        if was_playing:
+            timeline.stop()
+
+        # Ensure parent folder exists
+        if not stage.GetPrimAtPath(folder_path):
+            UsdGeom.Xform.Define(stage, folder_path)
+
+        # Recreate prim with USD reference
+        prim = stage.DefinePrim(prim_path)
+        prim.GetReferences().AddReference(ref_path)
+
+        # Rename Body1 → object_name (mirrors add_objects logic)
+        def _rename_body1(search_prim):
+            for child in search_prim.GetAllChildren():
+                if child.GetName() == "Body1":
+                    new_path = child.GetPath().GetParentPath().AppendChild(object_name)
+                    omni.kit.commands.execute("MovePrim", path_from=child.GetPath(), path_to=new_path)
+                    return True
+                if _rename_body1(child):
+                    return True
+            return False
+        _rename_body1(stage.GetPrimAtPath(prim_path))
+
+        # Rebind physics material if it exists in the scene
+        physics_mat_path = f"{folder_path}/PhysicsMaterial"
+        if stage.GetPrimAtPath(physics_mat_path).IsValid():
+            from omni.physx.scripts import physicsUtils
+            physics_mat_sdf_path = Sdf.Path(physics_mat_path)
+            obj_prim = stage.GetPrimAtPath(prim_path)
+            bound = 0
+            for desc in Usd.PrimRange(obj_prim):
+                if desc.HasAPI(UsdPhysics.CollisionAPI):
+                    physicsUtils.add_physics_material_to_prim(stage, desc, physics_mat_sdf_path)
+                    bound += 1
+            if bound == 0:
+                nested_path = f"{folder_path}/{object_name}/{object_name}"
+                nested_prim = stage.GetPrimAtPath(nested_path)
+                if nested_prim and nested_prim.IsValid():
+                    physicsUtils.add_physics_material_to_prim(stage, nested_prim, physics_mat_sdf_path)
+
+        # Reapply per-category collision / physics settings
+        prim_params = self._get_prim_params(category)
+        mesh_path = self._get_prim_path(object_name, folder_path)
+        mesh_prim = stage.GetPrimAtPath(mesh_path)
+        if mesh_prim and mesh_prim.IsValid():
+            approx = prim_params["collision_approximation"]
+            UsdPhysics.CollisionAPI.Apply(mesh_prim)
+            mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
+            if approx == "sdf":
+                mesh_collision_api.CreateApproximationAttr(PhysxSchema.Tokens.sdf)
+                sdf_api = PhysxSchema.PhysxSDFMeshCollisionAPI.Apply(mesh_prim)
+                sdf_api.CreateSdfResolutionAttr(self._sdf_resolution)
+            else:
+                mesh_collision_api.CreateApproximationAttr(approx)
+            rest_offset = prim_params["rest_offset"]
+            physx_collision_api = PhysxSchema.PhysxCollisionAPI.Apply(mesh_prim)
+            physx_collision_api.CreateContactOffsetAttr().Set(self._contact_offset)
+            physx_collision_api.CreateRestOffsetAttr().Set(rest_offset)
+            angular_damping = prim_params["angular_damping"]
+            physx_rb_api = PhysxSchema.PhysxRigidBodyAPI.Apply(mesh_prim)
+            physx_rb_api.CreateAngularDampingAttr().Set(angular_damping)
+
+        del self._hidden_objects[object_name]
+        print(f"Unhidden (restored) object: {object_name}")
+
+        # Build the full pose set (existing objects + the restored one)
+        all_poses = other_poses
+        all_poses[object_name] = body_pose
+
+        # Play first, then restore poses while the sim is running — same
+        # mechanism as Assemble / Restore State which handles overlapping
+        # objects without collision artifacts.
+        if was_playing:
+            timeline.play()
+            async def _restore_after_play():
+                app = omni.kit.app.get_app()
+                for _ in range(3):
+                    await app.next_update_async()
+                self._restore_object_poses(all_poses, folder_path)
+            asyncio.ensure_future(_restore_after_play())
+        else:
+            self._restore_object_poses(all_poses, folder_path)
 
     def delete_objects(self, folder_path="/World/Objects"):
         """Delete the Objects folder from the scene. Stops simulation first to avoid tensor view crash."""
