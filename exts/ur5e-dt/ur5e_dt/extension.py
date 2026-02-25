@@ -315,6 +315,7 @@ class DigitalTwin(omni.ext.IExt):
                     with ui.HStack(spacing=5):
                         ui.Button("Load Scene", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_scene()))
                         self._viewport_toggle_btn = ui.Button("Disable Viewport", width=140, height=35, clicked_fn=self._toggle_viewport_rendering)
+                        ui.Button("Quick Start", width=120, height=35, clicked_fn=lambda: asyncio.ensure_future(self.quick_start()))
 
 
             with ui.CollapsableFrame(title="UR5e Control", collapsed=False, height=0):
@@ -682,6 +683,108 @@ class DigitalTwin(omni.ext.IExt):
         print(f"Viewport rendering {state}")
         if self._viewport_toggle_btn:
             self._viewport_toggle_btn.text = "Disable Viewport" if self._viewport_rendering_enabled else "Enable Viewport"
+
+    async def quick_start(self):
+        """Quick start: load scene, UR5e + action graph, RG2 + action graph, workspace camera with action graph."""
+        import numpy as np
+        from pxr import Gf, Sdf, UsdGeom
+
+        print("=== Quick Start ===")
+
+        # 1. Load scene
+        print("--- Loading scene ---")
+        await self.load_scene()
+
+        # 2. Import UR5e
+        print("--- Importing UR5e ---")
+        await self.load_ur5e()
+
+        # 3. Setup UR5e action graph
+        print("--- Setting up UR5e Action Graph ---")
+        await self.setup_action_graph()
+
+        # 4. Setup UR5e force publisher
+        print("--- Setting up UR5e Force Publisher ---")
+        self.setup_force_publish_action_graph()
+
+        app = omni.kit.app.get_app()
+        await app.next_update_async()
+
+        # 5. Import RG2 gripper
+        print("--- Importing RG2 Gripper ---")
+        self.import_rg2_gripper()
+        await app.next_update_async()
+
+        # 6. Attach gripper to UR5e
+        print("--- Attaching Gripper to UR5e ---")
+        self.attach_rg2_to_ur5e()
+        await app.next_update_async()
+
+        # 7. Setup gripper action graph
+        print("--- Setting up Gripper Action Graph ---")
+        self.setup_gripper_action_graph()
+        await app.next_update_async()
+
+        # 8. Create workspace camera at 1280x720
+        print("--- Creating Workspace Camera (1280x720) ---")
+        stage = omni.usd.get_context().get_stage()
+        ws_prim_path = "/World/workspace_camera_sim"
+        ws_position = (0.8572405778988392, -1.3321141046870788, 0.9906567613694909)
+        ws_quat_xyzw = (0.4714, 0.1994, 0.3347, 0.7912)
+        ws_width, ws_height = 1280, 720
+
+        camera_prim = UsdGeom.Camera.Define(stage, ws_prim_path)
+        if not camera_prim:
+            print(f"Error: Failed to create workspace camera at {ws_prim_path}")
+        else:
+            # Configure camera intrinsics (Intel RealSense specs)
+            hfov_deg, vfov_deg = 69.4, 42.5
+            fx = ws_width / (2 * np.tan(np.deg2rad(hfov_deg / 2)))
+            fy = ws_height / (2 * np.tan(np.deg2rad(vfov_deg / 2)))
+            cx, cy = ws_width * 0.5, ws_height * 0.5
+            horizontal_aperture_mm = 36.0
+            focal_length_mm = fx * horizontal_aperture_mm / ws_width
+            vertical_aperture_mm = ws_height * focal_length_mm / fy
+
+            cam = UsdGeom.Camera(camera_prim.GetPrim())
+            cam.CreateHorizontalApertureAttr().Set(horizontal_aperture_mm)
+            cam.CreateVerticalApertureAttr().Set(vertical_aperture_mm)
+            cam.CreateFocalLengthAttr().Set(focal_length_mm)
+            cam.CreateProjectionAttr().Set("perspective")
+            cam.CreateClippingRangeAttr().Set(Gf.Vec2f(0.1, 10000.0))
+
+            cp = camera_prim.GetPrim()
+            cp.CreateAttribute("omni:lensdistortion:model", Sdf.ValueTypeNames.String).Set("opencvPinhole")
+            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:imageSize", Sdf.ValueTypeNames.Int2).Set(Gf.Vec2i(ws_width, ws_height))
+            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:fx", Sdf.ValueTypeNames.Float).Set(fx)
+            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:fy", Sdf.ValueTypeNames.Float).Set(fy)
+            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:cx", Sdf.ValueTypeNames.Float).Set(cx)
+            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:cy", Sdf.ValueTypeNames.Float).Set(cy)
+            for attr_name in ["k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6", "s1", "s2", "s3", "s4"]:
+                cp.CreateAttribute(f"omni:lensdistortion:opencvPinhole:{attr_name}", Sdf.ValueTypeNames.Float).Set(0.0)
+
+            # Set camera pose
+            xform = UsdGeom.Xform(camera_prim.GetPrim())
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(*ws_position))
+            quat = Gf.Quatd(ws_quat_xyzw[3], ws_quat_xyzw[0], ws_quat_xyzw[1], ws_quat_xyzw[2])
+            xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat)
+            print(f"Workspace camera created at {ws_prim_path} with resolution {ws_width}x{ws_height}")
+        await app.next_update_async()
+
+        # 9. Setup workspace camera action graph
+        print("--- Setting up Workspace Camera Action Graph (1280x720) ---")
+        self._create_camera_actiongraph(
+            ws_prim_path, ws_width, ws_height,
+            "workspace_camera_sim", "WorkspaceCameraSim"
+        )
+        await app.next_update_async()
+
+        # 10. Play the scene
+        print("--- Playing scene ---")
+        self._timeline.play()
+
+        print("=== Quick Start Complete ===")
 
     async def load_ur5e(self):
         asset_path = "omniverse://localhost/Library/ur5e.usd"
