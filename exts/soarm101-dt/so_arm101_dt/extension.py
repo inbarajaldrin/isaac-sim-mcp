@@ -1,0 +1,4085 @@
+import omni.ext
+import omni.ui as ui
+import asyncio
+import numpy as np
+import os
+import sys
+import threading
+import glob
+import omni.client
+import omni.kit.commands
+import carb
+import math
+import socket
+import json
+import traceback
+from typing import Dict, Any
+
+from isaacsim.core.api.world import World
+from isaacsim.gui.components.element_wrappers import ScrollingWindow
+
+# MCP socket server port - change this for different extensions
+MCP_SERVER_PORT = 8767
+
+# MCP output directory configuration
+BASE_OUTPUT_DIR = os.getenv("MCP_CLIENT_OUTPUT_DIR", "").strip()
+if BASE_OUTPUT_DIR:
+    BASE_OUTPUT_DIR = os.path.abspath(BASE_OUTPUT_DIR)
+    RESOURCES_DIR = os.path.join(BASE_OUTPUT_DIR, "resources")
+else:
+    RESOURCES_DIR = "resources"
+
+# Object loading configuration
+OBJECTS_CONFIG = {
+    "folder": "omniverse://localhost/Projects/so-arm101/",
+    "skip_patterns": ["ARM101"],  # skip robot USDs when loading objects
+}
+
+# Lego block color definitions (RGB float values)
+BLOCK_COLORS = {
+    "red":    (0.647, 0.059, 0.059),
+    "green":  (0.137, 0.475, 0.110),
+    "blue":   (0.059, 0.129, 0.647),
+    # "yellow": (0.863, 0.765, 0.110),
+}
+
+# Lego assets folder and per-color USD files
+LEGO_FOLDER = "omniverse://localhost/Projects/so-arm101/legos/"
+# Each color maps to a list of unique USD filenames — one per block instance.
+# Each USD has a uniquely-named body prim matching its filename (e.g. red_2x2).
+LEGO_USDS = {
+    "red":    ["lego_red_2x2.usd", "lego_red_2x3.usd", "lego_red_2x4.usd"],
+    "green":  ["lego_green_2x2.usd", "lego_green_2x3.usd", "lego_green_2x4.usd"],
+    "blue":   ["lego_blue_2x2.usd", "lego_blue_2x3.usd", "lego_blue_2x4.usd"],
+}
+
+
+# =============================================================================
+# MCP TOOL REGISTRY - Single source of truth for all MCP tools
+# =============================================================================
+# Each tool definition includes:
+#   - description: Tool description shown to MCP clients
+#   - parameters: Dict of parameter definitions (name -> {type, description, required, default})
+#
+# The MCP server queries this registry on startup and dynamically registers tools.
+# To add a new tool:
+#   1. Add entry here with description and parameters
+#   2. Add handler method _cmd_<tool_name>() in this extension
+#   3. That's it! The server will automatically discover and expose it.
+# =============================================================================
+
+MCP_TOOL_REGISTRY = {
+    "execute_python_code": {
+        "description": "Execute Python code directly in Isaac Sim's environment with access to Omniverse APIs.",
+        "parameters": {
+            "code": {
+                "type": "string",
+                "description": "Python code to execute in Isaac Sim"
+            }
+        }
+    },
+    "play_scene": {
+        "description": "Start/resume the simulation timeline in Isaac Sim.",
+        "parameters": {}
+    },
+    "stop_scene": {
+        "description": "Stop the simulation timeline in Isaac Sim.",
+        "parameters": {}
+    },
+    "sort_objects": {
+        "description": "Sort lego blocks by placing same-color blocks close together. Optionally filter by color.",
+        "parameters": {
+            "color": {
+                "type": "string",
+                "description": "Optional color to sort ('red', 'green', 'blue'). If omitted, sorts all colors."
+            }
+        }
+    },
+    "randomize_object_poses": {
+        "description": "Randomize lego block positions. Optionally filter by color to only randomize that color.",
+        "parameters": {
+            "color": {
+                "type": "string",
+                "description": "Optional color to randomize ('red', 'green', 'blue'). If omitted, randomizes all."
+            }
+        }
+    },
+    "randomize_single_object": {
+        "description": "Randomize the position of a single named object in a clear workspace area, keeping all other objects fixed.",
+        "parameters": {
+            "object_name": {
+                "type": "string",
+                "description": "Name of the object to randomize (e.g. 'inverted_u_yellow')"
+            }
+        }
+    },
+    "save_scene_state": {
+        "description": "Saves current object poses to a JSON file so it can be retrieved later. If json_file_path is not provided, a timestamped filename is used automatically.",
+        "parameters": {
+            "json_file_path": {
+                "type": "string",
+                "description": "Optional filename for the saved JSON (e.g. 'assembled.json'). Saved inside the scene_states directory. If omitted, a timestamped name is generated."
+            }
+        }
+    },
+    "restore_scene_state": {
+        "description": "Restores previously saved object poses from a JSON file to the scene. If json_file_path is not provided, the most recent save is restored.",
+        "parameters": {
+            "json_file_path": {
+                "type": "string",
+                "description": "Optional filename of the JSON to restore (e.g. 'assembled.json'). Looked up inside the scene_states directory. If omitted, the latest timestamped save is used."
+            }
+        }
+    },
+    "add_objects": {
+        "description": "Add lego block objects to the scene from the SO-ARM101 objects folder.",
+        "parameters": {}
+    },
+    "delete_objects": {
+        "description": "Delete all objects from /World/Objects and the associated pose publisher graph.",
+        "parameters": {}
+    },
+    "setup_pose_publisher": {
+        "description": "Create an action graph to publish object poses to ROS2 topic 'objects_poses_sim'.",
+        "parameters": {}
+    },
+    "sync_real_poses": {
+        "description": "Subscribe to /objects_poses_real ROS2 topic and update sim object poses to match real-world detected poses.",
+        "parameters": {}
+    },
+    "load_scene": {
+        "description": "Initialize the simulation scene with physics, ground plane, and frame rate settings.",
+        "parameters": {}
+    },
+    "load_robot": {
+        "description": "Import the SO-ARM101 robot with integrated gripper into the scene. Loads USD, configures articulation, joint drives, and gripper physics material.",
+        "parameters": {}
+    },
+    "setup_action_graph": {
+        "description": "Create the ROS2 action graph for SO-ARM101 joint state subscription and clock publishing.",
+        "parameters": {}
+    },
+    "setup_force_publisher": {
+        "description": "Create the ROS2 force/torque publisher action graph for SO-ARM101 end-effector wrench.",
+        "parameters": {}
+    },
+    "setup_gripper_action_graph": {
+        "description": "Create the ROS2 gripper control action graph for SO-ARM101 integrated gripper.",
+        "parameters": {}
+    },
+}
+
+# Handler method names for each tool (maps to self._cmd_<name> methods)
+MCP_HANDLERS = {
+    "execute_python_code": "_cmd_execute_python_code",
+    "play_scene": "_cmd_play_scene",
+    "stop_scene": "_cmd_stop_scene",
+    "sort_objects": "_cmd_sort_objects",
+    "randomize_object_poses": "_cmd_randomize_object_poses",
+    "randomize_single_object": "_cmd_randomize_single_object",
+    "save_scene_state": "_cmd_save_scene_state",
+    "restore_scene_state": "_cmd_restore_scene_state",
+    "add_objects": "_cmd_add_objects",
+    "delete_objects": "_cmd_delete_objects",
+    "setup_pose_publisher": "_cmd_setup_pose_publisher",
+    "sync_real_poses": "_cmd_sync_real_poses",
+    "load_scene": "_cmd_load_scene",
+    "load_robot": "_cmd_load_robot",
+    "setup_action_graph": "_cmd_setup_action_graph",
+    "setup_force_publisher": "_cmd_setup_force_publisher",
+    "setup_gripper_action_graph": "_cmd_setup_gripper_action_graph",
+}
+
+from isaacsim.core.utils.stage import add_reference_to_stage
+from isaacsim.core.prims import Articulation as ArticulationView
+from isaacsim.storage.native import get_assets_root_path
+from isaacsim.robot_motion.motion_generation import LulaKinematicsSolver, ArticulationKinematicsSolver
+from isaacsim.core.utils.numpy.rotations import euler_angles_to_quats
+from isaacsim.core.prims import SingleArticulation as Articulation
+import omni.graph.core as og
+import omni.usd
+from pxr import UsdGeom, Gf, Sdf, Usd, UsdPhysics, UsdShade, PhysxSchema
+from scipy.spatial.transform import Rotation as R
+
+
+class LogRedirector:
+    """Redirects stdout/stderr to both the original stream and a UI callback."""
+    def __init__(self, original, callback, throttle_seconds=0.0):
+        self._original = original
+        self._callback = callback
+        self._throttle = throttle_seconds
+        self._last_msgs = {}  # dedup cache: msg -> timestamp
+
+    def write(self, text):
+        self._original.write(text)
+        stripped = text.strip()
+        if not stripped:
+            return
+        if self._throttle > 0:
+            import time as _t
+            now = _t.monotonic()
+            if stripped in self._last_msgs and now - self._last_msgs[stripped] < self._throttle:
+                return
+            self._last_msgs[stripped] = now
+            if len(self._last_msgs) > 200:
+                cutoff = now - self._throttle * 3
+                self._last_msgs = {k: v for k, v in self._last_msgs.items() if v > cutoff}
+        self._callback(text.rstrip("\n"))
+
+    def flush(self):
+        self._original.flush()
+
+
+class DigitalTwin(omni.ext.IExt):
+    def on_startup(self, ext_id):
+        print("[SO-ARM101-DT] Digital Twin startup")
+
+        self._main_loop = asyncio.get_event_loop()
+        self._timeline = omni.timeline.get_timeline_interface()
+        self._robot_view = None
+        self._articulation = None
+        self._gripper_view = None
+        self._viewport_rendering_enabled = True
+        self._viewport_toggle_btn = None
+
+        # Gripper physics callback state
+        self._gripper_physx_sub = None
+        self._gripper_articulation = None
+        self._gripper_graph_path = None
+        self._gripper_sub_attr_path = None
+        self._gripper_pub_attr_path = None
+        self._gripper_asym_pub_attr_path = None
+        self._gripper_publish_active = False
+        self._gripper_warmup = 0  # skip N physics steps before re-init
+
+        # Force publisher physics callback state
+        self._force_physx_sub = None
+        self._effort_articulation = None
+        self._force_graph_path = None
+        self._force_pub_node = None
+        self._force_warmup = 0
+
+        # MCP socket server state
+        self._mcp_socket = None
+        self._mcp_server_thread = None
+        self._mcp_server_running = False
+        self._mcp_client_threads = []
+
+        # Add Objects UI state
+        self._objects_config = OBJECTS_CONFIG
+        self._object_gap = 0.02  # Gap (meters) between object bounding boxes
+        self._y_offset = 0.20  # Y offset for all objects (positive Y = in front of robot)
+        self._ground_plane_z = 0.0  # Ground plane Z position
+        self._robot_base_z_offset = 0.0
+        self._hidden_objects = {}  # {name: {ref_path, body_pose, category}}
+
+        # Output directory pushed by MCP server on connect (None = use default)
+        self._output_dir = None
+
+        # Physics scene settings
+        self._min_frame_rate = 60
+        self._time_steps_per_second = 120
+
+        # SO-ARM101 joint drive parameters (STS3215 servos, URDF effort=10 Nm)
+        # High stiffness for tight position tracking (PD position control)
+        self._robot_max_force = 10.0       # STS3215 max torque (~10 Nm from URDF)
+        self._robot_stiffness = 400.0      # P gain - stiff position tracking
+        self._robot_damping = 40.0         # D gain - prevent oscillation (~10% of P)
+
+        # SO-ARM101 gripper joint drive parameters (STS3215 servo)
+        self._gripper_max_force = 10.0     # same servo as arm joints
+        self._gripper_stiffness = 200.0    # slightly softer for grasping compliance
+        self._gripper_damping = 20.0       # prevent jaw oscillation
+
+        # Joint name mapping: real robot ROS2 names → USD names (same kinematic order)
+        self._joint_name_map = {
+            "Rotation": "shoulder_pan",
+            "Pitch": "shoulder_lift",
+            "Elbow": "elbow_flex",
+            "Wrist_Pitch": "wrist_flex",
+            "Wrist_Roll": "wrist_roll",
+            "Jaw": "gripper_joint",
+        }
+        # USD joint names in kinematic chain order (matches URDF order)
+        self._usd_joint_names = [
+            "shoulder_pan", "shoulder_lift", "elbow_flex",
+            "wrist_flex", "wrist_roll", "gripper_joint",
+        ]
+
+        # Gripper physics material (TODO: tune for SO-ARM101 gripper)
+        self._gripper_dynamic_friction = 0.6
+        self._gripper_static_friction = 0.5
+        self._gripper_restitution = 0.0
+        self._gripper_friction_combine_mode = "max"
+        self._gripper_restitution_combine_mode = "min"
+
+        # Common physics material (applied to all objects)
+        self._object_dynamic_friction = 0.1
+        self._object_static_friction = 0.1
+        self._object_restitution = 0.0
+        self._object_friction_combine_mode = "max"
+        self._object_restitution_combine_mode = "min"
+
+        # Shared collision settings
+        self._sdf_resolution = 300
+        self._contact_offset = 0.003
+
+        # Per-category prim settings (collision approximation, rest offset, angular damping)
+        # Board (type: "board", e.g. base1, base2, base3)
+        self._board_collision_approximation = "sdf"  # "sdf" or "convexDecomposition"
+        self._board_rest_offset = 0.0
+        self._board_angular_damping = 30.0
+
+        # Block (subtype: "block", e.g. u_brown, fork_orange, line_green)
+        self._block_collision_approximation = "sdf"
+        self._block_rest_offset = -0.0005
+        self._block_angular_damping = 30.0
+
+        # Socket (subtype: "socket", e.g. inverted_u_brown)
+        self._socket_collision_approximation = "sdf"
+        self._socket_rest_offset = -0.0005
+        self._socket_angular_damping = 30.0
+
+        # Peg (subtype: "peg", e.g. hex_blue, hex_red)
+        self._peg_collision_approximation = "sdf"
+        self._peg_rest_offset = -0.0005
+        self._peg_angular_damping = 50.0
+
+        # Isaac Sim handles ROS2 initialization automatically through its bridge
+        print("ROS2 bridge will be initialized by Isaac Sim when needed")
+
+        # Create the window UI
+        self._window = ScrollingWindow(title="SO-ARM101 Digital Twin", width=300, height=800)
+        with self._window.frame:
+            with ui.VStack(spacing=5):
+                self.create_ui()
+
+        # Start MCP socket server
+        self._start_mcp_server()
+
+    def create_ui(self):
+        with ui.VStack(spacing=5):
+            with ui.CollapsableFrame(title="Simulation Setup", collapsed=False, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    with ui.HStack(spacing=5):
+                        ui.Button("Load Scene", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_scene()))
+                        self._viewport_toggle_btn = ui.Button("Disable Viewport", width=140, height=35, clicked_fn=self._toggle_viewport_rendering)
+                        ui.Button("Quick Start", width=120, height=35, clicked_fn=lambda: asyncio.ensure_future(self.quick_start()))
+
+
+            with ui.CollapsableFrame(title="SO-ARM101 Control", collapsed=False, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    with ui.HStack(spacing=5):
+                        ui.Button("Import SO-ARM101", width=150, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_robot()))
+                        ui.Button("Setup Action Graph", width=200, height=35, clicked_fn=lambda: asyncio.ensure_future(self.setup_action_graph()))
+                    with ui.HStack(spacing=5):
+                        ui.Button("Setup Force Publisher", width=200, height=35, clicked_fn=self.setup_force_publish_action_graph)
+                        ui.Button("Setup Gripper Action Graph", width=200, height=35, clicked_fn=self.setup_gripper_action_graph)
+
+            # Intel RealSense Camera
+            with ui.CollapsableFrame(title="Intel RealSense Camera", collapsed=False, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    with ui.HStack(spacing=5):
+                        ui.Button("Import RealSense Camera", width=170, height=35, clicked_fn=self.import_realsense_camera)
+                        ui.Button("Attach Camera to Robot", width=160, height=35, clicked_fn=self.attach_camera_to_robot)
+                        ui.Button("Setup Camera Action Graph", width=200, height=35, clicked_fn=self.setup_camera_action_graph)
+
+            # Wrist Camera (OV9732)
+            with ui.CollapsableFrame(title="Wrist Camera (OV9732)", collapsed=False, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    with ui.HStack(spacing=5):
+                        ui.Button("Import Camera Mount", width=170, height=35, clicked_fn=self.import_camera_mount)
+                        ui.Button("Attach Camera Mount", width=170, height=35, clicked_fn=self.attach_camera_mount_mesh)
+                        ui.Button("Create Wrist Camera AG", width=200, height=35, clicked_fn=self.setup_wrist_camera_action_graph)
+
+            # NEW SECTION: Additional Camera
+            with ui.CollapsableFrame(title="Additional Camera", collapsed=True, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    ui.Label("Camera Configuration", alignment=ui.Alignment.LEFT)
+                    
+                    # Camera type selection with checkboxes and labels
+                    with ui.VStack(spacing=5):
+                        with ui.HStack(spacing=5):
+                            self._workspace_checkbox = ui.CheckBox(width=20)
+                            self._workspace_checkbox.model.set_value(False)  # Default unchecked
+                            ui.Label("Workspace Camera", alignment=ui.Alignment.LEFT, width=120)
+
+                        with ui.HStack(spacing=5):
+                            self._custom_checkbox = ui.CheckBox(width=20)
+                            ui.Label("Custom Camera", alignment=ui.Alignment.LEFT, width=120)
+
+                    # Custom camera prim path input
+                    with ui.HStack(spacing=5):
+                        ui.Label("Camera Prim Path:", alignment=ui.Alignment.LEFT, width=120)
+                        self._custom_camera_prim_field = ui.StringField(width=200)
+                        self._custom_camera_prim_field.model.set_value("/World/custom_camera")
+                    
+                    # Custom camera ROS2 topic name input
+                    with ui.HStack(spacing=5):
+                        ui.Label("ROS2 Topic Name:", alignment=ui.Alignment.LEFT, width=120)
+                        self._custom_camera_topic_field = ui.StringField(width=200)
+                        self._custom_camera_topic_field.model.set_value("custom_camera")
+
+                    # Resolution selection
+                    with ui.HStack(spacing=5):
+                        ui.Label("Resolution:", alignment=ui.Alignment.LEFT, width=120)
+                        self._resolution_combo = ui.ComboBox(0, "640x480", "1280x720", "1920x1080", width=150)
+
+                    # Camera control buttons
+                    with ui.HStack(spacing=5):
+                        ui.Button("Create Camera", width=150, height=35, clicked_fn=self.create_additional_camera)
+                        ui.Button("Create Action Graph", width=180, height=35, clicked_fn=self.create_additional_camera_actiongraph)
+
+            with ui.CollapsableFrame(title="Objects", collapsed=False, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    with ui.CollapsableFrame(title="Objects", name="subFrame", collapsed=False, height=0):
+                        with ui.VStack(spacing=5, height=0):
+                            with ui.HStack(spacing=5):
+                                ui.Button("Add Objects", width=150, height=35, clicked_fn=self.add_objects)
+                                ui.Button("Delete Objects", width=150, height=35, clicked_fn=self.delete_objects)
+                            with ui.HStack(spacing=5):
+                                ui.Button("Randomize", width=150, height=35, clicked_fn=self.randomize_object_poses)
+                                ui.Button("Sort", width=150, height=35, clicked_fn=self.sort_objects)
+                            with ui.HStack(spacing=5):
+                                ui.Button("Add ArUco Markers", width=180, height=35, clicked_fn=self.add_aruco_markers)
+                                ui.Button("Setup Pose Publisher", width=180, height=35, clicked_fn=self.create_pose_publisher)
+                    with ui.CollapsableFrame(title="Scene State", name="subFrame", collapsed=True, height=0):
+                        with ui.VStack(spacing=5, height=0):
+                            with ui.HStack(spacing=5):
+                                ui.Button("Sync Real Poses", width=180, height=35, clicked_fn=self.sync_real_poses)
+                            with ui.HStack(spacing=5):
+                                ui.Button("Save State", width=120, height=35,
+                                    clicked_fn=lambda: self._cmd_save_scene_state())
+                                ui.Button("Restore State", width=120, height=35,
+                                    clicked_fn=lambda: self._cmd_restore_scene_state())
+                            with ui.CollapsableFrame(title="Exclude / Include Objects", collapsed=True, height=0):
+                                self._visibility_frame = ui.Frame(build_fn=self._build_visibility_ui)
+
+            with ui.CollapsableFrame(title="Logs", collapsed=True, height=0):
+                with ui.VStack(spacing=3, height=0):
+                    self._log_tab_style = {
+                        "RadioButton": {
+                            "margin": 2, "border_radius": 2, "font_size": 16,
+                            "background_color": 0xFF212121, "color": 0xFF444444,
+                        },
+                        "RadioButton.Label": {"font_size": 16, "color": 0xFF777777},
+                        "RadioButton:checked": {"background_color": 0xFF3A3A3A, "color": 0xFF222222},
+                        "RadioButton.Label:checked": {"color": 0xFFCCCCCC},
+                    }
+                    self._log_tab_collection = ui.RadioCollection()
+                    with ui.HStack(spacing=3, height=30, style=self._log_tab_style):
+                        ui.RadioButton(text="Extension", width=80,
+                            radio_collection=self._log_tab_collection,
+                            clicked_fn=lambda: self._switch_log_tab("extension"))
+                        ui.RadioButton(text="System", width=80,
+                            radio_collection=self._log_tab_collection,
+                            clicked_fn=lambda: self._switch_log_tab("system"))
+                    self._log_stack = ui.ZStack(height=100)
+                    with self._log_stack:
+                        self._ext_log_scroll = ui.ScrollingFrame(
+                            horizontal_scrollbar_policy=ui.ScrollBarPolicy.SCROLLBAR_AS_NEEDED,
+                            vertical_scrollbar_policy=ui.ScrollBarPolicy.SCROLLBAR_ALWAYS_ON,
+                            style={"background_color": 0xFF24211F},
+                        )
+                        with self._ext_log_scroll:
+                            self._ext_log_vstack = ui.VStack(spacing=0)
+                        self._sys_log_scroll = ui.ScrollingFrame(
+                            horizontal_scrollbar_policy=ui.ScrollBarPolicy.SCROLLBAR_AS_NEEDED,
+                            vertical_scrollbar_policy=ui.ScrollBarPolicy.SCROLLBAR_ALWAYS_ON,
+                            visible=False,
+                            style={"background_color": 0xFF24211F},
+                        )
+                        with self._sys_log_scroll:
+                            self._sys_log_vstack = ui.VStack(spacing=0)
+                    with ui.HStack(spacing=5):
+                        ui.Button("Copy Logs", width=120, height=30, clicked_fn=self._copy_logs)
+                        ui.Button("Clear Logs", width=120, height=30, clicked_fn=self._clear_logs)
+
+        self._active_log_tab = "extension"
+        self._ext_log_lines = []
+        self._sys_log_lines = []
+        self._setup_log_redirect()
+
+        # Re-subscribe physics callbacks if action graphs already exist (e.g. after hot-reload)
+        self._resubscribe_physics_callbacks()
+
+    def _setup_log_redirect(self):
+        # Unwrap any leftover redirector from a previous failed startup
+        if isinstance(sys.stdout, LogRedirector):
+            sys.stdout = sys.stdout._original
+        if isinstance(sys.stderr, LogRedirector):
+            sys.stderr = sys.stderr._original
+        self._orig_stdout = sys.stdout
+        self._orig_stderr = sys.stderr
+        sys.stdout = LogRedirector(self._orig_stdout, self._append_ext_log)
+        sys.stderr = LogRedirector(self._orig_stderr, lambda t: self._append_ext_log(f"[ERROR] {t}"), throttle_seconds=2.0)
+        logging = carb.logging.acquire_logging()
+        self._carb_log_sub = logging.add_logger(self._on_carb_log)
+
+    def _on_carb_log(self, source, level, filename, linenum, msg):
+        # carb levels: VERBOSE=-2, INFO=-1, WARN=0, ERROR=1, FATAL=2
+        import time as _t
+        now = _t.monotonic()
+        # Throttle: skip duplicate messages within 2 seconds
+        key = (source, level, msg)
+        last = getattr(self, '_carb_log_last', {})
+        if key in last and now - last[key] < 2.0:
+            return
+        last[key] = now
+        # Evict stale entries periodically
+        if len(last) > 200:
+            cutoff = now - 5.0
+            last = {k: v for k, v in last.items() if v > cutoff}
+        self._carb_log_last = last
+
+        if level >= carb.logging.LEVEL_ERROR:
+            self._append_sys_log(f"[ERROR] [{source}] {msg}")
+        elif level == carb.logging.LEVEL_WARN:
+            self._append_sys_log(f"[WARN] [{source}] {msg}")
+        # elif level == carb.logging.LEVEL_INFO:
+        #     self._append_sys_log(f"[INFO] [{source}] {msg}")
+        # else:
+        #     self._append_sys_log(f"[VERBOSE] [{source}] {msg}")
+
+    def _teardown_log_redirect(self):
+        sys.stdout = self._orig_stdout
+        sys.stderr = self._orig_stderr
+        if hasattr(self, "_carb_log_sub") and self._carb_log_sub is not None:
+            logging = carb.logging.acquire_logging()
+            logging.remove_logger(self._carb_log_sub)
+            self._carb_log_sub = None
+
+    def _log_color(self, text):
+        # Matches Isaac Sim script editor colors (0xAABBGGRR format)
+        if "[ERROR]" in text or "[FATAL]" in text:
+            return 0xFFAAB1F6  # #F6B1AA - light coral
+        elif "[WARN]" in text:
+            return 0xFF4ACBDF  # #DFCB4A - yellow/gold
+        # elif "[INFO]" in text:
+        #     return 0xFFEBBA79  # #79BAEB - light blue
+        # elif "[VERBOSE]" in text:
+        #     return 0xFFBABABA  # #BABABA - gray
+        return 0xFFFFFFFF  # white
+
+    def _add_log_label(self, vstack, scroll, text):
+        with vstack:
+            ui.Label(text, alignment=ui.Alignment.LEFT_TOP, word_wrap=True,
+                     style={"color": self._log_color(text), "font_size": 13, "margin": 0},
+                     height=0)
+        scroll.scroll_y = scroll.scroll_y_max + 100
+
+    def _rebuild_log_vstack(self, vstack, lines):
+        vstack.clear()
+        with vstack:
+            for line in lines:
+                ui.Label(line, alignment=ui.Alignment.LEFT_TOP, word_wrap=True,
+                         style={"color": self._log_color(line), "font_size": 13, "margin": 0},
+                         height=0)
+
+    def _run_on_main_thread(self, fn):
+        """Schedule fn to run on the main thread, safe from any thread."""
+        if threading.current_thread() is threading.main_thread():
+            fn()
+        else:
+            self._main_loop.call_soon_threadsafe(fn)
+
+    def _append_ext_log(self, text):
+        self._ext_log_lines.append(text)
+        if len(self._ext_log_lines) > 500:
+            self._ext_log_lines = self._ext_log_lines[-500:]
+            self._run_on_main_thread(lambda: self._rebuild_log_vstack(self._ext_log_vstack, self._ext_log_lines))
+            return
+        if hasattr(self, "_ext_log_vstack") and self._ext_log_vstack:
+            self._run_on_main_thread(lambda: self._add_log_label(self._ext_log_vstack, self._ext_log_scroll, text))
+
+    def _append_sys_log(self, text):
+        self._sys_log_lines.append(text)
+        if len(self._sys_log_lines) > 500:
+            self._sys_log_lines = self._sys_log_lines[-500:]
+            self._run_on_main_thread(lambda: self._rebuild_log_vstack(self._sys_log_vstack, self._sys_log_lines))
+            return
+        if hasattr(self, "_sys_log_vstack") and self._sys_log_vstack:
+            self._run_on_main_thread(lambda: self._add_log_label(self._sys_log_vstack, self._sys_log_scroll, text))
+
+    def _switch_log_tab(self, tab):
+        self._active_log_tab = tab
+        is_ext = tab == "extension"
+        self._ext_log_scroll.visible = is_ext
+        self._sys_log_scroll.visible = not is_ext
+
+    def _copy_logs(self):
+        lines = self._ext_log_lines if self._active_log_tab == "extension" else self._sys_log_lines
+        try:
+            import subprocess
+            text = "\n".join(lines)
+            proc = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE)
+            proc.communicate(text.encode())
+        except Exception:
+            import omni.kit.clipboard
+            omni.kit.clipboard.copy("\n".join(lines))
+
+    def _clear_logs(self):
+        if self._active_log_tab == "extension":
+            self._ext_log_lines.clear()
+            self._ext_log_vstack.clear()
+        else:
+            self._sys_log_lines.clear()
+            self._sys_log_vstack.clear()
+
+    def _resubscribe_physics_callbacks(self):
+        """Re-subscribe physics callbacks for graphs that survived a hot-reload."""
+        import omni.physx
+
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return
+
+        # Gripper action graph
+        gripper_graph = "/Graph/ActionGraph_Gripper"
+        if stage.GetPrimAtPath(gripper_graph):
+            self._gripper_graph_path = gripper_graph
+            self._gripper_sub_attr_path = f"{gripper_graph}/subscriber.outputs:data"
+            self._gripper_pub_attr_path = f"{gripper_graph}/ros2_publisher.inputs:data"
+            self._gripper_effort_pub_attr_path = f"{gripper_graph}/effort_publisher.inputs:data"
+            self._gripper_asym_pub_attr_path = f"{gripper_graph}/asymmetry_publisher.inputs:data"
+            self._gripper_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
+                self._on_physics_step_gripper
+            )
+            self._gripper_publish_active = True
+            print(f"[HotReload] Re-subscribed gripper physics callback for {gripper_graph}")
+
+        # Force publisher action graph
+        force_graph = "/Graph/ActionGraph_SO_ARM101_ForcePublish"
+        if stage.GetPrimAtPath(force_graph):
+            self._force_graph_path = force_graph
+            # Recover the publisher OG node handle from the existing graph
+            pub_prim = stage.GetPrimAtPath(f"{force_graph}/publisher")
+            if pub_prim:
+                self._force_pub_node = og.get_node_by_path(f"{force_graph}/publisher")
+            self._force_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
+                self._on_physics_step_force
+            )
+            print(f"[HotReload] Re-subscribed force publisher physics callback for {force_graph}")
+
+    @property
+    def _objects_folder_path(self):
+        return self._objects_config["folder"]
+
+    @property
+    def _skip_patterns(self):
+        return self._objects_config.get("skip_patterns", [])
+
+    async def load_scene(self):
+        stage = omni.usd.get_context().get_stage()
+
+        # Only initialize simulation context if physics scene doesn't exist yet
+        physics_scene_prim = stage.GetPrimAtPath("/physicsScene")
+        if not physics_scene_prim or not physics_scene_prim.IsValid():
+            world = World()
+            await world.initialize_simulation_context_async()
+            print("Initialized simulation context and physics scene")
+        else:
+            world = World()
+            print("Physics scene already exists, skipping initialization")
+
+        # Check for ground plane on stage and add if missing
+        ground_prim = stage.GetPrimAtPath("/World/defaultGroundPlane")
+        if ground_prim and ground_prim.IsValid():
+            print("Ground plane already exists, skipping")
+        else:
+            from isaacsim.core.api.objects import GroundPlane
+            GroundPlane(prim_path="/World/defaultGroundPlane", z_position=0.0, size=5000)
+            print("Added ground plane")
+
+        # Set minimum frame rate to 60
+        settings = carb.settings.get_settings()
+        settings.set("/persistent/simulation/minFrameRate", self._min_frame_rate)
+        print(f"Set persistent/simulation/minFrameRate to {self._min_frame_rate}")
+
+        # Configure physics scene
+        physics_scene_prim = stage.GetPrimAtPath("/physicsScene")
+        if physics_scene_prim and physics_scene_prim.IsValid():
+            physx_scene_api = PhysxSchema.PhysxSceneAPI.Apply(physics_scene_prim)
+            physx_scene_api.CreateEnableGPUDynamicsAttr().Set(False)
+            physx_scene_api.CreateTimeStepsPerSecondAttr().Set(self._time_steps_per_second)
+            physx_scene_api.CreateEnableCCDAttr().Set(False)
+            print(f"GPU dynamics disabled, timeStepsPerSecond={self._time_steps_per_second}, CCD disabled on /physicsScene")
+        else:
+            print("Warning: /physicsScene not found")
+
+        print("Scene loaded successfully.")
+
+    def _toggle_viewport_rendering(self):
+        """Toggle viewport rendering on/off to free GPU resources."""
+        import omni.kit.viewport.utility as vp_utils
+        viewport = vp_utils.get_active_viewport()
+        if viewport is None:
+            print("Warning: No active viewport found")
+            return
+        self._viewport_rendering_enabled = not self._viewport_rendering_enabled
+        viewport.updates_enabled = self._viewport_rendering_enabled
+        state = "enabled" if self._viewport_rendering_enabled else "disabled"
+        print(f"Viewport rendering {state}")
+        if self._viewport_toggle_btn:
+            self._viewport_toggle_btn.text = "Disable Viewport" if self._viewport_rendering_enabled else "Enable Viewport"
+
+    async def quick_start(self):
+        """Quick start: load scene, SO-ARM101 + action graph, gripper + action graph, workspace camera with action graph."""
+        import numpy as np
+        from pxr import Gf, Sdf, UsdGeom
+
+        print("=== Quick Start ===")
+
+        # 1. Load scene
+        print("--- Loading scene ---")
+        await self.load_scene()
+
+        # 2. Import SO-ARM101
+        print("--- Importing SO-ARM101 ---")
+        await self.load_robot()
+
+        # 3. Setup SO-ARM101 action graph
+        print("--- Setting up SO-ARM101 Action Graph ---")
+        await self.setup_action_graph()
+
+        # 4. Setup SO-ARM101 force publisher
+        print("--- Setting up SO-ARM101 Force Publisher ---")
+        self.setup_force_publish_action_graph()
+
+        app = omni.kit.app.get_app()
+        await app.next_update_async()
+
+        # 5. Setup gripper action graph (gripper is integrated in the robot USD)
+        print("--- Setting up Gripper Action Graph ---")
+        self.setup_gripper_action_graph()
+        await app.next_update_async()
+
+        # 8. Create workspace camera at 1280x720
+        print("--- Creating Workspace Camera (1280x720) ---")
+        stage = omni.usd.get_context().get_stage()
+        ws_prim_path = "/World/workspace_camera_sim"
+        ws_position = (0.8572405778988392, -1.3321141046870788, 0.9906567613694909)
+        ws_quat_xyzw = (0.4714, 0.1994, 0.3347, 0.7912)
+        ws_width, ws_height = 1280, 720
+
+        camera_prim = UsdGeom.Camera.Define(stage, ws_prim_path)
+        if not camera_prim:
+            print(f"Error: Failed to create workspace camera at {ws_prim_path}")
+        else:
+            # Configure camera intrinsics (Intel RealSense specs)
+            hfov_deg, vfov_deg = 69.4, 42.5
+            fx = ws_width / (2 * np.tan(np.deg2rad(hfov_deg / 2)))
+            fy = ws_height / (2 * np.tan(np.deg2rad(vfov_deg / 2)))
+            cx, cy = ws_width * 0.5, ws_height * 0.5
+            horizontal_aperture_mm = 36.0
+            focal_length_mm = fx * horizontal_aperture_mm / ws_width
+            vertical_aperture_mm = ws_height * focal_length_mm / fy
+
+            cam = UsdGeom.Camera(camera_prim.GetPrim())
+            cam.CreateHorizontalApertureAttr().Set(horizontal_aperture_mm)
+            cam.CreateVerticalApertureAttr().Set(vertical_aperture_mm)
+            cam.CreateFocalLengthAttr().Set(focal_length_mm)
+            cam.CreateProjectionAttr().Set("perspective")
+            cam.CreateClippingRangeAttr().Set(Gf.Vec2f(0.1, 10000.0))
+
+            cp = camera_prim.GetPrim()
+            cp.CreateAttribute("omni:lensdistortion:model", Sdf.ValueTypeNames.String).Set("opencvPinhole")
+            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:imageSize", Sdf.ValueTypeNames.Int2).Set(Gf.Vec2i(ws_width, ws_height))
+            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:fx", Sdf.ValueTypeNames.Float).Set(fx)
+            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:fy", Sdf.ValueTypeNames.Float).Set(fy)
+            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:cx", Sdf.ValueTypeNames.Float).Set(cx)
+            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:cy", Sdf.ValueTypeNames.Float).Set(cy)
+            for attr_name in ["k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6", "s1", "s2", "s3", "s4"]:
+                cp.CreateAttribute(f"omni:lensdistortion:opencvPinhole:{attr_name}", Sdf.ValueTypeNames.Float).Set(0.0)
+
+            # Set camera pose
+            xform = UsdGeom.Xform(camera_prim.GetPrim())
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(*ws_position))
+            quat = Gf.Quatd(ws_quat_xyzw[3], ws_quat_xyzw[0], ws_quat_xyzw[1], ws_quat_xyzw[2])
+            xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat)
+            print(f"Workspace camera created at {ws_prim_path} with resolution {ws_width}x{ws_height}")
+        await app.next_update_async()
+
+        # 9. Setup workspace camera action graph
+        print("--- Setting up Workspace Camera Action Graph (1280x720) ---")
+        self._create_camera_actiongraph(
+            ws_prim_path, ws_width, ws_height,
+            "workspace_camera_sim", "WorkspaceCameraSim"
+        )
+        await app.next_update_async()
+
+        # 10. Play the scene
+        print("--- Playing scene ---")
+        self._timeline.play()
+
+        print("=== Quick Start Complete ===")
+
+    async def load_robot(self):
+        # SO-ARM101 USD asset path on Nucleus
+        asset_path = "omniverse://localhost/Projects/so-arm101/SO-ARM101-USD.usd"
+        prim_path = "/World/SO_ARM101"
+
+        print(f"Loading SO-ARM101 from {asset_path}...")
+
+        # 1. Ensure World exists
+        world = World.instance()
+        if world is None:
+            print("World not initialized. Creating simulation context...")
+            world = World()
+            await world.initialize_simulation_context_async()
+            print("Simulation context initialized.")
+
+        app = omni.kit.app.get_app()
+
+        # 2. Add the USD asset
+        add_reference_to_stage(usd_path=asset_path, prim_path=prim_path)
+        print(f"USD reference added at {prim_path}")
+        await app.next_update_async()
+
+        # 3. Wait for prim to exist
+        stage = omni.usd.get_context().get_stage()
+        for i in range(20):
+            prim = stage.GetPrimAtPath(prim_path)
+            if prim.IsValid():
+                break
+            await app.next_update_async()
+        else:
+            print(f"Error: Failed to load prim at {prim_path}")
+            return
+
+        # 4. Apply translation and orientation
+        xform = UsdGeom.Xform(prim)
+        xform.ClearXformOpOrder()
+        position = Gf.Vec3d(0.0, 0.0, self._robot_base_z_offset)
+        rpy_deg = np.array([0.0, 0.0, 0.0])
+        rpy_rad = np.deg2rad(rpy_deg)
+        quat_xyzw = euler_angles_to_quats(rpy_rad)
+        quat = Gf.Quatd(quat_xyzw[0], quat_xyzw[1], quat_xyzw[2], quat_xyzw[3])
+        xform.AddTranslateOp().Set(position)
+        xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat)
+        xform.AddScaleOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Vec3d(1.0, 1.0, 1.0))
+        print(f"Applied transform to {prim_path}")
+
+        # 4b. Apply URDF base-offset correction at runtime.
+        # The original USD was exported with a ~17mm base-link offset vs the URDF.
+        # We correct it here instead of patching the USD file because:
+        #   - The SO-ARM101 USD uses a triple internal-reference chain for collision
+        #     meshes (link/collisions -> /colliders/link -> /meshes/mesh) with
+        #     convexDecomposition. Re-saving the crate (.usdc) file — even with
+        #     Usd.Stage.Save() — re-serializes the binary mesh data, which causes
+        #     the convex decomposition to produce slightly different hulls that
+        #     interpenetrate between adjacent links, resulting in physics jitter.
+        #   - Runtime patching only touches USD attribute values on the live stage
+        #     while the collision mesh binary loaded from the original crate stays
+        #     bit-for-bit identical, so no jitter occurs.
+        #   - Re-importing from URDF is not viable either: Isaac Sim's URDF
+        #     importer blocks indefinitely on this robot's STL mesh conversion.
+        base_delta = Gf.Vec3d(0.016826307, 8.404913e-8, -0.00240026)
+        # Fix shoulder_pan joint anchor in base_link frame
+        sp_prim = stage.GetPrimAtPath(f"{prim_path}/joints/shoulder_pan")
+        if sp_prim.IsValid():
+            old_lp0 = sp_prim.GetAttribute("physics:localPos0").Get()
+            sp_prim.GetAttribute("physics:localPos0").Set(
+                Gf.Vec3f(old_lp0[0] + base_delta[0], old_lp0[1] + base_delta[1], old_lp0[2] + base_delta[2])
+            )
+            print(f"Fixed shoulder_pan localPos0: {old_lp0} -> {sp_prim.GetAttribute('physics:localPos0').Get()}")
+
+        # Shift all non-base link world-frame initial positions by the same delta
+        link_names = ["shoulder_link", "upper_arm_link", "lower_arm_link",
+                       "wrist_link", "gripper_link", "moving_jaw_so101_v1_link",
+                       "camera_mount_link", "camera_link", "camera_optical_frame"]
+        for lname in link_names:
+            lp = stage.GetPrimAtPath(f"{prim_path}/{lname}")
+            if lp.IsValid():
+                old_t = lp.GetAttribute("xformOp:translate").Get()
+                lp.GetAttribute("xformOp:translate").Set(
+                    Gf.Vec3d(old_t[0] + base_delta[0], old_t[1] + base_delta[1], old_t[2] + base_delta[2])
+                )
+        print(f"Applied URDF base-offset correction (delta={base_delta})")
+
+        # 5. Setup Articulation
+        print("Setting up articulation...")
+        self._robot_view = ArticulationView(prim_paths_expr=prim_path, name="so_arm101_view")
+        World.instance().scene.add(self._robot_view)
+        await World.instance().reset_async()
+        self._timeline.stop()
+        print("Articulation ready.")
+
+        self._articulation = Articulation(prim_path)
+
+        # SO-ARM101 USD joint names (from USD prim hierarchy):
+        #   Located at: /World/SO_ARM101/joints/<name>
+        #   All PhysicsRevoluteJoint types
+        #   Arm joints (5-DOF): shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll
+        #   Gripper joint: gripper_joint (integrated, not separate USD)
+        #   All servos: STS3215 (effort=10, velocity=10)
+        arm_joint_names = [
+            "shoulder_pan",    # base rotation (±110°)
+            "shoulder_lift",   # shoulder pitch (±100°)
+            "elbow_flex",      # elbow (−100° to +90°)
+            "wrist_flex",      # wrist pitch (±95°)
+            "wrist_roll",      # wrist roll (±160°)
+        ]
+
+        # Joints are under /World/SO_ARM101/joints/ (USD default prim maps to prim_path)
+        for joint_name in arm_joint_names:
+            joint_path = f"{prim_path}/joints/{joint_name}"
+            joint_prim = stage.GetPrimAtPath(joint_path)
+
+            if not joint_prim.IsValid():
+                print(f"Warning: Joint not found at {joint_path}")
+                continue
+
+            drive_api = UsdPhysics.DriveAPI.Apply(joint_prim, "angular")
+            drive_api.GetMaxForceAttr().Set(self._robot_max_force)
+            drive_api.GetStiffnessAttr().Set(self._robot_stiffness)
+            drive_api.GetDampingAttr().Set(self._robot_damping)
+            print(f"Set {joint_name}: maxForce={self._robot_max_force}, stiffness={self._robot_stiffness}, damping={self._robot_damping}")
+
+        # Also configure the integrated gripper joint
+        gripper_joint_path = f"{prim_path}/joints/gripper_joint"
+        gripper_joint_prim = stage.GetPrimAtPath(gripper_joint_path)
+        if gripper_joint_prim.IsValid():
+            drive_api = UsdPhysics.DriveAPI.Apply(gripper_joint_prim, "angular")
+            drive_api.GetMaxForceAttr().Set(self._gripper_max_force)
+            drive_api.GetStiffnessAttr().Set(self._gripper_stiffness)
+            drive_api.GetDampingAttr().Set(self._gripper_damping)
+            print(f"Set gripper: maxForce={self._gripper_max_force}, stiffness={self._gripper_stiffness}, damping={self._gripper_damping}")
+        else:
+            print(f"Warning: Gripper joint not found at {gripper_joint_path}")
+
+        # Configure gripper physics material for better grasping
+        self._configure_gripper_material(prim_path, stage)
+
+        # Camera links are part of the articulation but have no colliders,
+        # causing invalid inertia {1,1,1} warnings and physics instability.
+        # Can't remove RigidBodyAPI from articulation links, so set proper
+        # mass and inertia instead.
+        from pxr import PhysxSchema
+        for cam_link in ["camera_mount_link", "camera_link", "camera_optical_frame"]:
+            cam_prim = stage.GetPrimAtPath(f"{prim_path}/{cam_link}")
+            if cam_prim.IsValid() and cam_prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                mass_api = UsdPhysics.MassAPI.Apply(cam_prim)
+                mass_api.CreateMassAttr().Set(0.01)
+                mass_api.CreateDiagonalInertiaAttr().Set(Gf.Vec3f(0.0001, 0.0001, 0.0001))
+                print(f"Set mass/inertia on {cam_link}")
+
+        print("SO-ARM101 robot loaded successfully (arm + integrated gripper)!")
+
+        
+    async def setup_action_graph(self):
+        import omni.graph.core as og
+        import isaacsim.core.utils.stage as stage_utils
+        from isaacsim.core.utils.extensions import enable_extension
+
+        print("Setting up ROS 2 Action Graph...")
+
+        # Check that SO-ARM101 exists before creating graph
+        stage = omni.usd.get_context().get_stage()
+        if not stage.GetPrimAtPath("/World/SO_ARM101"):
+            print("Error: SO-ARM101 not found at /World/SO_ARM101. Load robot first.")
+            return
+
+        # Ensure extensions are enabled
+        enable_extension("isaacsim.ros2.bridge")
+        enable_extension("isaacsim.core.nodes")
+        enable_extension("omni.graph.action")
+
+        graph_path = "/Graph/ActionGraph_SO_ARM101"
+
+        # Check if graph already exists
+        if stage.GetPrimAtPath(graph_path):
+            print(f"Action Graph already exists at {graph_path}, skipping creation.")
+            return
+
+        (graph, nodes, _, _) = og.Controller.edit(
+            {
+                "graph_path": graph_path,
+                "evaluator_name": "execution"
+            },
+            {
+                og.Controller.Keys.CREATE_NODES: [
+                    ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
+                    ("ros2_context", "isaacsim.ros2.bridge.ROS2Context"),
+                    ("isaac_read_simulation_time", "isaacsim.core.nodes.IsaacReadSimulationTime"),
+                    ("ros2_subscribe_joint_state", "isaacsim.ros2.bridge.ROS2SubscribeJointState"),
+                    ("ros2_publish_clock", "isaacsim.ros2.bridge.ROS2PublishClock"),
+                    ("articulation_controller", "isaacsim.core.nodes.IsaacArticulationController"),
+                ],
+                og.Controller.Keys.SET_VALUES: [
+                    ("ros2_context.inputs:useDomainIDEnvVar", True),
+                    ("ros2_context.inputs:domain_id", 0),
+                    ("ros2_subscribe_joint_state.inputs:topicName", "/joint_states"),
+                    ("ros2_subscribe_joint_state.inputs:nodeNamespace", ""),
+                    ("ros2_publish_clock.inputs:topicName", "/clock"),
+                    ("ros2_publish_clock.inputs:nodeNamespace", ""),
+                    ("isaac_read_simulation_time.inputs:resetOnStop", False),
+                    ("articulation_controller.inputs:robotPath", "/World/SO_ARM101"),
+                    # Use joint indices [0..5] instead of joint names because
+                    # the real robot publishes URDF names (Rotation, Pitch, ...)
+                    # which don't match the USD names (shoulder_pan, shoulder_lift, ...).
+                    # Both kinematic chains have the same ordering so index mapping is 1:1.
+                    ("articulation_controller.inputs:jointIndices", [0, 1, 2, 3, 4, 5]),
+                ],
+                og.Controller.Keys.CONNECT: [
+                    ("on_playback_tick.outputs:tick", "ros2_subscribe_joint_state.inputs:execIn"),
+                    ("on_playback_tick.outputs:tick", "ros2_publish_clock.inputs:execIn"),
+                    ("on_playback_tick.outputs:tick", "articulation_controller.inputs:execIn"),
+                    ("ros2_context.outputs:context", "ros2_subscribe_joint_state.inputs:context"),
+                    ("ros2_context.outputs:context", "ros2_publish_clock.inputs:context"),
+                    ("isaac_read_simulation_time.outputs:simulationTime", "ros2_publish_clock.inputs:timeStamp"),
+                    ("ros2_subscribe_joint_state.outputs:positionCommand", "articulation_controller.inputs:positionCommand"),
+                    ("ros2_subscribe_joint_state.outputs:velocityCommand", "articulation_controller.inputs:velocityCommand"),
+                    ("ros2_subscribe_joint_state.outputs:effortCommand", "articulation_controller.inputs:effortCommand"),
+                    # NOTE: jointNames NOT connected - using jointIndices instead
+                    # to avoid name mismatch between URDF and USD joint names
+                ],
+            }
+        )
+
+        print("ROS 2 Action Graph setup complete.")
+
+    def setup_gripper_action_graph(self):
+        """Setup gripper action graph for ROS2 control.
+
+        Uses the same pattern as the force publisher: a pure OmniGraph action
+        graph for ROS2 communication and an extension-level physics callback
+        for ArticulationView control. No ScriptNodes — the extension owns
+        the ArticulationView lifecycle so stop/play works without refresh.
+        """
+        import omni.physx
+
+        print("Setting up Gripper Action Graph...")
+
+        # SO-ARM101 has an integrated gripper — use the robot prim path
+        stage_check = omni.usd.get_context().get_stage()
+        if not stage_check.GetPrimAtPath("/World/SO_ARM101"):
+            print("Error: Robot not found at /World/SO_ARM101. Load robot first.")
+            return
+
+        # Clean up any previous physics callback
+        self._stop_gripper_physics()
+
+        graph_path = "/Graph/ActionGraph_Gripper"
+        keys = og.Controller.Keys
+
+        # Delete existing graph
+        stage = omni.usd.get_context().get_stage()
+        if stage.GetPrimAtPath(graph_path):
+            stage.RemovePrim(graph_path)
+
+        # Create graph with ROS2 nodes — width publisher + effort publisher
+        (graph, nodes, _, _) = og.Controller.edit(
+            {"graph_path": graph_path, "evaluator_name": "execution"},
+            {
+                keys.CREATE_NODES: [
+                    ("tick", "omni.graph.action.OnPlaybackTick"),
+                    ("context", "isaacsim.ros2.bridge.ROS2Context"),
+                    ("subscriber", "isaacsim.ros2.bridge.ROS2Subscriber"),
+                    ("ros2_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
+                    ("effort_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
+                    ("asymmetry_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
+                ],
+                keys.SET_VALUES: [
+                    ("subscriber.inputs:messageName", "String"),
+                    ("subscriber.inputs:messagePackage", "std_msgs"),
+                    ("subscriber.inputs:topicName", "gripper_command"),
+                    ("ros2_publisher.inputs:messageName", "Float64"),
+                    ("ros2_publisher.inputs:messagePackage", "std_msgs"),
+                    ("ros2_publisher.inputs:topicName", "gripper_width_sim"),
+                    ("effort_publisher.inputs:messageName", "Float64"),
+                    ("effort_publisher.inputs:messagePackage", "std_msgs"),
+                    ("effort_publisher.inputs:topicName", "gripper_effort_sim"),
+                    ("asymmetry_publisher.inputs:messageName", "Float64"),
+                    ("asymmetry_publisher.inputs:messagePackage", "std_msgs"),
+                    ("asymmetry_publisher.inputs:topicName", "gripper_asymmetry_sim"),
+                ],
+                keys.CONNECT: [
+                    ("tick.outputs:tick", "subscriber.inputs:execIn"),
+                    ("tick.outputs:tick", "ros2_publisher.inputs:execIn"),
+                    ("tick.outputs:tick", "effort_publisher.inputs:execIn"),
+                    ("tick.outputs:tick", "asymmetry_publisher.inputs:execIn"),
+                    ("context.outputs:context", "subscriber.inputs:context"),
+                    ("context.outputs:context", "ros2_publisher.inputs:context"),
+                    ("context.outputs:context", "effort_publisher.inputs:context"),
+                    ("context.outputs:context", "asymmetry_publisher.inputs:context"),
+                ],
+            }
+        )
+
+        # Create custom data attributes on publishers
+        publisher_prim = stage.GetPrimAtPath(f"{graph_path}/ros2_publisher")
+        publisher_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
+        effort_prim = stage.GetPrimAtPath(f"{graph_path}/effort_publisher")
+        effort_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
+        asym_prim = stage.GetPrimAtPath(f"{graph_path}/asymmetry_publisher")
+        asym_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
+
+        # Store attribute paths for the physics callback
+        self._gripper_graph_path = graph_path
+        self._gripper_sub_attr_path = f"{graph_path}/subscriber.outputs:data"
+        self._gripper_pub_attr_path = f"{graph_path}/ros2_publisher.inputs:data"
+        self._gripper_effort_pub_attr_path = f"{graph_path}/effort_publisher.inputs:data"
+        self._gripper_asym_pub_attr_path = f"{graph_path}/asymmetry_publisher.inputs:data"
+        self._gripper_articulation = None
+
+        # Subscribe to physics step events — gripper control runs at physics rate
+        self._gripper_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
+            self._on_physics_step_gripper
+        )
+        self._gripper_publish_active = True
+
+        print(f"Gripper Action Graph created at {graph_path}")
+        print("Gripper control runs at physics rate via extension callback (no ScriptNodes)")
+        print("\nTest commands:")
+        print("ros2 topic pub /gripper_command std_msgs/String 'data: \"open\"'")
+        print("ros2 topic pub /gripper_command std_msgs/String 'data: \"close\"'")
+        print("ros2 topic pub /gripper_command std_msgs/String 'data: \"1100\"'")
+        print("ros2 topic pub /gripper_command std_msgs/String 'data: \"550\"'")
+        print("\nMonitor gripper:")
+        print("ros2 topic echo /gripper_width_sim")
+        print("ros2 topic echo /gripper_effort_sim")
+        print("ros2 topic echo /gripper_asymmetry_sim")
+
+    def _on_physics_step_gripper(self, dt):
+        """Physics step callback — read ROS2 command, apply to SO-ARM101 integrated gripper, publish state.
+
+        The SO-ARM101 has a single 'gripper' revolute joint (index 5 in the articulation,
+        after the 5 arm joints). Commands map to jaw angle.
+        """
+        import numpy as np
+        from isaacsim.core.utils.types import ArticulationActions
+
+        try:
+            artic = self._lazy_init_articulation(
+                '_gripper_articulation', '/World/SO_ARM101',
+                'gripper_ctrl', '_gripper_warmup')
+            if artic is None:
+                return
+            self._gripper_articulation = artic
+
+            # Find gripper joint index (the 'gripper' joint is the 6th joint, index 5)
+            if not hasattr(self, '_gripper_joint_idx') or self._gripper_joint_idx is None:
+                joint_names = artic.joint_names
+                if joint_names is not None:
+                    for i, name in enumerate(joint_names):
+                        if 'gripper' in name.lower():
+                            self._gripper_joint_idx = i
+                            break
+                if not hasattr(self, '_gripper_joint_idx') or self._gripper_joint_idx is None:
+                    self._gripper_joint_idx = 5  # default: 6th joint
+
+            gripper_idx = self._gripper_joint_idx
+
+            # --- Read command from ROS2 subscriber ---
+            try:
+                raw = og.Controller.get(og.Controller.attribute(self._gripper_sub_attr_path))
+                input_str = str(raw).strip() if raw else ""
+            except Exception:
+                input_str = ""
+
+            # Parse command: "open", "close", or numeric angle in degrees
+            if input_str and input_str not in ("", "None", "0"):
+                if input_str == "open":
+                    target_angle_deg = 45.0  # fully open
+                elif input_str == "close":
+                    target_angle_deg = 0.0   # fully closed
+                else:
+                    try:
+                        target_angle_deg = float(input_str)
+                    except ValueError:
+                        target_angle_deg = None
+
+                if target_angle_deg is not None:
+                    target_angle_deg = float(np.clip(target_angle_deg, 0.0, 45.0))
+                    target_rad = np.deg2rad(target_angle_deg)
+                    action = ArticulationActions(
+                        joint_positions=np.array([target_rad]),
+                        joint_indices=np.array([gripper_idx])
+                    )
+                    self._gripper_articulation.apply_action(action)
+
+            # --- Read gripper state and publish ---
+            joint_positions = self._gripper_articulation.get_joint_positions()
+            if joint_positions is not None and joint_positions.shape[1] > gripper_idx:
+                gripper_angle_rad = float(joint_positions[0, gripper_idx])
+                gripper_angle_deg = np.rad2deg(gripper_angle_rad)
+
+                # Publish jaw angle in degrees as "width"
+                publish_value = float(np.clip(gripper_angle_deg, 0.0, 45.0))
+
+                og.Controller.set(
+                    og.Controller.attribute(self._gripper_pub_attr_path),
+                    publish_value
+                )
+
+                # Asymmetry: not applicable for single jaw, publish 0
+                og.Controller.set(
+                    og.Controller.attribute(self._gripper_asym_pub_attr_path),
+                    0.0
+                )
+
+                # Effort topic: publish gripper joint effort
+                measured_efforts = self._gripper_articulation.get_measured_joint_efforts()
+                if measured_efforts is not None and measured_efforts.shape[1] > gripper_idx:
+                    total_effort = abs(float(measured_efforts[0, gripper_idx]))
+                else:
+                    total_effort = 0.0
+
+                og.Controller.set(
+                    og.Controller.attribute(self._gripper_effort_pub_attr_path),
+                    total_effort
+                )
+        except Exception as e:
+            print(f"[Gripper callback] {e}")
+
+    def _stop_physics_callback(self, sub_attr, artic_attr, active_attr, warmup_attr):
+        """Stop a physics callback and clean up its resources."""
+        if hasattr(self, sub_attr) and getattr(self, sub_attr) is not None:
+            setattr(self, sub_attr, None)
+        if hasattr(self, artic_attr):
+            setattr(self, artic_attr, None)
+        setattr(self, active_attr, False)
+        setattr(self, warmup_attr, 0)
+
+    def _lazy_init_articulation(self, artic_attr, prim_path, name_prefix, warmup_attr):
+        """Lazy-init an ArticulationView, returning it or None if not ready.
+
+        Also handles warmup countdown and stale handle detection.
+        Returns the articulation if ready, None otherwise.
+        """
+        warmup = getattr(self, warmup_attr)
+        if warmup > 0:
+            setattr(self, warmup_attr, warmup - 1)
+            return None
+
+        artic = getattr(self, artic_attr)
+        if artic is None:
+            try:
+                import time as _t
+                from isaacsim.core.prims import Articulation as _AV
+                artic = _AV(prim_paths_expr=prim_path, name=f"{name_prefix}_{int(_t.time()*1000)}")
+                artic.initialize()
+                setattr(self, artic_attr, artic)
+            except Exception:
+                setattr(self, artic_attr, None)
+                return None
+
+        if not artic.is_physics_handle_valid():
+            setattr(self, artic_attr, None)
+            setattr(self, warmup_attr, 30)
+            return None
+
+        return artic
+
+    def _stop_gripper_physics(self):
+        """Stop the gripper physics callback and clean up resources."""
+        self._stop_physics_callback('_gripper_physx_sub', '_gripper_articulation',
+                                    '_gripper_publish_active', '_gripper_warmup')
+
+    def setup_force_publish_action_graph(self):
+        """Setup force publishing as geometry_msgs/WrenchStamped on /force_torque_sensor_broadcaster/wrench_sim.
+
+        Uses a physics step callback to read measured joint forces at physics rate
+        (~60 Hz). Uses get_measured_joint_forces() which returns 6-DOF spatial forces
+        [Fx, Fy, Fz, Tx, Ty, Tz] per joint. Publishes full wrench from the end-effector joint,
+        matching the real robot's force_torque_sensor_broadcaster message format.
+        """
+        import omni.physx
+
+        print("Setting up SO-ARM101 Force Publisher (WrenchStamped)...")
+
+        # Clean up any previous physics callback
+        self._stop_force_publish()
+
+        # Check that SO-ARM101 prim exists in the scene
+        stage_check = omni.usd.get_context().get_stage()
+        if not stage_check.GetPrimAtPath("/World/SO_ARM101"):
+            print("Error: SO-ARM101 prim not found at /World/SO_ARM101. Load robot first.")
+            return
+
+        # Reuse existing ArticulationView if available; otherwise physics callback will lazy-init
+        if self._robot_view is not None:
+            self._effort_articulation = self._robot_view
+            print(f"Using existing ArticulationView. Joints: {self._effort_articulation.joint_names}")
+        else:
+            self._effort_articulation = None
+            print("ArticulationView not cached (hot-reload?). Will lazy-init in physics callback.")
+
+        # Delete existing graph if it exists
+        graph_path = "/Graph/ActionGraph_SO_ARM101_ForcePublish"
+        keys = og.Controller.Keys
+        stage = omni.usd.get_context().get_stage()
+        if stage.GetPrimAtPath(graph_path):
+            stage.RemovePrim(graph_path)
+
+        # Create OmniGraph with OnPlaybackTick for ROS2 publisher execution
+        (graph, nodes, _, _) = og.Controller.edit(
+            {"graph_path": graph_path, "evaluator_name": "execution"},
+            {
+                keys.CREATE_NODES: [
+                    ("tick", "omni.graph.action.OnPlaybackTick"),
+                    ("context", "isaacsim.ros2.bridge.ROS2Context"),
+                    ("publisher", "isaacsim.ros2.bridge.ROS2Publisher")
+                ],
+                keys.SET_VALUES: [
+                    ("publisher.inputs:messageName", "WrenchStamped"),
+                    ("publisher.inputs:messagePackage", "geometry_msgs"),
+                    ("publisher.inputs:topicName", "force_torque_sensor_broadcaster/wrench_sim"),
+                ],
+                keys.CONNECT: [
+                    ("tick.outputs:tick", "publisher.inputs:execIn"),
+                    ("context.outputs:context", "publisher.inputs:context"),
+                ]
+            }
+        )
+
+        # Store graph path and publisher node reference for the physics callback.
+        # The ROS2Publisher C++ node auto-creates dynamic attributes (wrench:force:x, etc.)
+        # based on the WrenchStamped message definition. We access them via og.Controller.attribute()
+        # using colon-separated field paths (the convention for nested ROS2 message fields in OG).
+        self._force_graph_path = graph_path
+        self._force_pub_node = nodes[2]  # publisher node
+
+        # Set header frame_id
+        og.Controller.attribute("inputs:header:frame_id", self._force_pub_node).set("tool0")
+
+        # Physics callback reads joint forces at physics rate and updates the attributes
+        self._force_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
+            self._on_physics_step_force
+        )
+
+        self._force_publish_active = True
+
+        print(f"SO-ARM101 Force Publisher created at {graph_path}")
+        print("Publishing geometry_msgs/WrenchStamped to topic: /force_torque_sensor_broadcaster/wrench_sim")
+        print("Full 6-DOF wrench (Fx, Fy, Fz, Tx, Ty, Tz) from SO-ARM101 end-effector joint")
+        print("Joint forces read at physics rate (~60 Hz)")
+
+    def _on_physics_step_force(self, dt):
+        """Physics step callback - read joint forces and update OmniGraph WrenchStamped attributes.
+
+        Uses get_measured_joint_forces() which returns 6-DOF spatial forces
+        [Fx, Fy, Fz, Tx, Ty, Tz] per joint. Publishes full wrench from the last joint
+        (wrist joint) as geometry_msgs/WrenchStamped.
+        """
+        try:
+            artic = self._lazy_init_articulation(
+                '_effort_articulation', '/World/SO_ARM101',
+                'force_pub_ctrl', '_force_warmup')
+            if artic is None:
+                return
+            self._effort_articulation = artic
+
+            # get_measured_joint_forces returns shape (num_articulations, num_joints, 6)
+            # where 6 = [Fx, Fy, Fz, Tx, Ty, Tz]
+            forces = self._effort_articulation.get_measured_joint_forces()
+            if forces is not None and len(forces) > 0:
+                # Use last joint (wrist joint) - full 6-DOF wrench
+                wrist = forces[0][-1]
+                node = self._force_pub_node
+                og.Controller.attribute("inputs:wrench:force:x", node).set(float(wrist[0]))
+                og.Controller.attribute("inputs:wrench:force:y", node).set(float(wrist[1]))
+                og.Controller.attribute("inputs:wrench:force:z", node).set(float(wrist[2]))
+                og.Controller.attribute("inputs:wrench:torque:x", node).set(float(wrist[3]))
+                og.Controller.attribute("inputs:wrench:torque:y", node).set(float(wrist[4]))
+                og.Controller.attribute("inputs:wrench:torque:z", node).set(float(wrist[5]))
+        except Exception as e:
+            print(f"[Force callback] {e}")
+
+    def _stop_force_publish(self):
+        """Stop the physics-rate force publisher and clean up resources."""
+        self._stop_physics_callback('_force_physx_sub', '_effort_articulation',
+                                    '_force_publish_active', '_force_warmup')
+
+    def _configure_gripper_material(self, robot_prim_path, stage):
+        """Configure gripper physics material on the jaw and gripper collision meshes."""
+        jaw_link = f"{robot_prim_path}/moving_jaw_so101_v1_link"
+        gripper_link = f"{robot_prim_path}/gripper_link"
+
+        gripper_mat_path = f"{robot_prim_path}/GripperPhysicsMaterial"
+        gripper_material = UsdShade.Material.Define(stage, gripper_mat_path)
+        gripper_mat_api = UsdPhysics.MaterialAPI.Apply(gripper_material.GetPrim())
+        gripper_mat_api.CreateDynamicFrictionAttr().Set(self._gripper_dynamic_friction)
+        gripper_mat_api.CreateRestitutionAttr().Set(self._gripper_restitution)
+        gripper_mat_api.CreateStaticFrictionAttr().Set(self._gripper_static_friction)
+        gripper_physx_mat_api = PhysxSchema.PhysxMaterialAPI.Apply(gripper_material.GetPrim())
+        gripper_physx_mat_api.CreateFrictionCombineModeAttr().Set(self._gripper_friction_combine_mode)
+        gripper_physx_mat_api.CreateRestitutionCombineModeAttr().Set(self._gripper_restitution_combine_mode)
+        print(f"Created gripper physics material at {gripper_mat_path}")
+
+        gripper_mat_sdf_path = Sdf.Path(gripper_mat_path)
+        for link_path in [f"{jaw_link}/collisions", f"{gripper_link}/collisions"]:
+            link_prim = stage.GetPrimAtPath(link_path)
+            if link_prim and link_prim.IsValid():
+                from omni.physx.scripts import physicsUtils
+                physicsUtils.add_physics_material_to_prim(stage, link_prim, gripper_mat_sdf_path)
+                print(f"Bound gripper physics material to {link_path}")
+            else:
+                print(f"Warning: Collision prim not found at {link_path}")
+
+    def import_realsense_camera(self):
+        """Import Intel RealSense D455 camera"""
+        usd_path = "omniverse://localhost/NVIDIA/Assets/Isaac/5.0/Isaac/Sensors/Intel/RealSense/rsd455.usd"
+        filename = os.path.splitext(os.path.basename(usd_path))[0]
+        prim_path = f"/World/{filename}"
+        add_reference_to_stage(usd_path=usd_path, prim_path=prim_path)
+        print(f"Prim imported at {prim_path}")
+
+    def attach_camera_to_robot(self):
+        """Attach RealSense camera to SO-ARM101 gripper frame link."""
+        import omni.kit.commands
+        import omni.usd
+        from pxr import Gf, Usd, UsdPhysics
+
+        stage = omni.usd.get_context().get_stage()
+
+        # Check camera prim exists
+        if not stage.GetPrimAtPath("/World/rsd455").IsValid():
+            print("[ERROR] Camera prim /World/rsd455 not found — import the RealSense camera first")
+            return
+
+        # SO-ARM101 end effector frame (inside gripper_link)
+        target_link = "/World/SO_ARM101/gripper_link"
+        if not stage.GetPrimAtPath(target_link).IsValid():
+            print(f"[ERROR] {target_link} not found — import the SO-ARM101 first")
+            return
+
+        # Move the prim
+        camera_dest = f"{target_link}/rsd455"
+        result = omni.kit.commands.execute('MovePrim',
+                                 path_from="/World/rsd455",
+                                 path_to=camera_dest)
+        if not result:
+            print(f"[ERROR] Failed to move camera prim to {target_link}")
+            return
+
+        omni.kit.commands.execute('ChangeProperty',
+                                 prop_path=f"{camera_dest}.xformOp:translate",
+                                 value=Gf.Vec3d(0.0, 0.0, 0.05),
+                                 prev=None)
+        omni.kit.commands.execute('ChangeProperty',
+                                 prop_path=f"{camera_dest}.xformOp:rotateZYX",
+                                 value=Gf.Vec3d(0, 0, 0),
+                                 prev=None)
+
+        # Remove RigidBodyAPI from nested camera prim
+        rsd455_prim = stage.GetPrimAtPath(f"{camera_dest}/RSD455")
+        if rsd455_prim.IsValid() and rsd455_prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            UsdPhysics.RigidBodyAPI(rsd455_prim).GetRigidBodyEnabledAttr().Set(False)
+            rsd455_prim.RemoveAPI(UsdPhysics.RigidBodyAPI)
+            print("Removed RigidBodyAPI from RSD455")
+
+        print(f"RealSense camera attached to SO-ARM101 gripper_link at {target_link}")
+
+    def setup_camera_action_graph(self):
+        """Create ActionGraph for camera ROS2 publishing"""
+        import yaml
+
+        CAMERA_PRIM = "/World/SO_ARM101/gripper_link/rsd455/RSD455/Camera_OmniVision_OV9782_Color"
+
+        # Check that camera prim exists
+        stage = omni.usd.get_context().get_stage()
+        if not stage.GetPrimAtPath(CAMERA_PRIM):
+            print(f"Error: Camera prim not found at {CAMERA_PRIM}. Attach camera to robot first.")
+            return
+
+        # Load camera config from robot_config.yaml
+        config_path = os.path.expanduser(
+            "~/Desktop/ros2_ws/src/aruco_camera_localizer/config/robot_config.yaml"
+        )
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                cam_cfg = yaml.safe_load(f)
+            print(f"Loaded camera config from {config_path}")
+        else:
+            cam_cfg = {}
+            print(f"Warning: {config_path} not found, using defaults")
+
+        # Configuration from yaml (with fallbacks)
+        IMAGE_WIDTH = cam_cfg.get("camera_width", 1280)
+        IMAGE_HEIGHT = cam_cfg.get("camera_height", 720)
+        ROS2_TOPIC = "intel_camera_rgb_sim"
+
+        graph_path = "/Graph/ActionGraph_Camera"
+
+        # Skip if already created
+        if stage.GetPrimAtPath(graph_path):
+            print(f"ActionGraph already exists at {graph_path}, skipping creation.")
+            return
+
+        print(f"Creating ActionGraph: {graph_path}")
+        print(f"Camera: {CAMERA_PRIM}")
+        print(f"Resolution: {IMAGE_WIDTH}x{IMAGE_HEIGHT}")
+        print(f"ROS2 Topic: {ROS2_TOPIC}")
+
+        keys = og.Controller.Keys
+
+        (graph, nodes, _, _) = og.Controller.edit(
+            {"graph_path": graph_path, "evaluator_name": "execution"},
+            {
+                keys.CREATE_NODES: [
+                    ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
+                    ("RunOnce", "isaacsim.core.nodes.OgnIsaacRunOneSimulationFrame"),
+                    ("RenderProduct", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
+                    ("Context", "isaacsim.ros2.bridge.ROS2Context"),
+                    ("ReadSimTime", "isaacsim.core.nodes.IsaacReadSimulationTime"),
+                    ("CameraInfoPublish", "isaacsim.ros2.bridge.ROS2CameraInfoHelper"),
+                    ("RGBPublish", "isaacsim.ros2.bridge.ROS2CameraHelper"),
+                    ("TFPublish", "isaacsim.ros2.bridge.ROS2PublishTransformTree"),
+                ],
+                keys.SET_VALUES: [
+                    ("RenderProduct.inputs:cameraPrim", CAMERA_PRIM),
+                    ("RenderProduct.inputs:width", IMAGE_WIDTH),
+                    ("RenderProduct.inputs:height", IMAGE_HEIGHT),
+                    ("CameraInfoPublish.inputs:topicName", "camera_info"),
+                    ("CameraInfoPublish.inputs:frameId", "camera_link"),
+                    ("CameraInfoPublish.inputs:resetSimulationTimeOnStop", True),
+                    ("RGBPublish.inputs:topicName", ROS2_TOPIC),
+                    ("RGBPublish.inputs:type", "rgb"),
+                    ("RGBPublish.inputs:frameId", "camera_link"),
+                    ("RGBPublish.inputs:resetSimulationTimeOnStop", True),
+                    ("TFPublish.inputs:topicName", "tf_cam"),
+                    ("TFPublish.inputs:targetPrims", CAMERA_PRIM),
+                    ("TFPublish.inputs:parentPrim", "/World"),
+                    ("ReadSimTime.inputs:resetOnStop", False),
+                ],
+                keys.CONNECT: [
+                    ("OnPlaybackTick.outputs:tick", "RunOnce.inputs:execIn"),
+                    ("RunOnce.outputs:step", "RenderProduct.inputs:execIn"),
+                    ("RenderProduct.outputs:execOut", "CameraInfoPublish.inputs:execIn"),
+                    ("RenderProduct.outputs:execOut", "RGBPublish.inputs:execIn"),
+                    ("OnPlaybackTick.outputs:tick", "TFPublish.inputs:execIn"),
+                    ("RenderProduct.outputs:renderProductPath", "CameraInfoPublish.inputs:renderProductPath"),
+                    ("RenderProduct.outputs:renderProductPath", "RGBPublish.inputs:renderProductPath"),
+                    ("Context.outputs:context", "CameraInfoPublish.inputs:context"),
+                    ("Context.outputs:context", "RGBPublish.inputs:context"),
+                    ("Context.outputs:context", "TFPublish.inputs:context"),
+                    ("ReadSimTime.outputs:simulationTime", "TFPublish.inputs:timeStamp"),
+                ],
+            }
+        )
+
+        # Override the USD camera's baked-in intrinsics to match the real Intel RealSense
+        camera_prim = stage.GetPrimAtPath(CAMERA_PRIM)
+        if camera_prim and camera_prim.IsValid():
+            from pxr import Sdf
+            import numpy as np
+
+            # Use calibrated camera_matrix [fx, fy, cx, cy] from yaml if available,
+            # otherwise fall back to HFOV/VFOV computation
+            camera_matrix = cam_cfg.get("camera_matrix")
+            if camera_matrix and len(camera_matrix) == 4:
+                fx, fy, cx, cy = camera_matrix
+                print(f"Using calibrated camera_matrix from config: fx={fx}, fy={fy}, cx={cx}, cy={cy}")
+            else:
+                hfov_deg = cam_cfg.get("camera_hfov", 69.4)
+                vfov_deg = cam_cfg.get("camera_vfov", 42.5)
+                fx = IMAGE_WIDTH / (2 * np.tan(np.deg2rad(hfov_deg / 2)))
+                fy = IMAGE_HEIGHT / (2 * np.tan(np.deg2rad(vfov_deg / 2)))
+                cx = IMAGE_WIDTH * 0.5
+                cy = IMAGE_HEIGHT * 0.5
+                print(f"Using HFOV/VFOV from config: hfov={hfov_deg}, vfov={vfov_deg}")
+
+            # Distortion coefficients from yaml
+            dist_coeffs = cam_cfg.get("distortion_coeffs", [0, 0, 0, 0, 0])
+
+            # Set USD aperture/focal-length so the renderer matches the FOV
+            horizontal_aperture_mm = 36.0
+            focal_length_mm = fx * horizontal_aperture_mm / IMAGE_WIDTH
+            vertical_aperture_mm = IMAGE_HEIGHT * focal_length_mm / fy
+
+            camera = UsdGeom.Camera(camera_prim)
+            camera.CreateHorizontalApertureAttr().Set(horizontal_aperture_mm)
+            camera.CreateVerticalApertureAttr().Set(vertical_aperture_mm)
+            camera.CreateFocalLengthAttr().Set(focal_length_mm)
+            camera.CreateClippingRangeAttr().Set(Gf.Vec2f(0.1, 10000.0))
+
+            # Set opencvPinhole lens distortion model for correct CameraInfo publishing
+            camera_prim.CreateAttribute("omni:lensdistortion:model", Sdf.ValueTypeNames.String).Set("opencvPinhole")
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:imageSize", Sdf.ValueTypeNames.Int2).Set(Gf.Vec2i(IMAGE_WIDTH, IMAGE_HEIGHT))
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:fx", Sdf.ValueTypeNames.Float).Set(fx)
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:fy", Sdf.ValueTypeNames.Float).Set(fy)
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:cx", Sdf.ValueTypeNames.Float).Set(cx)
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:cy", Sdf.ValueTypeNames.Float).Set(cy)
+            # Set distortion coefficients (k1, k2, p1, p2, k3, ..., s4)
+            dist_attr_names = ["k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6", "s1", "s2", "s3", "s4"]
+            for i, attr_name in enumerate(dist_attr_names):
+                val = dist_coeffs[i] if i < len(dist_coeffs) else 0.0
+                camera_prim.CreateAttribute(f"omni:lensdistortion:opencvPinhole:{attr_name}", Sdf.ValueTypeNames.Float).Set(val)
+
+            print(f"Overrode camera intrinsics on {CAMERA_PRIM}: fx={fx:.1f}, fy={fy:.1f}, cx={cx:.1f}, cy={cy:.1f}")
+            print(f"Distortion coefficients: {dist_coeffs}")
+
+        print("\nCamera ActionGraph created successfully!")
+        print(f"Test with: ros2 topic echo /{ROS2_TOPIC}")
+
+    def import_camera_mount(self):
+        """Upload camera mount USD from local project to Nucleus."""
+        ext_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        local_usd = os.path.join(ext_dir, "data", "meshes", "camera_wrist_mount.usd")
+
+        if not os.path.exists(local_usd):
+            print(f"[ERROR] Camera mount USD not found at {local_usd}")
+            return
+
+        nucleus_path = "omniverse://localhost/Projects/so-arm101/meshes/camera_wrist_mount.usd"
+        ret = omni.client.copy(local_usd, nucleus_path)
+        if ret == omni.client.Result.OK:
+            print(f"Imported camera mount USD to {nucleus_path}")
+        elif ret == omni.client.Result.ERROR_ALREADY_EXISTS:
+            print(f"Camera mount USD already exists at {nucleus_path}")
+        else:
+            print(f"[ERROR] Failed to upload: {ret}")
+
+    def attach_camera_mount_mesh(self):
+        """Attach camera wrist mount mesh and create camera prim on camera_link."""
+        stage = omni.usd.get_context().get_stage()
+
+        robot_path = "/World/SO_ARM101"
+        camera_mount_link = f"{robot_path}/camera_mount_link"
+        camera_link = f"{robot_path}/camera_link"
+
+        if not stage.GetPrimAtPath(camera_mount_link).IsValid():
+            print(f"[ERROR] {camera_mount_link} not found — load the robot first")
+            return
+
+        # Attach visual mesh to camera_mount_link
+        mesh_prim_path = f"{camera_mount_link}/camera_wrist_mount"
+        if stage.GetPrimAtPath(mesh_prim_path).IsValid():
+            print(f"Camera mount mesh already attached at {mesh_prim_path}")
+        else:
+            prim = stage.DefinePrim(mesh_prim_path, "Xform")
+            prim.GetReferences().AddReference(
+                "omniverse://localhost/Projects/so-arm101/meshes/camera_wrist_mount.usd"
+            )
+            # URDF visual origin: xyz="-0.763660 -0.207080 -0.025950" rpy="0 0 0"
+            # STL is in mm, scale 0.001 for meters
+            xformable = UsdGeom.Xformable(prim)
+            xformable.AddTranslateOp().Set(Gf.Vec3d(-0.763660, -0.207080, -0.025950))
+            xformable.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
+            xformable.AddScaleOp().Set(Gf.Vec3d(0.001, 0.001, 0.001))
+            print(f"Attached camera mount mesh at {mesh_prim_path}")
+
+        # Create OV9732 camera prim at camera_link
+        if not stage.GetPrimAtPath(camera_link).IsValid():
+            print(f"[WARN] {camera_link} not found — camera prim not created")
+            return
+
+        camera_prim_path = f"{camera_link}/wrist_camera"
+        if stage.GetPrimAtPath(camera_prim_path).IsValid():
+            print(f"Wrist camera already exists at {camera_prim_path}")
+            return
+
+        stage.DefinePrim(camera_prim_path, "Camera")
+        camera_prim = stage.GetPrimAtPath(camera_prim_path)
+        camera = UsdGeom.Camera(camera_prim)
+
+        # OV9732: 1MP, 100° HFOV, 1280x720
+        IMAGE_WIDTH, IMAGE_HEIGHT = 1280, 720
+        HFOV_DEG = 100.0
+        VFOV_DEG = HFOV_DEG * IMAGE_HEIGHT / IMAGE_WIDTH
+
+        fx = IMAGE_WIDTH / (2 * np.tan(np.deg2rad(HFOV_DEG / 2)))
+        fy = IMAGE_HEIGHT / (2 * np.tan(np.deg2rad(VFOV_DEG / 2)))
+
+        h_aperture = 36.0
+        focal_length = fx * h_aperture / IMAGE_WIDTH
+        v_aperture = IMAGE_HEIGHT * focal_length / fy
+
+        camera.CreateHorizontalApertureAttr().Set(h_aperture)
+        camera.CreateVerticalApertureAttr().Set(v_aperture)
+        camera.CreateFocalLengthAttr().Set(focal_length)
+        camera.CreateClippingRangeAttr().Set(Gf.Vec2f(0.01, 100.0))
+
+        xformable = UsdGeom.Xformable(camera_prim)
+        xformable.AddTranslateOp().Set(Gf.Vec3d(0, 0, 0))
+        xformable.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
+
+        print(f"Created OV9732 wrist camera at {camera_prim_path}")
+        print(f"  HFOV={HFOV_DEG}, {IMAGE_WIDTH}x{IMAGE_HEIGHT}, fl={focal_length:.2f}mm")
+
+    def setup_wrist_camera_action_graph(self):
+        """Create ActionGraph for wrist camera (OV9732) ROS2 publishing.
+        Also attaches camera mount mesh and creates camera prim if not present."""
+        CAMERA_PRIM = "/World/SO_ARM101/camera_link/wrist_camera"
+        IMAGE_WIDTH = 1280
+        IMAGE_HEIGHT = 720
+        ROS2_TOPIC = "wrist_camera_rgb_sim"
+
+        stage = omni.usd.get_context().get_stage()
+
+        # Auto-attach mount mesh and create camera prim if needed
+        if not stage.GetPrimAtPath(CAMERA_PRIM).IsValid():
+            self.attach_camera_mount_mesh()
+        if not stage.GetPrimAtPath(CAMERA_PRIM).IsValid():
+            print(f"[ERROR] Wrist camera not found at {CAMERA_PRIM} after attach attempt.")
+            return
+
+        graph_path = "/Graph/ActionGraph_WristCamera"
+        if stage.GetPrimAtPath(graph_path) and stage.GetPrimAtPath(graph_path).IsValid():
+            print(f"ActionGraph already exists at {graph_path}, skipping.")
+            return
+
+        print(f"Creating wrist camera ActionGraph: {graph_path}")
+
+        keys = og.Controller.Keys
+        og.Controller.edit(
+            {"graph_path": graph_path, "evaluator_name": "execution"},
+            {
+                keys.CREATE_NODES: [
+                    ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
+                    ("RunOnce", "isaacsim.core.nodes.OgnIsaacRunOneSimulationFrame"),
+                    ("RenderProduct", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
+                    ("Context", "isaacsim.ros2.bridge.ROS2Context"),
+                    ("ReadSimTime", "isaacsim.core.nodes.IsaacReadSimulationTime"),
+                    ("CameraInfoPublish", "isaacsim.ros2.bridge.ROS2CameraInfoHelper"),
+                    ("RGBPublish", "isaacsim.ros2.bridge.ROS2CameraHelper"),
+                ],
+                keys.SET_VALUES: [
+                    ("RenderProduct.inputs:cameraPrim", CAMERA_PRIM),
+                    ("RenderProduct.inputs:width", IMAGE_WIDTH),
+                    ("RenderProduct.inputs:height", IMAGE_HEIGHT),
+                    ("CameraInfoPublish.inputs:topicName", "wrist_camera_info"),
+                    ("CameraInfoPublish.inputs:frameId", "camera_link"),
+                    ("CameraInfoPublish.inputs:resetSimulationTimeOnStop", True),
+                    ("RGBPublish.inputs:topicName", ROS2_TOPIC),
+                    ("RGBPublish.inputs:type", "rgb"),
+                    ("RGBPublish.inputs:frameId", "camera_link"),
+                    ("RGBPublish.inputs:resetSimulationTimeOnStop", True),
+                    ("ReadSimTime.inputs:resetOnStop", False),
+                ],
+                keys.CONNECT: [
+                    ("OnPlaybackTick.outputs:tick", "RunOnce.inputs:execIn"),
+                    ("RunOnce.outputs:step", "RenderProduct.inputs:execIn"),
+                    ("RenderProduct.outputs:execOut", "CameraInfoPublish.inputs:execIn"),
+                    ("RenderProduct.outputs:execOut", "RGBPublish.inputs:execIn"),
+                    ("RenderProduct.outputs:renderProductPath", "CameraInfoPublish.inputs:renderProductPath"),
+                    ("RenderProduct.outputs:renderProductPath", "RGBPublish.inputs:renderProductPath"),
+                    ("Context.outputs:context", "CameraInfoPublish.inputs:context"),
+                    ("Context.outputs:context", "RGBPublish.inputs:context"),
+                ],
+            }
+        )
+
+        print(f"Wrist camera ActionGraph created!")
+        print(f"Test with: ros2 topic echo /{ROS2_TOPIC}")
+
+    def create_additional_camera(self):
+        """Create additional camera based on selected view type"""
+        import omni.usd
+        from pxr import Gf, Sdf, UsdGeom
+        import numpy as np
+
+        def set_camera_pose(prim_path: str, position_xyz, quat_xyzw):
+            """Apply translation and quaternion orientation (x, y, z, w) to a camera prim."""
+            stage = omni.usd.get_context().get_stage()
+            prim = stage.GetPrimAtPath(prim_path)
+            if not prim.IsValid():
+                raise RuntimeError(f"Camera prim '{prim_path}' not found.")
+            xform = UsdGeom.Xform(prim)
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(*position_xyz))
+            quat = Gf.Quatd(quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2])
+            xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat)
+
+        def configure_camera_properties(camera_prim, width, height):
+            """Configure camera properties to match Intel RealSense camera intrinsics."""
+            # Intel RealSense specs: HFOV=69.4°, VFOV=42.5° at 1280x720
+            hfov_deg = 69.4
+            vfov_deg = 42.5
+
+            # Compute intrinsics: fx = width / (2 * tan(hfov/2))
+            fx = width / (2 * np.tan(np.deg2rad(hfov_deg / 2)))
+            fy = height / (2 * np.tan(np.deg2rad(vfov_deg / 2)))
+            cx = width * 0.5
+            cy = height * 0.5
+
+            # Derive USD aperture/focal-length so the renderer matches the FOV
+            # Keep horizontal_aperture fixed, compute focal_length from fx
+            horizontal_aperture_mm = 36.0
+            focal_length_mm = fx * horizontal_aperture_mm / width
+            vertical_aperture_mm = height * focal_length_mm / fy
+
+            camera = UsdGeom.Camera(camera_prim)
+            camera.CreateHorizontalApertureAttr().Set(horizontal_aperture_mm)
+            camera.CreateVerticalApertureAttr().Set(vertical_aperture_mm)
+            camera.CreateFocalLengthAttr().Set(focal_length_mm)
+            camera.CreateProjectionAttr().Set("perspective")
+            camera.CreateClippingRangeAttr().Set(Gf.Vec2f(0.1, 10000.0))
+
+            # Set opencvPinhole lens distortion model so ROS2 CameraInfo
+            # publishes fx/fy/cx/cy directly
+            camera_prim.CreateAttribute("omni:lensdistortion:model", Sdf.ValueTypeNames.String).Set("opencvPinhole")
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:imageSize", Sdf.ValueTypeNames.Int2).Set(Gf.Vec2i(width, height))
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:fx", Sdf.ValueTypeNames.Float).Set(fx)
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:fy", Sdf.ValueTypeNames.Float).Set(fy)
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:cx", Sdf.ValueTypeNames.Float).Set(cx)
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:cy", Sdf.ValueTypeNames.Float).Set(cy)
+            # Zero distortion coefficients (k1-k6, p1, p2, s1-s4)
+            for attr_name in ["k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6", "s1", "s2", "s3", "s4"]:
+                camera_prim.CreateAttribute(f"omni:lensdistortion:opencvPinhole:{attr_name}", Sdf.ValueTypeNames.Float).Set(0.0)
+
+        # Check which camera type is selected
+        is_workspace = self._workspace_checkbox.model.get_value_as_bool()
+        is_custom = self._custom_checkbox.model.get_value_as_bool()
+
+        # Get selected resolution from combo box
+        resolution_index = self._resolution_combo.model.get_item_value_model().get_value_as_int()
+        resolutions = [(640, 480), (1280, 720), (1920, 1080)]
+        resolution = resolutions[resolution_index]
+
+        stage = omni.usd.get_context().get_stage()
+        if not stage:
+            print("Error: No stage found")
+            return
+
+        if is_workspace:
+            prim_path = "/World/workspace_camera_sim"
+            position = (0.8572405778988392, -1.3321141046870788, 0.9906567613694909)
+            # Euler XYZ: (52.144, 39.13, 26.13) degrees
+            quat_xyzw = (0.4714, 0.1994, 0.3347, 0.7912)  # x, y, z, w
+
+            # Create camera prim using UsdGeom.Camera
+            camera_prim = UsdGeom.Camera.Define(stage, prim_path)
+            if not camera_prim:
+                print(f"Error: Failed to create camera at {prim_path}")
+                return
+
+            # Configure camera properties
+            configure_camera_properties(camera_prim.GetPrim(), resolution[0], resolution[1])
+
+            # Set camera pose
+            set_camera_pose(prim_path, position, quat_xyzw)
+            print(f"Workspace camera created at {prim_path} with resolution {resolution[0]}x{resolution[1]}")
+
+        if is_custom:
+            # Get custom prim path from text field
+            custom_prim_path = self._custom_camera_prim_field.model.get_value_as_string()
+            if not custom_prim_path or custom_prim_path.strip() == "":
+                print("Error: Please enter a valid camera prim path")
+                return
+            
+            # Check if the prim already exists
+            existing_prim = stage.GetPrimAtPath(custom_prim_path)
+            if existing_prim and existing_prim.IsValid():
+                print(f"Camera prim already exists at {custom_prim_path}. Using existing prim.")
+                camera_prim = UsdGeom.Camera(existing_prim)
+                if not camera_prim:
+                    # If it exists but is not a camera, convert it
+                    print(f"Prim at {custom_prim_path} exists but is not a camera. Creating camera...")
+                    camera_prim = UsdGeom.Camera.Define(stage, custom_prim_path)
+            else:
+                # Create new camera prim at the specified path
+                camera_prim = UsdGeom.Camera.Define(stage, custom_prim_path)
+                if not camera_prim:
+                    print(f"Error: Failed to create camera at {custom_prim_path}")
+                    return
+            
+            # Configure camera properties
+            configure_camera_properties(camera_prim.GetPrim(), resolution[0], resolution[1])
+            
+            # Note: Pose is not set for custom prim - user should position it manually or it uses existing pose
+            print(f"Custom camera created/updated at {custom_prim_path} with resolution {resolution[0]}x{resolution[1]}")
+
+    def create_additional_camera_actiongraph(self):
+        """Create ActionGraph for additional camera ROS2 publishing"""
+        # Check which cameras exist and create action graphs accordingly
+        is_workspace = self._workspace_checkbox.model.get_value_as_bool()
+        is_custom = self._custom_checkbox.model.get_value_as_bool()
+
+        # Get selected resolution from combo box
+        resolution_index = self._resolution_combo.model.get_item_value_model().get_value_as_int()
+        resolutions = [(640, 480), (1280, 720), (1920, 1080)]
+        width, height = resolutions[resolution_index]
+
+        stage = omni.usd.get_context().get_stage()
+
+        if is_workspace:
+            if not stage.GetPrimAtPath("/World/workspace_camera_sim"):
+                print("Error: Workspace camera not found at /World/workspace_camera_sim. Create it first.")
+            else:
+                self._create_camera_actiongraph(
+                    "/World/workspace_camera_sim",
+                    width, height,
+                    "workspace_camera_sim",
+                    "WorkspaceCameraSim"
+                )
+
+        if is_custom:
+            # Get custom prim path from text field
+            custom_prim_path = self._custom_camera_prim_field.model.get_value_as_string()
+            if not custom_prim_path or custom_prim_path.strip() == "":
+                print("Error: Please enter a valid camera prim path")
+                return
+
+            # Get ROS2 topic name from text field, or generate from prim path if empty
+            topic_name = self._custom_camera_topic_field.model.get_value_as_string()
+            if not topic_name or topic_name.strip() == "":
+                # Extract a clean name for the topic from the prim path if topic is empty
+                prim_name = custom_prim_path.split("/")[-1] if "/" in custom_prim_path else custom_prim_path
+                topic_name = prim_name.lower().replace(" ", "_").replace("-", "_")
+                print(f"Topic name not specified, using generated name: {topic_name}")
+
+            # Use topic name for graph suffix (sanitize for graph name - remove special chars, capitalize)
+            # Convert topic name to a valid graph suffix: remove underscores, capitalize words
+            graph_suffix = topic_name.replace("_", " ").replace("-", " ").title().replace(" ", "")
+
+            if not stage.GetPrimAtPath(custom_prim_path):
+                print(f"Error: Camera prim not found at {custom_prim_path}. Create it first.")
+            else:
+                self._create_camera_actiongraph(
+                    custom_prim_path,
+                    width, height,
+                    topic_name,
+                    graph_suffix
+                )
+
+    def _create_camera_actiongraph(self, camera_prim, width, height, topic, graph_suffix):
+        """Helper method to create camera ActionGraph using og.Controller.edit().
+
+        Follows the same pattern as isaacsim.ros2.bridge's built-in camera graph
+        shortcut (og_rtx_sensors.py). Creates all nodes, sets values, and wires
+        connections in a single batch call. If the graph already exists it is
+        deleted and recreated with the current settings.
+        """
+        graph_path = f"/Graph/ActionGraph_{graph_suffix}"
+
+        # Delete existing graph so it gets recreated with current settings
+        stage = omni.usd.get_context().get_stage()
+        if stage.GetPrimAtPath(graph_path):
+            stage.RemovePrim(graph_path)
+            print(f"Removed existing ActionGraph at {graph_path}")
+
+        print(f"Creating ActionGraph: {graph_path}")
+        print(f"Camera: {camera_prim}, Resolution: {width}x{height}, Topic: /{topic}")
+
+        keys = og.Controller.Keys
+
+        try:
+            (graph_handle, nodes, _, _) = og.Controller.edit(
+                {"graph_path": graph_path, "evaluator_name": "execution"},
+                {
+                    keys.CREATE_NODES: [
+                        ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
+                        ("RunOnce", "isaacsim.core.nodes.OgnIsaacRunOneSimulationFrame"),
+                        ("RenderProduct", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
+                        ("Context", "isaacsim.ros2.bridge.ROS2Context"),
+                        ("CameraInfoPublish", "isaacsim.ros2.bridge.ROS2CameraInfoHelper"),
+                        ("RGBPublish", "isaacsim.ros2.bridge.ROS2CameraHelper"),
+                    ],
+                    keys.SET_VALUES: [
+                        ("RenderProduct.inputs:cameraPrim", camera_prim),
+                        ("RenderProduct.inputs:width", width),
+                        ("RenderProduct.inputs:height", height),
+                        ("CameraInfoPublish.inputs:topicName", "camera_info"),
+                        ("CameraInfoPublish.inputs:frameId", "camera_link"),
+                        ("CameraInfoPublish.inputs:resetSimulationTimeOnStop", True),
+                        ("RGBPublish.inputs:topicName", topic),
+                        ("RGBPublish.inputs:type", "rgb"),
+                        ("RGBPublish.inputs:frameId", "camera_link"),
+                        ("RGBPublish.inputs:resetSimulationTimeOnStop", True),
+                    ],
+                    keys.CONNECT: [
+                        ("OnPlaybackTick.outputs:tick", "RunOnce.inputs:execIn"),
+                        ("RunOnce.outputs:step", "RenderProduct.inputs:execIn"),
+                        ("RenderProduct.outputs:execOut", "CameraInfoPublish.inputs:execIn"),
+                        ("RenderProduct.outputs:renderProductPath", "CameraInfoPublish.inputs:renderProductPath"),
+                        ("Context.outputs:context", "CameraInfoPublish.inputs:context"),
+                        ("RenderProduct.outputs:execOut", "RGBPublish.inputs:execIn"),
+                        ("RenderProduct.outputs:renderProductPath", "RGBPublish.inputs:renderProductPath"),
+                        ("Context.outputs:context", "RGBPublish.inputs:context"),
+                    ],
+                },
+            )
+            print(f"{graph_suffix} ActionGraph created successfully!")
+            print(f"Test with: ros2 topic echo /{topic}")
+        except Exception as e:
+            print(f"Error creating ActionGraph: {e}")
+            traceback.print_exc()
+
+    def _get_object_names(self, folder_path="/World/Objects"):
+        """Return set of object names currently in the scene."""
+        stage = omni.usd.get_context().get_stage()
+        objects_root = stage.GetPrimAtPath(folder_path)
+        if not objects_root or not objects_root.IsValid():
+            return set()
+        return {child.GetName() for child in objects_root.GetChildren()
+                if child.GetName() != "PhysicsMaterial"}
+
+    def _get_block_params(self):
+        """Return physics settings for lego block objects."""
+        return {
+            "collision_approximation": self._block_collision_approximation,
+            "rest_offset": self._block_rest_offset,
+            "angular_damping": self._block_angular_damping,
+        }
+
+    def _get_prim_bbox_size(self, prim_path):
+        """Return (sx, sy, sz) world-aligned bounding box size for a prim."""
+        stage = omni.usd.get_context().get_stage()
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim or not prim.IsValid():
+            return (0.0, 0.0, 0.0)
+        bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+        bbox = bbox_cache.ComputeWorldBound(prim)
+        size = bbox.ComputeAlignedRange().GetSize()
+        return (size[0], size[1], size[2])
+
+    def _get_ground_z(self, prim_path):
+        """Return the Z translation that places a prim's bbox bottom on the ground plane."""
+        stage = omni.usd.get_context().get_stage()
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim or not prim.IsValid():
+            return self._ground_plane_z
+        bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+        bbox = bbox_cache.ComputeWorldBound(prim)
+        bbox_min_z = bbox.ComputeAlignedRange().GetMin()[2]
+        # Current prim Z translation
+        xform = UsdGeom.Xformable(prim)
+        current_translate = Gf.Vec3d(0, 0, 0)
+        for op in xform.GetOrderedXformOps():
+            if op.GetOpType() == UsdGeom.XformOp.TypeTranslate:
+                current_translate = op.Get()
+                break
+        current_z = float(current_translate[2])
+        # The bbox bottom in world = current_z + local_bbox_bottom
+        # We want world bbox bottom = ground_plane_z
+        # So new_z = current_z + (ground_plane_z - bbox_min_z)
+        return current_z + (self._ground_plane_z - bbox_min_z)
+
+    def _get_block_color(self, block_name):
+        """Get the color key for a block from its name (e.g. 'red_1' -> 'red')."""
+        for color in BLOCK_COLORS:
+            if block_name.startswith(color):
+                return color
+        return None
+
+    def _set_block_material_color(self, prim_path, color_rgb):
+        """Override the diffuseColor of all shaders under a block prim."""
+        stage = omni.usd.get_context().get_stage()
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim or not prim.IsValid():
+            return
+        for desc in Usd.PrimRange(prim):
+            if desc.IsA(UsdShade.Shader):
+                color_attr = desc.GetAttribute("inputs:diffuseColor")
+                if color_attr:
+                    color_attr.Set(Gf.Vec3f(*color_rgb))
+
+    def _get_blocks_by_color(self, color=None, folder_path="/World/Objects"):
+        """Get block names filtered by color. If color is None, return all blocks."""
+        stage = omni.usd.get_context().get_stage()
+        objects_root = stage.GetPrimAtPath(folder_path)
+        if not objects_root or not objects_root.IsValid():
+            return []
+        blocks = []
+        for child in objects_root.GetChildren():
+            name = child.GetName()
+            if name == "PhysicsMaterial":
+                continue
+            if color is None or self._get_block_color(name) == color:
+                blocks.append(name)
+        return blocks
+
+    def _sample_non_overlapping_objects(
+        self,
+        num_objects,
+        x_range=(0.10, 0.25),
+        y_range=(-0.10, 0.10),
+        min_sep=0.05,
+        yaw_range=(-180.0, 180.0),
+        z_values=None,
+        fixed_positions=None,
+        max_attempts=10_000,
+        max_retries=100,
+        radii=None,
+    ):
+        """
+        Sample non-overlapping object poses in world frame.
+
+        Places largest objects first (when radii provided) then shuffles
+        on retries to explore different configurations.
+
+        Args:
+            num_objects: Number of objects to place.
+            x_range: X position range in world frame.
+            y_range: Y position range in world frame.
+            min_sep: Uniform minimum separation (used when radii is None).
+            yaw_range: Yaw rotation range in degrees.
+            z_values: List of Z values for each object (preserves current Z).
+            fixed_positions: List of fixed positions to avoid.
+            max_attempts: Maximum placement attempts per retry.
+            max_retries: Maximum number of full restarts.
+            radii: Per-object half-extents (half diagonal). When provided,
+                   the required separation between objects i and j is
+                   radii[i] + radii[j] + gap instead of a flat min_sep.
+        """
+        gap = self._object_gap
+
+        # Convert fixed positions to numpy arrays for distance checking
+        fixed_xy = []
+        if fixed_positions:
+            for pos in fixed_positions:
+                if isinstance(pos, (list, tuple, np.ndarray)):
+                    fixed_xy.append(np.array(pos[:2]))
+                elif hasattr(pos, '__getitem__'):
+                    fixed_xy.append(np.array([pos[0], pos[1]]))
+
+        # Build placement order: largest first on attempt 0, shuffle on retries
+        indices = list(range(num_objects))
+        if radii is not None:
+            indices.sort(key=lambda i: radii[i], reverse=True)
+
+        for retry in range(max_retries):
+            if retry > 0:
+                np.random.shuffle(indices)
+
+            # placed[order_pos] = pose for the order_pos-th object placed
+            placed = []
+            attempts = 0
+
+            while len(placed) < num_objects and attempts < max_attempts:
+                attempts += 1
+                candidate_xy = np.array([
+                    np.random.uniform(*x_range),
+                    np.random.uniform(*y_range)
+                ])
+                orig_idx = indices[len(placed)]
+                valid = True
+
+                # Check against already-placed objects
+                for order_j, p in enumerate(placed):
+                    orig_j = indices[order_j]
+                    if radii is not None:
+                        req = radii[orig_idx] + radii[orig_j] + gap
+                    else:
+                        req = min_sep
+                    if np.linalg.norm(candidate_xy - p["position"][:2]) < req:
+                        valid = False
+                        break
+
+                # Check against fixed positions
+                if valid and fixed_xy:
+                    req_fixed = (radii[orig_idx] + min_sep / 2) if radii is not None else min_sep
+                    for fixed in fixed_xy:
+                        if np.linalg.norm(candidate_xy - fixed) < req_fixed:
+                            valid = False
+                            break
+
+                if valid:
+                    yaw_deg = np.random.uniform(*yaw_range)
+                    z = z_values[orig_idx] if z_values and orig_idx < len(z_values) else self._ground_plane_z
+                    placed.append({
+                        "position": np.array([candidate_xy[0], candidate_xy[1], z]),
+                        "yaw_deg": yaw_deg
+                    })
+
+            if len(placed) == num_objects:
+                if retry > 0:
+                    print(f"Placement succeeded after {retry + 1} retries")
+                # Reorder results back to original indices
+                result_poses = [None] * num_objects
+                for order_pos, pose in enumerate(placed):
+                    result_poses[indices[order_pos]] = pose
+                return result_poses
+
+        raise RuntimeError("Could not place all objects without violating min_sep; reduce density.")
+
+    def _set_obj_prim_pose(self, prim_path, position, rotation_xyz_deg=None):
+        """Set object position and orientation on its body prim.
+
+        Args:
+            prim_path: USD prim path (body prim with RigidBodyAPI).
+            position: Gf.Vec3d or (x, y, z) tuple.
+            rotation_xyz_deg: (rx, ry, rz) euler angles in degrees, or None for identity.
+        """
+        import omni.kit.commands
+        import math
+        if isinstance(position, Gf.Vec3d):
+            pos_value = position
+        else:
+            pos_value = Gf.Vec3d(*position)
+
+        # Convert euler XYZ degrees to quaternion (w, x, y, z)
+        rot = rotation_xyz_deg if rotation_xyz_deg is not None else (0.0, 0.0, 0.0)
+        rx, ry, rz = [math.radians(a) for a in rot]
+        cx, sx = math.cos(rx / 2), math.sin(rx / 2)
+        cy, sy = math.cos(ry / 2), math.sin(ry / 2)
+        cz, sz = math.cos(rz / 2), math.sin(rz / 2)
+        w = cx * cy * cz + sx * sy * sz
+        x = sx * cy * cz - cx * sy * sz
+        y = cx * sy * cz + sx * cy * sz
+        z = cx * cy * sz - sx * sy * cz
+
+        omni.kit.commands.execute(
+            "ChangeProperty",
+            prop_path=f"{prim_path}.xformOp:orient",
+            value=Gf.Quatf(w, x, y, z),
+            prev=None,
+        )
+        omni.kit.commands.execute(
+            "ChangeProperty",
+            prop_path=f"{prim_path}.xformOp:translate",
+            value=pos_value,
+            prev=None,
+        )
+
+    def sort_objects(self, color=None, folder_path="/World/Objects"):
+        """Sort blocks by placing same-color blocks in tight clusters at X=0.3, spread along Y.
+
+        Clusters are laid out along Y with bbox-aware spacing so they never overlap.
+        Within each cluster, blocks are placed in a row along X centered at 0.3.
+
+        Args:
+            color: Optional color filter ('red', 'green', 'blue'). If None, sorts all.
+            folder_path: Parent prim path for objects.
+        Returns:
+            (sorted_count, 0)
+        """
+        stage = omni.usd.get_context().get_stage()
+
+        colors_to_sort = [color] if color else list(BLOCK_COLORS.keys())
+        sorted_count = 0
+
+        # Build cluster info: for each color, collect blocks and measure extents
+        clusters = []  # [(color, [(name, prim_path, sx, sy)], cluster_x_span, max_sy)]
+        for clr in colors_to_sort:
+            blocks = self._get_blocks_by_color(clr, folder_path)
+            if not blocks:
+                continue
+            block_info = []
+            for name in sorted(blocks):
+                prim_path = self._get_prim_path(name, folder_path)
+                sx, sy, _ = self._get_prim_bbox_size(prim_path)
+                block_info.append((name, prim_path, sx, sy))
+            # Cluster X span = sum of block widths + gaps between them
+            cluster_x_span = sum(b[2] for b in block_info) + self._object_gap * (len(block_info) - 1)
+            # Cluster Y extent = max Y extent of any block in this cluster
+            max_sy = max(b[3] for b in block_info)
+            clusters.append((clr, block_info, cluster_x_span, max_sy))
+
+        if not clusters:
+            print(f"[sort] No blocks found for color={color or 'all'}")
+            return 0, 0
+
+        # Layout clusters along Y, centered at 0
+        cluster_gap = self._object_gap * 3  # wider gap between color groups
+        total_y_span = sum(c[3] for c in clusters) + cluster_gap * (len(clusters) - 1)
+        y_cursor = -total_y_span / 2.0
+
+        for clr, block_info, cluster_x_span, max_sy in clusters:
+            cluster_y = y_cursor + max_sy / 2.0
+
+            # Place blocks in a row along X, centered at 0.3
+            x_cursor = 0.3 - cluster_x_span / 2.0
+            for name, prim_path, sx, sy in block_info:
+                prim = stage.GetPrimAtPath(prim_path)
+                if not prim or not prim.IsValid():
+                    continue
+                x_position = x_cursor + sx / 2.0
+                z = self._get_ground_z(prim_path)
+                pos = Gf.Vec3d(x_position, cluster_y, z)
+                self._set_obj_prim_pose(prim_path, pos)
+                x_cursor += sx + self._object_gap
+                sorted_count += 1
+
+            y_cursor += max_sy + cluster_gap
+
+        print(f"[sort] Sorted {sorted_count} blocks (color={color or 'all'})")
+        return sorted_count, 0
+
+    def disassemble_objects(self, folder_path="/World/Objects"):
+        """Lay out objects in a row along Y at X=0.3, using bbox-aware spacing."""
+        stage = omni.usd.get_context().get_stage()
+        objects_root = stage.GetPrimAtPath(folder_path)
+        if not objects_root.IsValid():
+            print(f"[disassemble] Error: {folder_path} does not exist")
+            return 0
+
+        # Collect valid block prims and their Y extents
+        block_info = []
+        for child in objects_root.GetChildren():
+            obj_name = child.GetName()
+            if obj_name.endswith("Material"):
+                continue
+            body_path = self._get_prim_path(obj_name, folder_path)
+            body_prim = stage.GetPrimAtPath(body_path)
+            if not body_prim or not body_prim.IsValid():
+                continue
+            _, sy, _ = self._get_prim_bbox_size(body_path)
+            block_info.append((body_path, sy))
+
+        if not block_info:
+            return 0
+
+        # Compute total span and center the row at Y=0
+        total_span = sum(sy for _, sy in block_info) + self._object_gap * (len(block_info) - 1)
+        y_cursor = -total_span / 2.0
+
+        for body_path, sy in block_info:
+            half_ext = sy / 2.0
+            y_position = y_cursor + half_ext
+
+            z = self._get_ground_z(body_path)
+            self._set_obj_prim_pose(body_path, Gf.Vec3d(0.3, y_position, z))
+
+            y_cursor += sy + self._object_gap
+
+        print(f"[disassemble] Disassembled {len(block_info)} objects")
+        return len(block_info)
+
+    def randomize_object_poses(self, color=None, folder_path="/World/Objects"):
+        """
+        Randomize block poses. Optionally filter by color.
+
+        Args:
+            color: Optional color filter ('red', 'green', 'blue'). If None, randomizes all.
+            folder_path: Parent prim path for objects.
+        Returns:
+            (randomized_count, 0)
+        """
+        stage = omni.usd.get_context().get_stage()
+        objects_root = stage.GetPrimAtPath(folder_path)
+        if not objects_root.IsValid():
+            print(f"[randomize] Error: {folder_path} does not exist")
+            return 0, 0
+
+        # Collect blocks to randomize and fixed blocks (other colors)
+        to_randomize = []
+        fixed_positions = []
+
+        for child in objects_root.GetChildren():
+            obj = child.GetName()
+            if obj == "PhysicsMaterial":
+                continue
+
+            prim_path = self._get_prim_path(obj, folder_path)
+            prim = stage.GetPrimAtPath(prim_path)
+            if not prim or not prim.IsValid():
+                continue
+
+            xform = UsdGeom.Xformable(prim)
+            world_transform = xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+            world_pos = world_transform.ExtractTranslation()
+
+            block_color = self._get_block_color(obj)
+            if color is None or block_color == color:
+                to_randomize.append({
+                    "name": obj,
+                    "prim_path": prim_path,
+                    "current_z": world_pos[2],
+                })
+            else:
+                # This block stays fixed - record its position for collision avoidance
+                fixed_positions.append(world_pos)
+
+        if not to_randomize:
+            print(f"[randomize] No blocks found for color={color or 'all'}")
+            return 0, 0
+
+        z_values = [info["current_z"] for info in to_randomize]
+
+        # Compute per-object half-diagonal for pair-wise separation
+        radii = []
+        for info in to_randomize:
+            sx, sy, _ = self._get_prim_bbox_size(info["prim_path"])
+            radii.append((sx**2 + sy**2) ** 0.5 / 2.0)
+
+        poses = self._sample_non_overlapping_objects(
+            num_objects=len(to_randomize),
+            z_values=z_values,
+            fixed_positions=fixed_positions,
+            radii=radii,
+        )
+
+        for obj_info, pose in zip(to_randomize, poses):
+            prim_path = obj_info["prim_path"]
+            pos = Gf.Vec3d(pose["position"][0], pose["position"][1], pose["position"][2])
+            self._set_obj_prim_pose(prim_path, pos, (0.0, 0.0, pose["yaw_deg"]))
+
+        print(f"[randomize] Randomized {len(to_randomize)} blocks (color={color or 'all'})")
+        return len(to_randomize), 0
+
+    def randomize_single_object(self, object_name, folder_path="/World/Objects",
+                                x_range=(0.10, 0.25), y_range=(-0.10, 0.10),
+                                min_sep=None, yaw_range=(-180.0, 180.0), max_attempts=1000):
+        """Randomize a single object's pose in a clear workspace area, keeping all others fixed.
+
+        Args:
+            object_name: Name of the object to randomize.
+            folder_path: Parent prim path for objects.
+            x_range: X range for randomization (clear workspace area).
+            y_range: Y range for randomization (clear workspace area).
+            min_sep: Minimum separation from all other objects.
+            yaw_range: Yaw rotation range in degrees.
+            max_attempts: Maximum placement attempts.
+        """
+        stage = omni.usd.get_context().get_stage()
+        objects_root = stage.GetPrimAtPath(folder_path)
+        if not objects_root.IsValid():
+            raise ValueError(f"{folder_path} does not exist")
+
+        # Verify the target object exists
+        target_parent_path = f"{folder_path}/{object_name}"
+        target_child_path = self._get_prim_path(object_name, folder_path)
+        target_parent_prim = stage.GetPrimAtPath(target_parent_path)
+        target_child_prim = stage.GetPrimAtPath(target_child_path)
+        if not target_parent_prim.IsValid() or not target_child_prim.IsValid():
+            raise ValueError(f"Object '{object_name}' not found at {target_child_path}")
+
+        # Compute target half-diagonal
+        target_sx, target_sy, _ = self._get_prim_bbox_size(target_child_path)
+        target_radius = (target_sx**2 + target_sy**2) ** 0.5 / 2.0
+
+        # Collect world positions AND radii of all OTHER objects
+        fixed_xy = []
+        fixed_radii = []
+        for child in objects_root.GetChildren():
+            name = child.GetName()
+            if name == object_name or name == "PhysicsMaterial":
+                continue
+            child_path = self._get_prim_path(name, folder_path)
+            child_prim = stage.GetPrimAtPath(child_path)
+            if child_prim.IsValid():
+                xform = UsdGeom.Xformable(child_prim)
+                world_pos = xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default()).ExtractTranslation()
+                fixed_xy.append(np.array([world_pos[0], world_pos[1]]))
+                fsx, fsy, _ = self._get_prim_bbox_size(child_path)
+                fixed_radii.append((fsx**2 + fsy**2) ** 0.5 / 2.0)
+
+        # Get current Z of target object
+        target_xform = UsdGeom.Xformable(target_child_prim)
+        target_world_pos = target_xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default()).ExtractTranslation()
+        target_z = target_world_pos[2]
+
+        # Per-pair separation: target_radius + fixed_radius + gap
+        if min_sep is not None:
+            fixed_seps = [min_sep] * len(fixed_xy)
+        else:
+            fixed_seps = [target_radius + fr + self._object_gap for fr in fixed_radii]
+
+        # Sample one non-overlapping position with per-pair separation
+        pose = None
+        for _ in range(max_attempts):
+            candidate = np.array([
+                np.random.uniform(*x_range),
+                np.random.uniform(*y_range)
+            ])
+            if all(np.linalg.norm(candidate - fxy) >= fsep
+                   for fxy, fsep in zip(fixed_xy, fixed_seps)):
+                yaw_deg = np.random.uniform(*yaw_range)
+                pose = {"position": np.array([candidate[0], candidate[1], target_z]),
+                        "yaw_deg": yaw_deg}
+                break
+
+        if pose is None:
+            raise RuntimeError(
+                f"Could not place '{object_name}' — workspace too crowded with "
+                f"{len(fixed_xy)} other objects. Use randomize_object_poses to "
+                f"re-randomize all objects together.")
+        poses = [pose]
+
+        # Apply the pose
+        pose = poses[0]
+        parent_xform = UsdGeom.Xformable(target_parent_prim)
+        parent_world_transform = parent_xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+
+        target_world = Gf.Vec3d(pose["position"][0], pose["position"][1], pose["position"][2])
+        local_pos = parent_world_transform.GetInverse().Transform(target_world)
+
+        self._set_obj_prim_pose(target_child_path, local_pos, (0.0, 0.0, pose["yaw_deg"]))
+
+        print(f"[randomize_single] Placed '{object_name}' at world ({pose['position'][0]:.3f}, {pose['position'][1]:.3f}, {pose['position'][2]:.4f}), yaw={pose['yaw_deg']:.1f}°")
+
+    def sync_real_poses(self):
+        """Subscribe to /objects_poses_real and update sim object poses to match."""
+        import rclpy
+        from tf2_msgs.msg import TFMessage
+
+        rclpy.init(args=None)
+        node = rclpy.create_node("_sync_real_poses_tmp")
+        try:
+            msg_received = [None]
+
+            def _cb(msg):
+                msg_received[0] = msg
+
+            sub = node.create_subscription(TFMessage, "/objects_poses_real", _cb, 1)
+            # Spin until we get one message (timeout after 3 seconds)
+            import time
+            t0 = time.time()
+            while msg_received[0] is None and (time.time() - t0) < 3.0:
+                rclpy.spin_once(node, timeout_sec=0.1)
+            node.destroy_subscription(sub)
+
+            if msg_received[0] is None:
+                print("[SyncRealPoses] No message received on /objects_poses_real within 3s")
+                return
+
+            # Build dict of real poses by name
+            real_poses = {}
+            for tf in msg_received[0].transforms:
+                t = tf.transform.translation
+                r = tf.transform.rotation
+                real_poses[tf.child_frame_id] = {
+                    'position': (t.x, t.y, t.z),
+                    'quat_wxyz': (r.w, r.x, r.y, r.z),
+                }
+
+            stage = omni.usd.get_context().get_stage()
+            updated = []
+            for name, pose in real_poses.items():
+                prim_path = self._get_prim_path(name)
+                prim = stage.GetPrimAtPath(prim_path)
+                if not prim.IsValid():
+                    print(f"[SyncRealPoses] Prim not found: {prim_path}")
+                    continue
+
+                # Convert quaternion (w,x,y,z) to euler XYZ degrees
+                qw, qx, qy, qz = pose['quat_wxyz']
+                euler_deg = R.from_quat([qx, qy, qz, qw]).as_euler('xyz', degrees=True)
+                self._set_obj_prim_pose(prim_path, pose['position'], tuple(euler_deg))
+                updated.append(name)
+
+            print(f"[SyncRealPoses] Updated {len(updated)} objects: {updated}")
+        finally:
+            node.destroy_node()
+            rclpy.shutdown()
+
+    def add_aruco_markers(self, objects_path="/World/Objects"):
+        """Add ArUco marker meshes to all objects that have matching aruco JSON files."""
+        import omni.kit.commands
+        from pxr import Sdf, UsdShade, UsdGeom, Gf
+
+        ARUCO_DIR = os.path.expanduser("~/Projects/aruco-grasp-annotator/data/aruco")
+        ARUCO_PNG_DIR = os.path.join(ARUCO_DIR, "pngs")
+
+        stage = omni.usd.get_context().get_stage()
+        objects_prim = stage.GetPrimAtPath(objects_path)
+        if not objects_prim or not objects_prim.IsValid():
+            print(f"Error: {objects_path} not found")
+            return
+
+        total_added = 0
+        for child in objects_prim.GetChildren():
+            obj_name = child.GetName()
+            aruco_json = os.path.join(ARUCO_DIR, f"{obj_name}_aruco.json")
+            if not os.path.exists(aruco_json):
+                continue
+
+            with open(aruco_json, 'r') as f:
+                aruco_data = json.load(f)
+
+            # Find the mesh prim (e.g. /World/Objects/base1/base1/base1)
+            base_prim_path = self._get_prim_path(obj_name, objects_path)
+            base_prim = stage.GetPrimAtPath(base_prim_path)
+            if not base_prim or not base_prim.IsValid():
+                print(f"Warning: mesh prim not found at {base_prim_path}, skipping")
+                continue
+
+            aruco_dict = aruco_data.get('aruco_dictionary', 'DICT_4X4_50')
+            dict_name = aruco_dict.replace('DICT_', '').split('_')[0].lower()
+            marker_size = aruco_data.get('size', 0.021)
+
+            for marker in aruco_data['markers']:
+                aruco_id = marker['aruco_id']
+                position = marker['T_object_to_marker']['position']
+                rotation = marker['T_object_to_marker']['rotation']
+
+                # Compensate positions for parent prim's scale
+                parent_scale_attr = base_prim.GetAttribute("xformOp:scale")
+                inv_scale = 1.0 / (parent_scale_attr.Get()[0] if parent_scale_attr and parent_scale_attr.Get() else 1.0)
+                scaled_x = position['x'] * inv_scale
+                scaled_y = position['y'] * inv_scale
+                scaled_z = position['z'] * inv_scale
+
+                cube_prim_path = f"{base_prim_path}/aruco_{aruco_id:03d}"
+
+                # Remove existing marker and recreate
+                if stage.GetPrimAtPath(cube_prim_path):
+                    stage.RemovePrim(cube_prim_path)
+
+                # Create cube mesh
+                omni.kit.commands.execute("CreateMeshPrimCommand",
+                                          prim_path=cube_prim_path,
+                                          prim_type="Cube")
+
+                cube_prim = stage.GetPrimAtPath(cube_prim_path)
+                if not cube_prim:
+                    print(f"Error: failed to create cube at {cube_prim_path}")
+                    continue
+
+                # Set transforms using existing attributes created by CreateMeshPrimCommand
+                cube_prim.GetAttribute("xformOp:translate").Set(Gf.Vec3d(scaled_x, scaled_y, scaled_z))
+
+                rotation_matrix = Gf.Matrix3d(
+                    Gf.Rotation(Gf.Vec3d(1, 0, 0), rotation['roll'] * 180.0 / 3.14159) *
+                    Gf.Rotation(Gf.Vec3d(0, 1, 0), rotation['pitch'] * 180.0 / 3.14159) *
+                    Gf.Rotation(Gf.Vec3d(0, 0, 1), rotation['yaw'] * 180.0 / 3.14159))
+                quat = rotation_matrix.ExtractRotation().GetQuat()
+                cube_prim.GetAttribute("xformOp:orient").Set(quat)
+
+                # Compensate for parent prim's scale (e.g. 0.01 from Fusion360 export)
+                parent_scale_attr = base_prim.GetAttribute("xformOp:scale")
+                parent_scale = parent_scale_attr.Get()[0] if parent_scale_attr and parent_scale_attr.Get() else 1.0
+                compensated = marker_size / parent_scale
+                cube_prim.GetAttribute("xformOp:scale").Set(Gf.Vec3d(compensated, compensated, 0.0001 / parent_scale))
+
+                # Create OmniPBR material, then move it into /World/Objects/Looks
+                looks_path = f"{objects_path}/Looks"
+                if not stage.GetPrimAtPath(looks_path):
+                    UsdGeom.Scope.Define(stage, looks_path)
+                out = []
+                omni.kit.commands.execute("CreateAndBindMdlMaterialFromLibrary",
+                                          mdl_name="OmniPBR.mdl",
+                                          mtl_name="OmniPBR",
+                                          mtl_created_list=out,
+                                          select_new_prim=False)
+                if not out:
+                    print(f"Error: failed to create material for marker {aruco_id}")
+                    continue
+
+                # Move material from /World/Looks/ to /World/Objects/Looks/
+                created_path = out[0]
+                target_mat_path = f"{looks_path}/aruco_{obj_name}_{aruco_id:03d}"
+                omni.kit.commands.execute("MovePrim",
+                                          path_from=created_path,
+                                          path_to=target_mat_path)
+
+                # Assign aruco texture
+                aruco_png = os.path.join(ARUCO_PNG_DIR, f"aruco_marker_{dict_name}_{aruco_id:03d}.png")
+                if os.path.exists(aruco_png):
+                    shader_prim = stage.GetPrimAtPath(target_mat_path + "/Shader")
+                    if shader_prim:
+                        texture_attr = shader_prim.CreateAttribute('inputs:diffuse_texture', Sdf.ValueTypeNames.Asset)
+                        texture_attr.Set(Sdf.AssetPath(f"file:{aruco_png}"))
+
+                # Bind material to cube
+                omni.kit.commands.execute("BindMaterial",
+                                          prim_path=cube_prim_path,
+                                          material_path=target_mat_path)
+
+                total_added += 1
+
+            print(f"Added {len(aruco_data['markers'])} ArUco markers to {obj_name}")
+
+        print(f"=== ArUco markers complete: {total_added} markers added ===")
+
+    # ── Object Visibility (hide = delete + store, unhide = restore) ────────
+
+    def _get_scene_object_names(self, folder_path="/World/Objects"):
+        """Return names of objects currently under /World/Objects (excludes PhysicsMaterial)."""
+        stage = omni.usd.get_context().get_stage()
+        objects_prim = stage.GetPrimAtPath(folder_path)
+        if not objects_prim or not objects_prim.IsValid():
+            return []
+        return [
+            child.GetName() for child in objects_prim.GetChildren()
+            if child.IsA(UsdGeom.Xformable) and child.GetName() != "PhysicsMaterial"
+        ]
+
+    def _build_visibility_ui(self):
+        """Build (or rebuild) the combo boxes for exclude/include.
+
+        Always reads current scene objects and excluded list so the UI
+        is up-to-date on first open and after every action.
+        """
+        scene_objects = self._get_scene_object_names()
+        excluded_names = list(self._hidden_objects.keys())
+        with ui.VStack(spacing=5, height=0):
+            with ui.HStack(spacing=5):
+                ui.Label("Object:", alignment=ui.Alignment.LEFT, width=80)
+                if scene_objects:
+                    self._vis_object_combo = ui.ComboBox(0, *scene_objects, width=150)
+                else:
+                    self._vis_object_combo = ui.ComboBox(0, "(none)", width=150)
+                ui.Button("Exclude", width=80, height=30, clicked_fn=self._on_hide_clicked)
+            with ui.HStack(spacing=5):
+                ui.Label("Excluded:", alignment=ui.Alignment.LEFT, width=80)
+                if excluded_names:
+                    self._vis_hidden_combo = ui.ComboBox(0, *excluded_names, width=150)
+                else:
+                    self._vis_hidden_combo = ui.ComboBox(0, "(none)", width=150)
+                ui.Button("Include", width=80, height=30, clicked_fn=self._on_unhide_clicked)
+
+    def _on_hide_clicked(self):
+        scene_objects = self._get_scene_object_names()
+        if not scene_objects:
+            print("No objects to exclude")
+            return
+        idx = self._vis_object_combo.model.get_item_value_model().as_int
+        if idx < len(scene_objects):
+            self.hide_object(scene_objects[idx])
+        self._visibility_frame.rebuild()
+
+    def _on_unhide_clicked(self):
+        hidden_names = list(self._hidden_objects.keys())
+        if not hidden_names:
+            print("No excluded objects to include")
+            return
+        idx = self._vis_hidden_combo.model.get_item_value_model().as_int
+        if idx < len(hidden_names):
+            self.unhide_object(hidden_names[idx])
+        self._visibility_frame.rebuild()
+
+
+    def _save_all_object_poses(self, folder_path="/World/Objects", exclude=None):
+        """Snapshot body poses of all objects under folder_path (excluding *exclude*)."""
+        poses = {}
+        for name in self._get_scene_object_names(folder_path):
+            if name == exclude:
+                continue
+            body_path = self._get_prim_path(name, folder_path)
+            pose = self._read_prim_pose(body_path)
+            if pose:
+                poses[name] = pose
+        return poses
+
+    def _restore_object_poses(self, poses, folder_path="/World/Objects"):
+        """Write back a snapshot produced by _save_all_object_poses.
+
+        Uses two-step ChangeProperty (orient first, then translate) consistent
+        with assemble_objects.
+        """
+        for name, pose_data in poses.items():
+            body_path = self._get_prim_path(name, folder_path)
+            stage = omni.usd.get_context().get_stage()
+            prim = stage.GetPrimAtPath(body_path)
+            if not prim or not prim.IsValid():
+                continue
+            quat = pose_data.get("quaternion", {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0})
+            pos = pose_data.get("position", {"x": 0.0, "y": 0.0, "z": 0.0})
+            omni.kit.commands.execute("ChangeProperty",
+                                     prop_path=f"{body_path}.xformOp:orient",
+                                     value=Gf.Quatf(float(quat["w"]), float(quat["x"]),
+                                                    float(quat["y"]), float(quat["z"])),
+                                     prev=None)
+            omni.kit.commands.execute("ChangeProperty",
+                                     prop_path=f"{body_path}.xformOp:translate",
+                                     value=Gf.Vec3d(pos["x"], pos["y"], pos["z"]),
+                                     prev=None)
+
+    def hide_object(self, object_name, folder_path="/World/Objects"):
+        """Hide an object: save its reference path + pose, then delete the prim.
+
+        Stops the simulation, saves poses of all remaining objects, deletes the
+        target, restores the remaining poses, and resumes playback.
+        """
+        stage = omni.usd.get_context().get_stage()
+
+        prim_path = f"{folder_path}/{object_name}"
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim or not prim.IsValid():
+            print(f"Object {object_name} not found at {prim_path}")
+            return
+
+        # Read the USD reference file path from the root layer spec
+        ref_path = None
+        prim_spec = stage.GetRootLayer().GetPrimAtPath(prim_path)
+        if prim_spec:
+            refs = prim_spec.referenceList.prependedItems
+            if refs:
+                ref_path = refs[0].assetPath
+        if not ref_path:
+            print(f"Warning: Could not read reference path for {object_name}, unhide will not work")
+
+        # Read the body pose of the object being hidden
+        body_prim_path = self._get_prim_path(object_name, folder_path)
+        body_pose = self._read_prim_pose(body_prim_path)
+
+        # All objects are blocks
+        category = "block"
+
+        # Snapshot poses of all *other* objects before stopping
+        other_poses = self._save_all_object_poses(folder_path, exclude=object_name)
+
+        # Stop simulation, delete prim, restore others, resume
+        timeline = omni.timeline.get_timeline_interface()
+        was_playing = timeline.is_playing()
+        if was_playing:
+            timeline.stop()
+
+        self._hidden_objects[object_name] = {
+            "ref_path": ref_path,
+            "body_pose": body_pose,
+            "category": category,
+        }
+
+        stage.RemovePrim(prim_path)
+        print(f"Hidden (deleted) object: {object_name}")
+
+        # Restore other objects to their pre-stop poses and resume
+        self._restore_object_poses(other_poses, folder_path)
+        if was_playing:
+            timeline.play()
+
+    def unhide_object(self, object_name, folder_path="/World/Objects"):
+        """Unhide an object: recreate it from saved reference + pose and reapply physics.
+
+        Saves poses of all existing objects, stops simulation, recreates the
+        target prim (with physics), restores *all* object poses (including the
+        newly-restored one), and resumes playback.
+        """
+        if object_name not in self._hidden_objects:
+            print(f"Object {object_name} is not in the hidden list")
+            return
+
+        data = self._hidden_objects[object_name]
+        ref_path = data["ref_path"]
+        body_pose = data["body_pose"]
+        category = data["category"]
+
+        if not ref_path:
+            print(f"Error: No reference path saved for {object_name}, cannot restore")
+            del self._hidden_objects[object_name]
+            return
+
+        stage = omni.usd.get_context().get_stage()
+
+        prim_path = f"{folder_path}/{object_name}"
+        if stage.GetPrimAtPath(prim_path).IsValid():
+            print(f"Object {object_name} already exists in scene, removing from hidden list")
+            del self._hidden_objects[object_name]
+            return
+
+        # Snapshot poses of all existing objects before stopping
+        other_poses = self._save_all_object_poses(folder_path)
+
+        # Stop simulation
+        timeline = omni.timeline.get_timeline_interface()
+        was_playing = timeline.is_playing()
+        if was_playing:
+            timeline.stop()
+
+        # Ensure parent folder exists
+        if not stage.GetPrimAtPath(folder_path):
+            UsdGeom.Xform.Define(stage, folder_path)
+
+        # Recreate prim with USD reference
+        prim = stage.DefinePrim(prim_path)
+        prim.GetReferences().AddReference(ref_path)
+
+        # Rename Body1 → object_name (mirrors add_objects logic)
+        def _rename_body1(search_prim):
+            for child in search_prim.GetAllChildren():
+                if child.GetName() == "Body1":
+                    new_path = child.GetPath().GetParentPath().AppendChild(object_name)
+                    omni.kit.commands.execute("MovePrim", path_from=child.GetPath(), path_to=new_path)
+                    return True
+                if _rename_body1(child):
+                    return True
+            return False
+        _rename_body1(stage.GetPrimAtPath(prim_path))
+
+        # Rebind physics material if it exists in the scene
+        physics_mat_path = f"{folder_path}/PhysicsMaterial"
+        if stage.GetPrimAtPath(physics_mat_path).IsValid():
+            from omni.physx.scripts import physicsUtils
+            physics_mat_sdf_path = Sdf.Path(physics_mat_path)
+            obj_prim = stage.GetPrimAtPath(prim_path)
+            bound = 0
+            for desc in Usd.PrimRange(obj_prim):
+                if desc.HasAPI(UsdPhysics.CollisionAPI):
+                    physicsUtils.add_physics_material_to_prim(stage, desc, physics_mat_sdf_path)
+                    bound += 1
+            if bound == 0:
+                nested_path = f"{folder_path}/{object_name}/{object_name}"
+                nested_prim = stage.GetPrimAtPath(nested_path)
+                if nested_prim and nested_prim.IsValid():
+                    physicsUtils.add_physics_material_to_prim(stage, nested_prim, physics_mat_sdf_path)
+
+        # Reapply block collision / physics settings
+        prim_params = self._get_block_params()
+        mesh_path = self._get_prim_path(object_name, folder_path)
+        mesh_prim = stage.GetPrimAtPath(mesh_path)
+        if mesh_prim and mesh_prim.IsValid():
+            approx = prim_params["collision_approximation"]
+            UsdPhysics.CollisionAPI.Apply(mesh_prim)
+            mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
+            if approx == "sdf":
+                mesh_collision_api.CreateApproximationAttr(PhysxSchema.Tokens.sdf)
+                sdf_api = PhysxSchema.PhysxSDFMeshCollisionAPI.Apply(mesh_prim)
+                sdf_api.CreateSdfResolutionAttr(self._sdf_resolution)
+            else:
+                mesh_collision_api.CreateApproximationAttr(approx)
+            rest_offset = prim_params["rest_offset"]
+            physx_collision_api = PhysxSchema.PhysxCollisionAPI.Apply(mesh_prim)
+            physx_collision_api.CreateContactOffsetAttr().Set(self._contact_offset)
+            physx_collision_api.CreateRestOffsetAttr().Set(rest_offset)
+            angular_damping = prim_params["angular_damping"]
+            physx_rb_api = PhysxSchema.PhysxRigidBodyAPI.Apply(mesh_prim)
+            physx_rb_api.CreateAngularDampingAttr().Set(angular_damping)
+
+        del self._hidden_objects[object_name]
+        print(f"Unhidden (restored) object: {object_name}")
+
+        # Build the full pose set (existing objects + the restored one)
+        all_poses = other_poses
+        all_poses[object_name] = body_pose
+
+        # Play first, then restore poses while the sim is running — same
+        # mechanism as Assemble / Restore State which handles overlapping
+        # objects without collision artifacts.
+        if was_playing:
+            timeline.play()
+            async def _restore_after_play():
+                app = omni.kit.app.get_app()
+                for _ in range(3):
+                    await app.next_update_async()
+                self._restore_object_poses(all_poses, folder_path)
+            asyncio.ensure_future(_restore_after_play())
+        else:
+            self._restore_object_poses(all_poses, folder_path)
+
+    def delete_objects(self, folder_path="/World/Objects"):
+        """Delete the Objects folder from the scene. Stops simulation first to avoid tensor view crash."""
+        timeline = omni.timeline.get_timeline_interface()
+        was_playing = timeline.is_playing()
+        if was_playing:
+            timeline.stop()
+            print("Stopped simulation before deleting objects")
+
+        stage = omni.usd.get_context().get_stage()
+        prim = stage.GetPrimAtPath(folder_path)
+        if prim and prim.IsValid():
+            stage.RemovePrim(folder_path)
+            print(f"Deleted {folder_path}")
+        else:
+            print(f"Warning: {folder_path} does not exist")
+
+        # Also delete the object poses action graph if present
+        pose_graph_path = "/Graph/ActionGraph_objects_poses"
+        pose_graph_prim = stage.GetPrimAtPath(pose_graph_path)
+        if pose_graph_prim and pose_graph_prim.IsValid():
+            stage.RemovePrim(pose_graph_path)
+            print(f"Deleted {pose_graph_path}")
+
+    def add_objects(self):
+        """Import lego blocks (2 per color) using unique pre-colored USDs.
+
+        Each USD has a uniquely-named body prim with RigidBodyAPI (like FMB).
+        Poses are applied to the body prim via _set_obj_prim_pose.
+        Skips entirely if all expected blocks already exist in the scene.
+        """
+        stage = omni.usd.get_context().get_stage()
+        target_path = "/World/Objects"
+
+        # Build expected block list — one block per USD file
+        blocks = []
+        for color_name in BLOCK_COLORS:
+            usds = LEGO_USDS.get(color_name, [])
+            if not usds:
+                print(f"Warning: No USD files configured for color '{color_name}'")
+                continue
+            for usd_file in usds:
+                usd_path = LEGO_FOLDER + usd_file
+                # Block name = USD body name (e.g. lego_red_2x2.usd -> red_2x2)
+                block_name = usd_file.replace('.usd', '').replace('lego_', '')
+                blocks.append((block_name, color_name, usd_path))
+
+        # Check if all blocks already exist
+        all_exist = stage.GetPrimAtPath(target_path) is not None and stage.GetPrimAtPath(target_path).IsValid()
+        if all_exist:
+            for block_name, _, _ in blocks:
+                prim = stage.GetPrimAtPath(f"{target_path}/{block_name}")
+                if not prim or not prim.IsValid():
+                    all_exist = False
+                    break
+
+        if all_exist:
+            print(f"[add_objects] All {len(blocks)} blocks already exist, skipping")
+            return False
+
+        # Create Objects folder if needed
+        if not stage.GetPrimAtPath(target_path):
+            UsdGeom.Xform.Define(stage, target_path)
+
+        # Create common physics material
+        physics_mat_path = f"{target_path}/PhysicsMaterial"
+        material = UsdShade.Material.Define(stage, physics_mat_path)
+        physics_mat_api = UsdPhysics.MaterialAPI.Apply(material.GetPrim())
+        physics_mat_api.CreateDynamicFrictionAttr().Set(self._object_dynamic_friction)
+        physics_mat_api.CreateRestitutionAttr().Set(self._object_restitution)
+        physics_mat_api.CreateStaticFrictionAttr().Set(self._object_static_friction)
+        physx_mat_api = PhysxSchema.PhysxMaterialAPI.Apply(material.GetPrim())
+        physx_mat_api.CreateFrictionCombineModeAttr().Set(self._object_friction_combine_mode)
+        physx_mat_api.CreateRestitutionCombineModeAttr().Set(self._object_restitution_combine_mode)
+
+        print(f"Adding {len(blocks)} lego blocks from {LEGO_FOLDER}")
+
+        # First pass: create reference prims
+        body_paths = []
+        for block_name, color_name, usd_path in blocks:
+            prim_path = f"{target_path}/{block_name}"
+            body_path = self._get_prim_path(block_name, target_path)
+            body_paths.append(body_path)
+
+            existing = stage.GetPrimAtPath(prim_path)
+            if existing and existing.IsValid():
+                continue
+
+            prim = stage.DefinePrim(prim_path)
+            prim.GetReferences().AddReference(usd_path)
+
+            # Ensure convexHull collision on the body prim
+            body_prim = stage.GetPrimAtPath(body_path)
+            if body_prim and body_prim.IsValid():
+                if body_prim.HasAPI(UsdPhysics.CollisionAPI):
+                    mc = UsdPhysics.MeshCollisionAPI.Apply(body_prim)
+                    mc.CreateApproximationAttr().Set("convexHull")
+
+        # Measure Y extents for each block
+        y_extents = []
+        for body_path in body_paths:
+            _, sy, _ = self._get_prim_bbox_size(body_path)
+            y_extents.append(sy)
+
+        # Compute total span and center the row at Y=0
+        total_span = sum(y_extents) + self._object_gap * (len(blocks) - 1)
+        y_cursor = -total_span / 2.0
+
+        # Second pass: position each block on its body prim
+        for i, (block_name, color_name, usd_path) in enumerate(blocks):
+            body_path = body_paths[i]
+            y_position = y_cursor + y_extents[i] / 2.0
+
+            z = self._get_ground_z(body_path)
+            self._set_obj_prim_pose(body_path, Gf.Vec3d(0.3, y_position, z))
+
+            y_cursor += y_extents[i] + self._object_gap
+            print(f"  Added {block_name} ({color_name}) from {usd_path.split('/')[-1]}")
+
+        # Bind physics material to collision prims
+        from omni.physx.scripts import physicsUtils
+        physics_mat_sdf_path = Sdf.Path(physics_mat_path)
+        objects_prim = stage.GetPrimAtPath(target_path)
+        if objects_prim.IsValid():
+            for child in objects_prim.GetChildren():
+                if child.GetName() == "PhysicsMaterial":
+                    continue
+                for desc in Usd.PrimRange(child):
+                    if desc.HasAPI(UsdPhysics.CollisionAPI):
+                        physicsUtils.add_physics_material_to_prim(stage, desc, physics_mat_sdf_path)
+
+        print(f"[add_objects] Added {len(blocks)} lego blocks")
+        return True
+
+    def create_pose_publisher(self):
+        """Create action graph for publishing object poses to ROS2"""
+        import omni.kit.commands
+        from pxr import Sdf, Usd, UsdGeom
+        import omni.usd
+        import omni.graph.core as og
+
+        def get_objects_in_folder(stage, folder_path="/World/Objects"):
+            """Scan Objects folder and return body prim paths for pose publishing.
+
+            Each object has two-level nesting: {folder}/{name}/{name}
+            where the inner prim has RigidBodyAPI (like FMB convention).
+            """
+            body_paths = []
+            objects_prim = stage.GetPrimAtPath(folder_path)
+            if not objects_prim or not objects_prim.IsValid():
+                print(f"Warning: {folder_path} does not exist")
+                return body_paths
+
+            for child in objects_prim.GetChildren():
+                object_name = child.GetName()
+                if object_name == "PhysicsMaterial":
+                    continue
+                body_path = f"{folder_path}/{object_name}/{object_name}"
+                body_prim = stage.GetPrimAtPath(body_path)
+                if body_prim and body_prim.IsValid():
+                    body_paths.append(body_path)
+                    print(f"Found: {body_path}")
+
+            return body_paths
+
+        def create_action_graph_with_transforms(target_prims, parent_prim="/World", topic_name="objects_poses_sim"):
+            """
+            Create an action graph with OnPlaybackTick and ROS2PublishTransformTree nodes
+            
+            Args:
+                target_prims: List of prim paths to publish transforms for
+                parent_prim: Parent prim for the transform tree
+                topic_name: ROS2 topic name
+            """
+            
+            graph_path = "/Graph/ActionGraph_objects_poses"
+
+            # Check if graph already exists
+            stage = omni.usd.get_context().get_stage()
+            existing_graph = stage.GetPrimAtPath(graph_path)
+            if existing_graph and existing_graph.IsValid():
+                print(f"Action graph already exists at {graph_path}, skipping creation")
+                return
+
+            # Create the action graph using OmniGraph API
+            keys = og.Controller.Keys
+            
+            (graph, nodes, _, _) = og.Controller.edit(
+                {
+                    "graph_path": graph_path,
+                    "evaluator_name": "execution",
+                },
+                {
+                    keys.CREATE_NODES: [
+                        ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
+                        ("ros2_context", "isaacsim.ros2.bridge.ROS2Context"),
+                        ("isaac_read_simulation_time", "isaacsim.core.nodes.IsaacReadSimulationTime"),
+                        ("ros2_publish_transform_tree", "isaacsim.ros2.bridge.ROS2PublishTransformTree"),
+                    ],
+                    keys.CONNECT: [
+                        ("on_playback_tick.outputs:tick", "ros2_publish_transform_tree.inputs:execIn"),
+                        ("ros2_context.outputs:context", "ros2_publish_transform_tree.inputs:context"),
+                        ("isaac_read_simulation_time.outputs:simulationTime", "ros2_publish_transform_tree.inputs:timeStamp"),
+                    ],
+                    keys.SET_VALUES: [
+                        ("ros2_publish_transform_tree.inputs:topicName", topic_name),
+                        ("isaac_read_simulation_time.inputs:resetOnStop", False),
+                    ],
+                },
+            )
+            
+            # Get the stage to set relationships
+            stage = omni.usd.get_context().get_stage()
+            
+            # Get the ROS2 node prim
+            ros2_node_path = f"{graph_path}/ros2_publish_transform_tree"
+            ros2_prim = stage.GetPrimAtPath(ros2_node_path)
+            
+            if ros2_prim.IsValid():
+                # Set parent prim as a relationship
+                parent_rel = ros2_prim.GetRelationship("inputs:parentPrim")
+                if not parent_rel:
+                    parent_rel = ros2_prim.CreateRelationship("inputs:parentPrim", custom=True)
+                parent_rel.SetTargets([Sdf.Path(parent_prim)])
+                
+                # Set target prims as a relationship
+                target_rel = ros2_prim.GetRelationship("inputs:targetPrims")
+                if not target_rel:
+                    target_rel = ros2_prim.CreateRelationship("inputs:targetPrims", custom=True)
+                target_paths = [Sdf.Path(path) for path in target_prims]
+                target_rel.SetTargets(target_paths)
+                
+                print(f"Action graph created at {graph_path}")
+                print(f"Publishing {len(target_prims)} objects to topic: {topic_name}")
+            else:
+                print(f"Error: Could not find ROS2 node at {ros2_node_path}")
+
+        # Get the current USD stage
+        stage = omni.usd.get_context().get_stage()
+        
+        if not stage:
+            print("Error: No stage found")
+            return
+        
+        # Get all Body1 prims from the Objects folder
+        object_paths = get_objects_in_folder(stage, "/World/Objects")
+        
+        if not object_paths:
+            print("No objects found in /World/Objects")
+            return
+        
+        print(f"\nFound {len(object_paths)} objects:")
+        for path in object_paths:
+            print(f"  - {path}")
+        
+        # Create the action graph with all found objects
+        create_action_graph_with_transforms(
+            target_prims=object_paths,
+            parent_prim="/World",
+            topic_name="objects_poses_sim"
+        )
+
+    # ==================== MCP Socket Server Methods ====================
+
+    def _start_mcp_server(self):
+        """Start the MCP socket server."""
+        if self._mcp_server_running:
+            print("[MCP] Server is already running")
+            return
+
+        self._mcp_server_running = True
+        host = "localhost"
+        port = MCP_SERVER_PORT
+
+        try:
+            self._mcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._mcp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._mcp_socket.bind((host, port))
+            self._mcp_socket.listen(1)
+
+            self._mcp_server_thread = threading.Thread(target=self._mcp_server_loop)
+            self._mcp_server_thread.daemon = True
+            self._mcp_server_thread.start()
+
+            print(f"[MCP] Server started on {host}:{port}")
+        except Exception as e:
+            print(f"[MCP] Failed to start server: {str(e)}")
+            self._stop_mcp_server()
+
+    def _stop_mcp_server(self):
+        """Stop the MCP socket server and wait for all client threads to finish."""
+        self._mcp_server_running = False
+
+        if self._mcp_socket:
+            try:
+                self._mcp_socket.close()
+            except:
+                pass
+            self._mcp_socket = None
+
+        if self._mcp_server_thread:
+            try:
+                if self._mcp_server_thread.is_alive():
+                    self._mcp_server_thread.join(timeout=2.0)
+            except:
+                pass
+            self._mcp_server_thread = None
+
+        # Wait for all client handler threads to finish so they don't
+        # race on the USD stage after hot-reload creates a new instance
+        for t in self._mcp_client_threads:
+            try:
+                if t.is_alive():
+                    t.join(timeout=2.0)
+            except:
+                pass
+        self._mcp_client_threads = []
+
+        print("[MCP] Server stopped")
+
+    def _mcp_server_loop(self):
+        """Main server loop in a separate thread."""
+        self._mcp_socket.settimeout(1.0)
+
+        while self._mcp_server_running:
+            try:
+                try:
+                    client, address = self._mcp_socket.accept()
+                    print(f"[MCP] Connected to client: {address}")
+
+                    client_thread = threading.Thread(
+                        target=self._handle_mcp_client,
+                        args=(client,)
+                    )
+                    client_thread.daemon = True
+                    client_thread.start()
+                    # Track thread and prune finished ones
+                    self._mcp_client_threads = [t for t in self._mcp_client_threads if t.is_alive()]
+                    self._mcp_client_threads.append(client_thread)
+                except socket.timeout:
+                    continue
+                except OSError:
+                    # Socket closed during shutdown - this is expected
+                    if not self._mcp_server_running:
+                        break
+                except Exception as e:
+                    if self._mcp_server_running:
+                        print(f"[MCP] Error accepting connection: {str(e)}")
+                    import time
+                    time.sleep(0.5)
+            except Exception as e:
+                if self._mcp_server_running:
+                    print(f"[MCP] Error in server loop: {str(e)}")
+                if not self._mcp_server_running:
+                    break
+                import time
+                time.sleep(0.5)
+
+    def _handle_mcp_client(self, client):
+        """Handle connected client."""
+        print("[MCP] Client handler started")
+        client.settimeout(None)
+        buffer = b''
+
+        try:
+            while self._mcp_server_running:
+                try:
+                    data = client.recv(16384)
+                    if not data:
+                        print("[MCP] Client disconnected")
+                        break
+
+                    buffer += data
+                    try:
+                        command = json.loads(buffer.decode('utf-8'))
+                        buffer = b''
+
+                        # Execute command in Isaac Sim's main thread
+                        async def execute_wrapper():
+                            try:
+                                response = self._execute_mcp_command(command)
+                                response_json = json.dumps(response)
+                                print(f"[MCP] response_json: {response_json}")
+                                try:
+                                    client.sendall(response_json.encode('utf-8'))
+                                except:
+                                    print("[MCP] Failed to send response - client disconnected")
+                            except Exception as e:
+                                print(f"[MCP] Error executing command: {str(e)}")
+                                traceback.print_exc()
+                                try:
+                                    error_response = {
+                                        "status": "error",
+                                        "message": str(e)
+                                    }
+                                    client.sendall(json.dumps(error_response).encode('utf-8'))
+                                except:
+                                    pass
+                            return None
+
+                        from omni.kit.async_engine import run_coroutine
+                        run_coroutine(execute_wrapper())
+
+                    except json.JSONDecodeError:
+                        pass
+                except Exception as e:
+                    print(f"[MCP] Error receiving data: {str(e)}")
+                    break
+        except Exception as e:
+            print(f"[MCP] Error in client handler: {str(e)}")
+        finally:
+            try:
+                client.close()
+            except:
+                pass
+            print("[MCP] Client handler stopped")
+
+    def _execute_mcp_command(self, command) -> Dict[str, Any]:
+        """Execute a command and return the response."""
+        try:
+            cmd_type = command.get("type")
+            params = command.get("params", {})
+
+            # Special command: list_available_tools - returns the tool registry
+            if cmd_type == "list_available_tools":
+                return {
+                    "status": "success",
+                    "result": {
+                        "status": "success",
+                        "tools": MCP_TOOL_REGISTRY
+                    }
+                }
+
+            # Look up handler from MCP_HANDLERS defined at top of file
+            handler_name = MCP_HANDLERS.get(cmd_type)
+            if handler_name:
+                handler = getattr(self, handler_name, None)
+            else:
+                handler = None
+
+            if handler:
+                try:
+                    print(f"[MCP] Executing handler for {cmd_type}")
+                    result = handler(**params)
+                    print(f"[MCP] Handler execution complete: {result}")
+                    if result and result.get("status") == "success":
+                        return {"status": "success", "result": result}
+                    else:
+                        return {"status": "error", "message": result.get("message", "Unknown error")}
+                except Exception as e:
+                    print(f"[MCP] Error in handler: {str(e)}")
+                    traceback.print_exc()
+                    return {"status": "error", "message": str(e)}
+            else:
+                return {"status": "error", "message": f"Unknown command type: {cmd_type}"}
+
+        except Exception as e:
+            print(f"[MCP] Error executing command: {str(e)}")
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    # ==================== Common MCP Handlers ====================
+
+    def _cmd_execute_python_code(self, code: str) -> Dict[str, Any]:
+        """Execute Python code in Isaac Sim's environment.
+
+        Args:
+            code: Python code to execute
+
+        Returns:
+            Dictionary with execution result.
+        """
+        try:
+            # Create a local namespace with commonly used modules
+            local_ns = {}
+            local_ns["omni"] = omni
+            local_ns["carb"] = carb
+            local_ns["Usd"] = Usd
+            local_ns["UsdGeom"] = UsdGeom
+            local_ns["Sdf"] = Sdf
+            local_ns["Gf"] = Gf
+
+            # Execute the code
+            exec(code, local_ns)
+
+            # Check for a result variable
+            result = local_ns.get("result", None)
+
+            return {
+                "status": "success",
+                "message": "Code executed successfully",
+                "result": result
+            }
+        except Exception as e:
+            carb.log_error(f"Error executing code: {e}")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": str(e),
+                "traceback": traceback.format_exc()
+            }
+
+    def _cmd_play_scene(self) -> Dict[str, Any]:
+        """Start/resume the simulation timeline."""
+        try:
+            import omni.timeline
+
+            timeline = omni.timeline.get_timeline_interface()
+            timeline.play()
+            return {
+                "status": "success",
+                "message": "Simulation started"
+            }
+        except Exception as e:
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"Failed to start simulation: {str(e)}"
+            }
+
+    def _cmd_stop_scene(self) -> Dict[str, Any]:
+        """Stop the simulation timeline."""
+        try:
+            import omni.timeline
+            timeline = omni.timeline.get_timeline_interface()
+            timeline.stop()
+            return {
+                "status": "success",
+                "message": "Simulation stopped"
+            }
+        except Exception as e:
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"Failed to stop simulation: {str(e)}"
+            }
+
+    # ==================== Scene Management Handlers ====================
+
+    def _get_scene_state_dir(self) -> str:
+        """Get the directory for scene state JSON files.
+
+        Uses the output dir pushed by MCP server, or falls back to default resources dir.
+        """
+        if self._output_dir:
+            scene_dir = os.path.join(self._output_dir, "resources", "scene_states")
+        else:
+            scene_dir = os.path.join(RESOURCES_DIR, "scene_states")
+        os.makedirs(scene_dir, exist_ok=True)
+        return scene_dir
+
+    def _get_latest_scene_state_path(self) -> str:
+        """Find the most recent scene state file by timestamp in the filename."""
+        scene_dir = self._get_scene_state_dir()
+        import glob as glob_mod
+        files = glob_mod.glob(os.path.join(scene_dir, "scene_state_*.json"))
+        if not files:
+            return None
+        files.sort()
+        return files[-1]
+
+    def _get_prim_path(self, object_name: str, folder_path: str = "/World/Objects") -> str:
+        """Get the full nested prim path for an object name (folder/{name}/{name})."""
+        return f"{folder_path}/{object_name}/{object_name}"
+
+    def _resolve_output_dir(self, output_dir=None):
+        """Update internal output_dir if provided by MCP server."""
+        if output_dir:
+            self._output_dir = os.path.abspath(output_dir)
+
+    def _read_prim_pose(self, prim_path: str) -> Dict[str, Any]:
+        """Helper method to read pose (position, quaternion, scale) from a prim."""
+        try:
+            from pxr import UsdGeom, Gf
+
+            stage = omni.usd.get_context().get_stage()
+            prim = stage.GetPrimAtPath(prim_path)
+
+            if not prim.IsValid():
+                return None
+
+            translate_attr = prim.GetAttribute("xformOp:translate")
+            rotate_attr = prim.GetAttribute("xformOp:rotateXYZ")
+            orient_attr = prim.GetAttribute("xformOp:orient")
+            scale_attr = prim.GetAttribute("xformOp:scale")
+
+            position = {"x": 0.0, "y": 0.0, "z": 0.0}
+            rotation = {"rx": 0.0, "ry": 0.0, "rz": 0.0}
+            scale = {"x": 1.0, "y": 1.0, "z": 1.0}
+
+            if translate_attr and translate_attr.IsValid():
+                v = translate_attr.Get()
+                if v:
+                    position = {"x": float(v[0]), "y": float(v[1]), "z": float(v[2])}
+
+            if rotate_attr and rotate_attr.IsValid():
+                v = rotate_attr.Get()
+                if v:
+                    rotation = {"rx": float(v[0]), "ry": float(v[1]), "rz": float(v[2])}
+            elif orient_attr and orient_attr.IsValid():
+                v = orient_attr.Get()
+                if v:
+                    qw, qx, qy, qz = float(v.GetReal()), *[float(c) for c in v.GetImaginary()]
+                    euler = R.from_quat([qx, qy, qz, qw]).as_euler('xyz', degrees=True)
+                    rotation = {"rx": float(euler[0]), "ry": float(euler[1]), "rz": float(euler[2])}
+
+            if scale_attr and scale_attr.IsValid():
+                v = scale_attr.Get()
+                if v:
+                    scale = {"x": float(v[0]), "y": float(v[1]), "z": float(v[2])}
+
+            return {
+                "position": position,
+                "rotation": rotation,
+                "scale": scale
+            }
+        except Exception as e:
+            carb.log_error(f"Error reading pose for {prim_path}: {e}")
+            return None
+
+    def _write_prim_pose(self, prim_path: str, pose_data: Dict[str, Any]) -> bool:
+        """Helper method to write pose (position, quaternion, scale) to a prim."""
+        try:
+            from pxr import Gf
+
+            pos = pose_data.get("position", {"x": 0.0, "y": 0.0, "z": 0.0})
+            rot = pose_data.get("rotation", {"rx": 0.0, "ry": 0.0, "rz": 0.0})
+            scale = pose_data.get("scale", {"x": 1.0, "y": 1.0, "z": 1.0})
+
+            stage = omni.usd.get_context().get_stage()
+            prim = stage.GetPrimAtPath(prim_path)
+            if not prim.IsValid():
+                carb.log_error(f"Prim not found: {prim_path}")
+                return False
+
+            translate_attr = prim.GetAttribute("xformOp:translate")
+            if translate_attr:
+                translate_attr.Set(Gf.Vec3d(pos["x"], pos["y"], pos["z"]))
+
+            rotate_attr = prim.GetAttribute("xformOp:rotateXYZ")
+            if rotate_attr:
+                rotate_attr.Set(Gf.Vec3f(rot["rx"], rot["ry"], rot["rz"]))
+
+            scale_attr = prim.GetAttribute("xformOp:scale")
+            if scale_attr:
+                scale_attr.Set(Gf.Vec3d(scale["x"], scale["y"], scale["z"]))
+
+            return True
+        except Exception as e:
+            carb.log_error(f"Error writing pose for {prim_path}: {e}")
+            traceback.print_exc()
+            return False
+
+    def _cmd_sort_objects(self, color: str = None) -> Dict[str, Any]:
+        """MCP handler for sorting blocks by color."""
+        try:
+            color = color or None  # normalize empty string from MCP default
+            if color and color not in BLOCK_COLORS:
+                return {"status": "error", "message": f"Unknown color '{color}'. Valid: {list(BLOCK_COLORS.keys())}"}
+            sorted_count, _ = self.sort_objects(color=color)
+            return {"status": "success", "message": f"Sorted {sorted_count} blocks (color={color or 'all'})"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": f"Failed to sort objects: {str(e)}"}
+
+    def _cmd_randomize_object_poses(self, color: str = None) -> Dict[str, Any]:
+        """MCP handler for randomizing block poses, optionally filtered by color."""
+        try:
+            color = color or None  # normalize empty string from MCP default
+            if color and color not in BLOCK_COLORS:
+                return {"status": "error", "message": f"Unknown color '{color}'. Valid: {list(BLOCK_COLORS.keys())}"}
+            randomized, _ = self.randomize_object_poses(color=color)
+            return {
+                "status": "success",
+                "message": f"Randomized {randomized} blocks (color={color or 'all'})"
+            }
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": f"Failed to randomize object poses: {str(e)}"}
+
+    def _cmd_randomize_single_object(self, object_name: str = None) -> Dict[str, Any]:
+        """MCP handler for randomizing a single object's pose."""
+        if not object_name:
+            return {"status": "error", "message": "object_name is required"}
+        try:
+            self.randomize_single_object(object_name)
+            return {
+                "status": "success",
+                "message": f"Randomized '{object_name}' in clear workspace area"
+            }
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": f"Failed to randomize '{object_name}': {str(e)}"}
+
+    def _cmd_save_scene_state(self, json_file_path: str = None, output_dir: str = None) -> Dict[str, Any]:
+        """Save scene state (object poses) to a JSON file.
+
+        If json_file_path is provided, saves to that filename inside scene_states dir.
+        Otherwise creates a timestamped file.
+
+        Args:
+            json_file_path: Optional filename (e.g. 'assembled.json'). If omitted, timestamped.
+            output_dir: Optional output directory pushed by MCP server.
+
+        Returns:
+            Dictionary with execution result.
+        """
+        try:
+            from pxr import UsdGeom
+            from datetime import datetime
+
+            self._resolve_output_dir(output_dir)
+            scene_dir = self._get_scene_state_dir()
+            if json_file_path:
+                if not json_file_path.endswith(".json"):
+                    json_file_path += ".json"
+                save_path = os.path.join(scene_dir, os.path.basename(json_file_path))
+            else:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                save_path = os.path.join(scene_dir, f"scene_state_{timestamp}.json")
+
+            stage = omni.usd.get_context().get_stage()
+            if not stage:
+                return {
+                    "status": "error",
+                    "message": "No stage is currently open"
+                }
+
+            objects_prim = stage.GetPrimAtPath("/World/Objects")
+            if not objects_prim.IsValid():
+                return {
+                    "status": "error",
+                    "message": "/World/Objects path does not exist"
+                }
+
+            children = objects_prim.GetChildren()
+            object_names = [child.GetName() for child in children if child.IsA(UsdGeom.Xformable)]
+
+            if not object_names:
+                return {
+                    "status": "error",
+                    "message": "No objects found in /World/Objects"
+                }
+
+            poses = {}
+            saved_count = 0
+            failed_names = []
+
+            for object_name in object_names:
+                prim_path = self._get_prim_path(object_name)
+                pose = self._read_prim_pose(prim_path)
+                if pose:
+                    poses[object_name] = pose
+                    saved_count += 1
+                else:
+                    failed_names.append(object_name)
+
+            with open(save_path, 'w') as f:
+                json.dump(poses, f, indent=4)
+
+            abs_path = os.path.abspath(save_path)
+            msg = f"[save_state] Saved {saved_count} objects to {abs_path}"
+            if failed_names:
+                msg += f", {len(failed_names)} failed: {failed_names}"
+            print(msg)
+
+            return {
+                "status": "success",
+                "message": msg,
+                "saved_count": saved_count,
+                "failed_names": failed_names,
+                "json_file_path": save_path
+            }
+
+        except Exception as e:
+            print(f"[save_state] Error: {str(e)}")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"Failed to save scene state: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    def _cmd_restore_scene_state(self, json_file_path: str = None, output_dir: str = None) -> Dict[str, Any]:
+        """Restore scene state (object poses) from a JSON file.
+
+        If json_file_path is provided, loads that specific file from scene_states dir.
+        Otherwise finds the most recent timestamped save.
+
+        Args:
+            json_file_path: Optional filename (e.g. 'assembled.json'). If omitted, uses latest.
+            output_dir: Optional output directory pushed by MCP server.
+
+        Returns:
+            Dictionary with execution result.
+        """
+        try:
+            self._resolve_output_dir(output_dir)
+
+            if json_file_path:
+                if not json_file_path.endswith(".json"):
+                    json_file_path += ".json"
+                restore_path = os.path.join(self._get_scene_state_dir(), os.path.basename(json_file_path))
+                if not os.path.exists(restore_path):
+                    return {
+                        "status": "error",
+                        "message": f"Scene state file not found: {restore_path}"
+                    }
+                latest_path = restore_path
+            else:
+                latest_path = self._get_latest_scene_state_path()
+
+            if not latest_path:
+                return {
+                    "status": "error",
+                    "message": f"No scene state files found in {self._get_scene_state_dir()}"
+                }
+
+            try:
+                with open(latest_path, 'r') as f:
+                    poses = json.load(f)
+            except json.JSONDecodeError as e:
+                return {
+                    "status": "error",
+                    "message": f"Invalid JSON file: {str(e)}"
+                }
+
+            if not poses:
+                return {
+                    "status": "error",
+                    "message": "No objects found in scene state file"
+                }
+
+            restored_count = 0
+            failed_names = []
+
+            for object_name, pose_data in poses.items():
+                prim_path = self._get_prim_path(object_name)
+                if self._write_prim_pose(prim_path, pose_data):
+                    restored_count += 1
+                else:
+                    failed_names.append(object_name)
+
+            msg = f"[restore_state] Restored {restored_count} objects from {latest_path}"
+            if failed_names:
+                msg += f", {len(failed_names)} failed: {failed_names}"
+            print(msg)
+
+            return {
+                "status": "success",
+                "message": msg,
+                "restored_count": restored_count,
+                "failed_names": failed_names,
+                "json_file_path": latest_path
+            }
+
+        except Exception as e:
+            print(f"[restore_state] Error: {str(e)}")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"Failed to restore scene state: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    def _cmd_add_objects(self) -> Dict[str, Any]:
+        """MCP handler for adding lego block objects to the scene."""
+        try:
+            added = self.add_objects()
+            if added is False:
+                return {
+                    "status": "success",
+                    "message": "All blocks already exist in scene, skipping",
+                }
+            return {
+                "status": "success",
+                "message": f"Lego blocks added from {LEGO_FOLDER}",
+                "folder_path": LEGO_FOLDER
+            }
+        except Exception as e:
+            carb.log_error(f"Error in add_objects: {e}")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"Failed to add objects: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    def _cmd_delete_objects(self) -> Dict[str, Any]:
+        """MCP handler for deleting objects from the scene.
+
+        Returns:
+            Dictionary with execution result.
+        """
+        try:
+            self.delete_objects()
+            return {
+                "status": "success",
+                "message": "Objects deleted from /World/Objects"
+            }
+        except Exception as e:
+            carb.log_error(f"Error in delete_objects: {e}")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"Failed to delete objects: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    def _cmd_setup_pose_publisher(self) -> Dict[str, Any]:
+        """MCP handler for setting up pose publisher action graph.
+
+        Returns:
+            Dictionary with execution result.
+        """
+        try:
+            self.create_pose_publisher()
+            return {
+                "status": "success",
+                "message": "Pose publisher action graph created at /Graph/ActionGraph_objects_poses"
+            }
+        except Exception as e:
+            carb.log_error(f"Error in setup_pose_publisher: {e}")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"Failed to setup pose publisher: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    def _cmd_sync_real_poses(self) -> Dict[str, Any]:
+        """MCP handler for syncing real object poses to sim."""
+        try:
+            self.sync_real_poses()
+            return {"status": "success", "message": "Synced real poses to sim"}
+        except Exception as e:
+            carb.log_error(f"Error in sync_real_poses: {e}")
+            traceback.print_exc()
+            return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
+
+    def _cmd_load_scene(self) -> Dict[str, Any]:
+        """MCP handler: sync version of load_scene (no async needed)."""
+        try:
+            stage = omni.usd.get_context().get_stage()
+
+            # Physics scene
+            physics_prim = stage.GetPrimAtPath("/physicsScene")
+            if not physics_prim or not physics_prim.IsValid():
+                from pxr import UsdPhysics as _UP
+                _UP.Scene.Define(stage, "/physicsScene")
+                carb.log_info("Created /physicsScene")
+
+            # Ground plane
+            ground_prim = stage.GetPrimAtPath("/World/defaultGroundPlane")
+            if not ground_prim or not ground_prim.IsValid():
+                from isaacsim.core.api.objects import GroundPlane
+                GroundPlane(prim_path="/World/defaultGroundPlane", z_position=0.0, size=5000)
+
+            # Physics settings
+            physics_prim = stage.GetPrimAtPath("/physicsScene")
+            if physics_prim and physics_prim.IsValid():
+                physx_api = PhysxSchema.PhysxSceneAPI.Apply(physics_prim)
+                physx_api.CreateEnableGPUDynamicsAttr().Set(False)
+                physx_api.CreateTimeStepsPerSecondAttr().Set(self._time_steps_per_second)
+                physx_api.CreateEnableCCDAttr().Set(False)
+
+            settings = carb.settings.get_settings()
+            settings.set("/persistent/simulation/minFrameRate", self._min_frame_rate)
+
+            return {"status": "success", "message": "Scene loaded (physics, ground plane, frame rate)"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_load_robot(self) -> Dict[str, Any]:
+        """MCP handler: sync version of load_robot (USD + joint drives, no articulation view)."""
+        try:
+            asset_path = "omniverse://localhost/Projects/so-arm101/SO-ARM101-USD.usd"
+            prim_path = "/World/SO_ARM101"
+
+            stage = omni.usd.get_context().get_stage()
+
+            # Check if already loaded
+            existing = stage.GetPrimAtPath(prim_path)
+            if existing and existing.IsValid():
+                return {"status": "success", "message": "SO-ARM101 already loaded at /World/SO_ARM101"}
+
+            # Add USD reference
+            add_reference_to_stage(usd_path=asset_path, prim_path=prim_path)
+
+            # Verify prim exists
+            prim = stage.GetPrimAtPath(prim_path)
+            if not prim or not prim.IsValid():
+                return {"status": "error", "message": f"Failed to load USD at {prim_path}"}
+
+            # Apply transform
+            xform = UsdGeom.Xform(prim)
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, self._robot_base_z_offset))
+            xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
+
+            # Apply URDF base-offset correction at runtime.
+            # The USD's shoulder_pan localPos0 is ~17mm off from the URDF origin.
+            # We fix it here rather than patching the USD file because re-saving
+            # the crate binary causes convexDecomposition collision jitter. See the
+            # longer note in the async load_robot() method above.
+            base_delta = Gf.Vec3d(0.016826307, 8.404913e-8, -0.00240026)
+            sp = stage.GetPrimAtPath(f"{prim_path}/joints/shoulder_pan")
+            if sp and sp.IsValid():
+                old_lp0 = sp.GetAttribute("physics:localPos0").Get()
+                sp.GetAttribute("physics:localPos0").Set(
+                    Gf.Vec3f(old_lp0[0] + base_delta[0], old_lp0[1] + base_delta[1], old_lp0[2] + base_delta[2])
+                )
+            for lname in ["shoulder_link", "upper_arm_link", "lower_arm_link",
+                          "wrist_link", "gripper_link", "moving_jaw_so101_v1_link",
+                          "camera_mount_link", "camera_link", "camera_optical_frame"]:
+                lp = stage.GetPrimAtPath(f"{prim_path}/{lname}")
+                if lp and lp.IsValid():
+                    old_t = lp.GetAttribute("xformOp:translate").Get()
+                    lp.GetAttribute("xformOp:translate").Set(
+                        Gf.Vec3d(old_t[0] + base_delta[0], old_t[1] + base_delta[1], old_t[2] + base_delta[2])
+                    )
+
+            # Configure arm joint drives
+            arm_joints = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
+            for jname in arm_joints:
+                jp = stage.GetPrimAtPath(f"{prim_path}/joints/{jname}")
+                if jp and jp.IsValid():
+                    drive = UsdPhysics.DriveAPI.Apply(jp, "angular")
+                    drive.GetMaxForceAttr().Set(self._robot_max_force)
+                    drive.GetStiffnessAttr().Set(self._robot_stiffness)
+                    drive.GetDampingAttr().Set(self._robot_damping)
+
+            # Configure gripper joint drive
+            gp = stage.GetPrimAtPath(f"{prim_path}/joints/gripper_joint")
+            if gp and gp.IsValid():
+                drive = UsdPhysics.DriveAPI.Apply(gp, "angular")
+                drive.GetMaxForceAttr().Set(self._gripper_max_force)
+                drive.GetStiffnessAttr().Set(self._gripper_stiffness)
+                drive.GetDampingAttr().Set(self._gripper_damping)
+
+            # Gripper physics material
+            self._configure_gripper_material(prim_path, stage)
+
+            return {
+                "status": "success",
+                "message": "SO-ARM101 loaded with 5 arm joints + integrated gripper at /World/SO_ARM101"
+            }
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_setup_action_graph(self) -> Dict[str, Any]:
+        """MCP handler: sync setup of ROS2 action graph."""
+        try:
+            stage = omni.usd.get_context().get_stage()
+            if not stage.GetPrimAtPath("/World/SO_ARM101"):
+                return {"status": "error", "message": "SO-ARM101 not loaded. Run load_robot first."}
+
+            from isaacsim.core.utils.extensions import enable_extension
+            enable_extension("isaacsim.ros2.bridge")
+            enable_extension("isaacsim.core.nodes")
+            enable_extension("omni.graph.action")
+
+            graph_path = "/Graph/ActionGraph_SO_ARM101"
+            if stage.GetPrimAtPath(graph_path):
+                return {"status": "success", "message": "Action graph already exists"}
+
+            (graph, nodes, _, _) = og.Controller.edit(
+                {"graph_path": graph_path, "evaluator_name": "execution"},
+                {
+                    og.Controller.Keys.CREATE_NODES: [
+                        ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
+                        ("ros2_context", "isaacsim.ros2.bridge.ROS2Context"),
+                        ("isaac_read_simulation_time", "isaacsim.core.nodes.IsaacReadSimulationTime"),
+                        ("ros2_subscribe_joint_state", "isaacsim.ros2.bridge.ROS2SubscribeJointState"),
+                        ("ros2_publish_clock", "isaacsim.ros2.bridge.ROS2PublishClock"),
+                        ("articulation_controller", "isaacsim.core.nodes.IsaacArticulationController"),
+                    ],
+                    og.Controller.Keys.SET_VALUES: [
+                        ("ros2_context.inputs:useDomainIDEnvVar", True),
+                        ("ros2_context.inputs:domain_id", 0),
+                        ("ros2_subscribe_joint_state.inputs:topicName", "/joint_states"),
+                        ("ros2_publish_clock.inputs:topicName", "/clock"),
+                        ("articulation_controller.inputs:robotPath", "/World/SO_ARM101"),
+                        ("articulation_controller.inputs:jointIndices", [0, 1, 2, 3, 4, 5]),
+                    ],
+                    og.Controller.Keys.CONNECT: [
+                        ("on_playback_tick.outputs:tick", "ros2_subscribe_joint_state.inputs:execIn"),
+                        ("on_playback_tick.outputs:tick", "ros2_publish_clock.inputs:execIn"),
+                        ("on_playback_tick.outputs:tick", "articulation_controller.inputs:execIn"),
+                        ("ros2_context.outputs:context", "ros2_subscribe_joint_state.inputs:context"),
+                        ("ros2_context.outputs:context", "ros2_publish_clock.inputs:context"),
+                        ("isaac_read_simulation_time.outputs:simulationTime", "ros2_publish_clock.inputs:timeStamp"),
+                        ("ros2_subscribe_joint_state.outputs:positionCommand", "articulation_controller.inputs:positionCommand"),
+                        ("ros2_subscribe_joint_state.outputs:velocityCommand", "articulation_controller.inputs:velocityCommand"),
+                        ("ros2_subscribe_joint_state.outputs:effortCommand", "articulation_controller.inputs:effortCommand"),
+                    ],
+                }
+            )
+            return {"status": "success", "message": "ROS2 action graph created for SO-ARM101 joint control"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_setup_gripper_action_graph(self) -> Dict[str, Any]:
+        """MCP handler for setting up the gripper action graph."""
+        try:
+            self.setup_gripper_action_graph()
+            return {"status": "success", "message": "Gripper action graph created for SO-ARM101"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_setup_force_publisher(self) -> Dict[str, Any]:
+        """MCP handler for setting up the force publisher."""
+        try:
+            self.setup_force_publish_action_graph()
+            return {"status": "success", "message": "Force publisher action graph created for SO-ARM101"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def on_shutdown(self):
+        """Clean shutdown"""
+        self._teardown_log_redirect()
+        print("[SO-ARM101-DT] Digital Twin shutdown")
+
+        # Stop MCP socket server
+        self._stop_mcp_server()
+
+        # Stop physics-rate callbacks
+        self._stop_gripper_physics()
+        self._stop_force_publish()
+
+        # Isaac Sim handles ROS2 shutdown automatically
+        print("ROS2 bridge shutdown handled by Isaac Sim")
+
+        # Clear UI widget references to break closure references
+        self._workspace_checkbox = None
+        self._custom_checkbox = None
+        self._custom_camera_prim_field = None
+        self._custom_camera_topic_field = None
+        self._resolution_combo = None
+        self._assembly_combo = None
+
+        # Destroy window - clear frame first to break lambda closure references
+        if self._window:
+            self._window.frame.clear()
+            self._window.destroy()
+            self._window = None

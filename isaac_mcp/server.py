@@ -384,6 +384,8 @@ def _tool_implementation(name: str, params: Dict[str, Any]) -> str:
                     extras.append(f"Restored: {result['restored_count']} object(s)")
                 if result.get("failed_names"):
                     extras.append(f"Failed: {result['failed_names']}")
+                if result.get("result") is not None:
+                    extras.append(f"Result: {result['result']}")
                 if extras:
                     message += "\n" + "\n".join(extras)
                 return message
