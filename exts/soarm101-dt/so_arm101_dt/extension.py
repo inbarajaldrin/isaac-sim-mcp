@@ -4,6 +4,7 @@ import asyncio
 import numpy as np
 import os
 import sys
+import time
 import threading
 import glob
 import omni.client
@@ -29,9 +30,14 @@ if BASE_OUTPUT_DIR:
 else:
     RESOURCES_DIR = "resources"
 
-# Object loading configuration
+# Object loading configuration (local assets only)
+def _get_assets_folder():
+    _ext_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return "file://" + os.path.abspath(os.path.join(_ext_dir, "assets")) + "/"
+
+
 OBJECTS_CONFIG = {
-    "folder": "omniverse://localhost/Projects/so-arm101/",
+    "folder": None,  # Resolved at runtime via _objects_folder_path
     "skip_patterns": ["ARM101"],  # skip robot USDs when loading objects
 }
 
@@ -43,8 +49,30 @@ BLOCK_COLORS = {
     # "yellow": (0.863, 0.765, 0.110),
 }
 
-# Lego assets folder and per-color USD files
-LEGO_FOLDER = "omniverse://localhost/Projects/so-arm101/legos/"
+# Lego assets folder and per-color USD files (local only)
+def _get_lego_folder():
+    _ext_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _local = os.path.join(_ext_dir, "assets", "legos")
+    if not os.path.isdir(_local):
+        raise FileNotFoundError(
+            f"Lego assets folder not found at {_local}. "
+            "Place lego USD files in exts/soarm101-dt/assets/legos/"
+        )
+    return "file://" + os.path.abspath(_local) + "/"
+
+
+def _get_camera_mount_usd_path():
+    """Local assets/wrist_mounts/ only."""
+    _ext_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _local = os.path.join(_ext_dir, "assets", "wrist_mounts", "camera_wrist_mount.usd")
+    if not os.path.isfile(_local):
+        raise FileNotFoundError(
+            f"Camera mount USD not found at {_local}. "
+            "Place camera_wrist_mount.usd in exts/soarm101-dt/assets/wrist_mounts/"
+        )
+    return "file://" + os.path.abspath(_local)
+
+
 # Each color maps to a list of unique USD filenames — one per block instance.
 # Each USD has a uniquely-named body prim matching its filename (e.g. red_2x2).
 LEGO_USDS = {
@@ -163,8 +191,12 @@ MCP_TOOL_REGISTRY = {
         "description": "Create the ROS2 force/torque publisher action graph for SO-ARM101 end-effector wrench.",
         "parameters": {}
     },
-    "setup_gripper_action_graph": {
-        "description": "Create the ROS2 gripper control action graph for SO-ARM101 integrated gripper.",
+    "setup_bbox_publisher": {
+        "description": "Publish object bounding box dimensions to ROS2 topic 'objects_bbox_sim' as JSON.",
+        "parameters": {}
+    },
+    "setup_wrist_camera_action_graph": {
+        "description": "Create ROS2 action graph for wrist camera (OV9732) RGB and camera_info publishing.",
         "parameters": {}
     },
 }
@@ -187,7 +219,8 @@ MCP_HANDLERS = {
     "load_robot": "_cmd_load_robot",
     "setup_action_graph": "_cmd_setup_action_graph",
     "setup_force_publisher": "_cmd_setup_force_publisher",
-    "setup_gripper_action_graph": "_cmd_setup_gripper_action_graph",
+    "setup_bbox_publisher": "_cmd_setup_bbox_publisher",
+    "setup_wrist_camera_action_graph": "_cmd_setup_wrist_camera_action_graph",
 }
 
 from isaacsim.core.utils.stage import add_reference_to_stage
@@ -242,22 +275,17 @@ class DigitalTwin(omni.ext.IExt):
         self._viewport_rendering_enabled = True
         self._viewport_toggle_btn = None
 
-        # Gripper physics callback state
-        self._gripper_physx_sub = None
-        self._gripper_articulation = None
-        self._gripper_graph_path = None
-        self._gripper_sub_attr_path = None
-        self._gripper_pub_attr_path = None
-        self._gripper_asym_pub_attr_path = None
-        self._gripper_publish_active = False
-        self._gripper_warmup = 0  # skip N physics steps before re-init
-
         # Force publisher physics callback state
         self._force_physx_sub = None
         self._effort_articulation = None
         self._force_graph_path = None
         self._force_pub_node = None
         self._force_warmup = 0
+
+        # BBox publisher state
+        self._bbox_graph_path = None
+        self._bbox_pub_attr_path = None
+        self._bbox_physx_sub = None
 
         # MCP socket server state
         self._mcp_socket = None
@@ -271,6 +299,7 @@ class DigitalTwin(omni.ext.IExt):
         self._y_offset = 0.20  # Y offset for all objects (positive Y = in front of robot)
         self._ground_plane_z = 0.0  # Ground plane Z position
         self._robot_base_z_offset = 0.0
+        self._robot_base_rpy_deg = np.array([0.0, 0.0, 0.0])  # Robot base orientation (roll, pitch, yaw)
         self._hidden_objects = {}  # {name: {ref_path, body_pose, category}}
 
         # Output directory pushed by MCP server on connect (None = use default)
@@ -280,16 +309,18 @@ class DigitalTwin(omni.ext.IExt):
         self._min_frame_rate = 60
         self._time_steps_per_second = 120
 
-        # SO-ARM101 joint drive parameters (STS3215 servos, URDF effort=10 Nm)
-        # High stiffness for tight position tracking (PD position control)
-        self._robot_max_force = 10.0       # STS3215 max torque (~10 Nm from URDF)
-        self._robot_stiffness = 400.0      # P gain - stiff position tracking
-        self._robot_damping = 40.0         # D gain - prevent oscillation (~10% of P)
+        # SO-ARM101 joint drive parameters - hardware defaults (ST3215: 30 kg·cm ≈ 3 Nm)
+        # UR5e stiffness/max_force=0.5, damping/max_force=0.05 ratios
+        self._robot_max_force = 3.0        # STS3215 stall torque (30 kg·cm)
+        # self._robot_stiffness = 1.5       # 0.5 × max_force (hardware default)
+        self._robot_stiffness = 15.0       # real2sim: tuned for sim behavior
+        self._robot_damping = 0.15         # 0.05 × max_force
 
-        # SO-ARM101 gripper joint drive parameters (STS3215 servo)
-        self._gripper_max_force = 10.0     # same servo as arm joints
-        self._gripper_stiffness = 200.0    # slightly softer for grasping compliance
-        self._gripper_damping = 20.0       # prevent jaw oscillation
+        # SO-ARM101 gripper - same ST3215 servo
+        self._gripper_max_force = 3.0      # 30 kg·cm
+        # self._gripper_stiffness = 1.5     # 0.5 × max_force (hardware default)
+        self._gripper_stiffness = 15.0     # real2sim: tuned for sim behavior
+        self._gripper_damping = 0.15       # 0.05 × max_force
 
         # Joint name mapping: real robot ROS2 names → USD names (same kinematic order)
         self._joint_name_map = {
@@ -374,7 +405,6 @@ class DigitalTwin(omni.ext.IExt):
                         ui.Button("Setup Action Graph", width=200, height=35, clicked_fn=lambda: asyncio.ensure_future(self.setup_action_graph()))
                     with ui.HStack(spacing=5):
                         ui.Button("Setup Force Publisher", width=200, height=35, clicked_fn=self.setup_force_publish_action_graph)
-                        ui.Button("Setup Gripper Action Graph", width=200, height=35, clicked_fn=self.setup_gripper_action_graph)
 
             # Intel RealSense Camera
             with ui.CollapsableFrame(title="Intel RealSense Camera", collapsed=False, height=0):
@@ -388,9 +418,8 @@ class DigitalTwin(omni.ext.IExt):
             with ui.CollapsableFrame(title="Wrist Camera (OV9732)", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
                     with ui.HStack(spacing=5):
-                        ui.Button("Import Camera Mount", width=170, height=35, clicked_fn=self.import_camera_mount)
                         ui.Button("Attach Camera Mount", width=170, height=35, clicked_fn=self.attach_camera_mount_mesh)
-                        ui.Button("Create Wrist Camera AG", width=200, height=35, clicked_fn=self.setup_wrist_camera_action_graph)
+                        ui.Button("Setup Camera Action Graph", width=200, height=35, clicked_fn=self.setup_wrist_camera_action_graph)
 
             # NEW SECTION: Additional Camera
             with ui.CollapsableFrame(title="Additional Camera", collapsed=True, height=0):
@@ -443,6 +472,8 @@ class DigitalTwin(omni.ext.IExt):
                             with ui.HStack(spacing=5):
                                 ui.Button("Add ArUco Markers", width=180, height=35, clicked_fn=self.add_aruco_markers)
                                 ui.Button("Setup Pose Publisher", width=180, height=35, clicked_fn=self.create_pose_publisher)
+                            with ui.HStack(spacing=5):
+                                ui.Button("Setup BBox Publisher", width=180, height=35, clicked_fn=self.setup_bbox_publisher)
                     with ui.CollapsableFrame(title="Scene State", name="subFrame", collapsed=True, height=0):
                         with ui.VStack(spacing=5, height=0):
                             with ui.HStack(spacing=5):
@@ -634,20 +665,6 @@ class DigitalTwin(omni.ext.IExt):
         if stage is None:
             return
 
-        # Gripper action graph
-        gripper_graph = "/Graph/ActionGraph_Gripper"
-        if stage.GetPrimAtPath(gripper_graph):
-            self._gripper_graph_path = gripper_graph
-            self._gripper_sub_attr_path = f"{gripper_graph}/subscriber.outputs:data"
-            self._gripper_pub_attr_path = f"{gripper_graph}/ros2_publisher.inputs:data"
-            self._gripper_effort_pub_attr_path = f"{gripper_graph}/effort_publisher.inputs:data"
-            self._gripper_asym_pub_attr_path = f"{gripper_graph}/asymmetry_publisher.inputs:data"
-            self._gripper_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
-                self._on_physics_step_gripper
-            )
-            self._gripper_publish_active = True
-            print(f"[HotReload] Re-subscribed gripper physics callback for {gripper_graph}")
-
         # Force publisher action graph
         force_graph = "/Graph/ActionGraph_SO_ARM101_ForcePublish"
         if stage.GetPrimAtPath(force_graph):
@@ -661,9 +678,21 @@ class DigitalTwin(omni.ext.IExt):
             )
             print(f"[HotReload] Re-subscribed force publisher physics callback for {force_graph}")
 
+        # BBox publisher action graph
+        bbox_graph = "/Graph/ActionGraph_objects_bbox"
+        if stage.GetPrimAtPath(bbox_graph):
+            self._bbox_graph_path = bbox_graph
+            self._bbox_pub_attr_path = f"{bbox_graph}/publisher.inputs:data"
+            self._bbox_publish_counter = 0
+            self._bbox_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
+                self._on_physics_step_bbox
+            )
+            print(f"[HotReload] Re-subscribed bbox publisher physics callback for {bbox_graph}")
+
     @property
     def _objects_folder_path(self):
-        return self._objects_config["folder"]
+        folder = self._objects_config.get("folder")
+        return folder if folder else _get_assets_folder()
 
     @property
     def _skip_patterns(self):
@@ -724,11 +753,13 @@ class DigitalTwin(omni.ext.IExt):
             self._viewport_toggle_btn.text = "Disable Viewport" if self._viewport_rendering_enabled else "Enable Viewport"
 
     async def quick_start(self):
-        """Quick start: load scene, SO-ARM101 + action graph, gripper + action graph, workspace camera with action graph."""
-        import numpy as np
-        from pxr import Gf, Sdf, UsdGeom
+        """Quick start: load scene, SO-ARM101, joint action graph, camera mount, lego objects, publishers.
 
+        Use await app.next_update_async() after steps that add/modify prims or action graphs,
+        so the Omniverse update loop applies changes before the next step runs.
+        """
         print("=== Quick Start ===")
+        app = omni.kit.app.get_app()
 
         # 1. Load scene
         print("--- Loading scene ---")
@@ -737,174 +768,117 @@ class DigitalTwin(omni.ext.IExt):
         # 2. Import SO-ARM101
         print("--- Importing SO-ARM101 ---")
         await self.load_robot()
+        await app.next_update_async()
 
         # 3. Setup SO-ARM101 action graph
         print("--- Setting up SO-ARM101 Action Graph ---")
         await self.setup_action_graph()
-
-        # 4. Setup SO-ARM101 force publisher
-        print("--- Setting up SO-ARM101 Force Publisher ---")
-        self.setup_force_publish_action_graph()
-
-        app = omni.kit.app.get_app()
         await app.next_update_async()
 
-        # 5. Setup gripper action graph (gripper is integrated in the robot USD)
-        print("--- Setting up Gripper Action Graph ---")
-        self.setup_gripper_action_graph()
+        # 4. Attach camera mount (uses local assets/wrist_mounts/)
+        print("--- Attaching camera mount ---")
+        self.attach_camera_mount_mesh()
         await app.next_update_async()
 
-        # 8. Create workspace camera at 1280x720
-        print("--- Creating Workspace Camera (1280x720) ---")
-        stage = omni.usd.get_context().get_stage()
-        ws_prim_path = "/World/workspace_camera_sim"
-        ws_position = (0.8572405778988392, -1.3321141046870788, 0.9906567613694909)
-        ws_quat_xyzw = (0.4714, 0.1994, 0.3347, 0.7912)
-        ws_width, ws_height = 1280, 720
-
-        camera_prim = UsdGeom.Camera.Define(stage, ws_prim_path)
-        if not camera_prim:
-            print(f"Error: Failed to create workspace camera at {ws_prim_path}")
-        else:
-            # Configure camera intrinsics (Intel RealSense specs)
-            hfov_deg, vfov_deg = 69.4, 42.5
-            fx = ws_width / (2 * np.tan(np.deg2rad(hfov_deg / 2)))
-            fy = ws_height / (2 * np.tan(np.deg2rad(vfov_deg / 2)))
-            cx, cy = ws_width * 0.5, ws_height * 0.5
-            horizontal_aperture_mm = 36.0
-            focal_length_mm = fx * horizontal_aperture_mm / ws_width
-            vertical_aperture_mm = ws_height * focal_length_mm / fy
-
-            cam = UsdGeom.Camera(camera_prim.GetPrim())
-            cam.CreateHorizontalApertureAttr().Set(horizontal_aperture_mm)
-            cam.CreateVerticalApertureAttr().Set(vertical_aperture_mm)
-            cam.CreateFocalLengthAttr().Set(focal_length_mm)
-            cam.CreateProjectionAttr().Set("perspective")
-            cam.CreateClippingRangeAttr().Set(Gf.Vec2f(0.1, 10000.0))
-
-            cp = camera_prim.GetPrim()
-            cp.CreateAttribute("omni:lensdistortion:model", Sdf.ValueTypeNames.String).Set("opencvPinhole")
-            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:imageSize", Sdf.ValueTypeNames.Int2).Set(Gf.Vec2i(ws_width, ws_height))
-            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:fx", Sdf.ValueTypeNames.Float).Set(fx)
-            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:fy", Sdf.ValueTypeNames.Float).Set(fy)
-            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:cx", Sdf.ValueTypeNames.Float).Set(cx)
-            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:cy", Sdf.ValueTypeNames.Float).Set(cy)
-            for attr_name in ["k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6", "s1", "s2", "s3", "s4"]:
-                cp.CreateAttribute(f"omni:lensdistortion:opencvPinhole:{attr_name}", Sdf.ValueTypeNames.Float).Set(0.0)
-
-            # Set camera pose
-            xform = UsdGeom.Xform(camera_prim.GetPrim())
-            xform.ClearXformOpOrder()
-            xform.AddTranslateOp().Set(Gf.Vec3d(*ws_position))
-            quat = Gf.Quatd(ws_quat_xyzw[3], ws_quat_xyzw[0], ws_quat_xyzw[1], ws_quat_xyzw[2])
-            xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat)
-            print(f"Workspace camera created at {ws_prim_path} with resolution {ws_width}x{ws_height}")
+        # 5. Add objects, randomize, and setup publishers
+        print("--- Adding lego objects ---")
+        self.add_objects()
         await app.next_update_async()
 
-        # 9. Setup workspace camera action graph
-        print("--- Setting up Workspace Camera Action Graph (1280x720) ---")
-        self._create_camera_actiongraph(
-            ws_prim_path, ws_width, ws_height,
-            "workspace_camera_sim", "WorkspaceCameraSim"
-        )
+        print("--- Randomizing object poses ---")
+        self.randomize_object_poses()
         await app.next_update_async()
 
-        # 10. Play the scene
+        print("--- Setting up pose publisher ---")
+        self.create_pose_publisher()
+        await app.next_update_async()
+
+        print("--- Setting up bbox publisher ---")
+        self.setup_bbox_publisher()
+        await app.next_update_async()
+
+        # 6. Play the scene
         print("--- Playing scene ---")
         self._timeline.play()
 
         print("=== Quick Start Complete ===")
 
     async def load_robot(self):
-        # SO-ARM101 USD asset path on Nucleus
-        asset_path = "omniverse://localhost/Projects/so-arm101/SO-ARM101-USD.usd"
+        # Local fixed USD only (base_delta and camera mount reference baked in)
+        _ext_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        _local_usd = os.path.join(_ext_dir, "assets", "SO-ARM101-USD.usd")
+        if not os.path.isfile(_local_usd):
+            raise FileNotFoundError(
+                f"SO-ARM101 USD not found at {_local_usd}. "
+                "Run: python3 scripts/fix_soarm101_usd.py"
+            )
+        asset_path = "file://" + os.path.abspath(_local_usd)
+        _apply_base_delta = False  # Pre-fixed USD, skip runtime correction
         prim_path = "/World/SO_ARM101"
 
-        print(f"Loading SO-ARM101 from {asset_path}...")
-
-        # 1. Ensure World exists
+        # 1. Ensure World exists - create and initialize if needed (won't clear existing stage)
         world = World.instance()
         if world is None:
-            print("World not initialized. Creating simulation context...")
+            print("World not initialized. Creating simulation context for existing stage...")
             world = World()
             await world.initialize_simulation_context_async()
+            # Note: Not adding ground plane here - assumes existing scene has one or user doesn't want it
             print("Simulation context initialized.")
-
-        app = omni.kit.app.get_app()
 
         # 2. Add the USD asset
         add_reference_to_stage(usd_path=asset_path, prim_path=prim_path)
-        print(f"USD reference added at {prim_path}")
-        await app.next_update_async()
 
         # 3. Wait for prim to exist
         stage = omni.usd.get_context().get_stage()
-        for i in range(20):
+        for _ in range(10):
             prim = stage.GetPrimAtPath(prim_path)
             if prim.IsValid():
                 break
-            await app.next_update_async()
+            time.sleep(0.1)
         else:
-            print(f"Error: Failed to load prim at {prim_path}")
-            return
+            raise RuntimeError(f"Failed to load prim at {prim_path}")
 
         # 4. Apply translation and orientation
         xform = UsdGeom.Xform(prim)
         xform.ClearXformOpOrder()
         position = Gf.Vec3d(0.0, 0.0, self._robot_base_z_offset)
-        rpy_deg = np.array([0.0, 0.0, 0.0])
-        rpy_rad = np.deg2rad(rpy_deg)
+        rpy_rad = np.deg2rad(self._robot_base_rpy_deg)
         quat_xyzw = euler_angles_to_quats(rpy_rad)
         quat = Gf.Quatd(quat_xyzw[0], quat_xyzw[1], quat_xyzw[2], quat_xyzw[3])
         xform.AddTranslateOp().Set(position)
         xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat)
-        xform.AddScaleOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Vec3d(1.0, 1.0, 1.0))
-        print(f"Applied transform to {prim_path}")
 
-        # 4b. Apply URDF base-offset correction at runtime.
-        # The original USD was exported with a ~17mm base-link offset vs the URDF.
-        # We correct it here instead of patching the USD file because:
-        #   - The SO-ARM101 USD uses a triple internal-reference chain for collision
-        #     meshes (link/collisions -> /colliders/link -> /meshes/mesh) with
-        #     convexDecomposition. Re-saving the crate (.usdc) file — even with
-        #     Usd.Stage.Save() — re-serializes the binary mesh data, which causes
-        #     the convex decomposition to produce slightly different hulls that
-        #     interpenetrate between adjacent links, resulting in physics jitter.
-        #   - Runtime patching only touches USD attribute values on the live stage
-        #     while the collision mesh binary loaded from the original crate stays
-        #     bit-for-bit identical, so no jitter occurs.
-        #   - Re-importing from URDF is not viable either: Isaac Sim's URDF
-        #     importer blocks indefinitely on this robot's STL mesh conversion.
-        base_delta = Gf.Vec3d(0.016826307, 8.404913e-8, -0.00240026)
-        # Fix shoulder_pan joint anchor in base_link frame
-        sp_prim = stage.GetPrimAtPath(f"{prim_path}/joints/shoulder_pan")
-        if sp_prim.IsValid():
-            old_lp0 = sp_prim.GetAttribute("physics:localPos0").Get()
-            sp_prim.GetAttribute("physics:localPos0").Set(
-                Gf.Vec3f(old_lp0[0] + base_delta[0], old_lp0[1] + base_delta[1], old_lp0[2] + base_delta[2])
-            )
-            print(f"Fixed shoulder_pan localPos0: {old_lp0} -> {sp_prim.GetAttribute('physics:localPos0').Get()}")
+        print(f"Applied translation and rotation to {prim_path}")
 
-        # Shift all non-base link world-frame initial positions by the same delta
-        link_names = ["shoulder_link", "upper_arm_link", "lower_arm_link",
-                       "wrist_link", "gripper_link", "moving_jaw_so101_v1_link",
-                       "camera_mount_link", "camera_link", "camera_optical_frame"]
-        for lname in link_names:
-            lp = stage.GetPrimAtPath(f"{prim_path}/{lname}")
-            if lp.IsValid():
-                old_t = lp.GetAttribute("xformOp:translate").Get()
-                lp.GetAttribute("xformOp:translate").Set(
-                    Gf.Vec3d(old_t[0] + base_delta[0], old_t[1] + base_delta[1], old_t[2] + base_delta[2])
+        # 4b. base_delta is baked into local USD; no runtime correction needed.
+        # Local pre-fixed USD (assets/SO-ARM101-USD.usd) has base_delta already baked in.
+        if _apply_base_delta:
+            # The original USD was exported with a ~17mm base-link offset vs the URDF.
+            base_delta = Gf.Vec3d(0.016826307, 8.404913e-8, -0.00240026)
+            sp_prim = stage.GetPrimAtPath(f"{prim_path}/joints/shoulder_pan")
+            if sp_prim.IsValid():
+                old_lp0 = sp_prim.GetAttribute("physics:localPos0").Get()
+                sp_prim.GetAttribute("physics:localPos0").Set(
+                    Gf.Vec3f(old_lp0[0] + base_delta[0], old_lp0[1] + base_delta[1], old_lp0[2] + base_delta[2])
                 )
-        print(f"Applied URDF base-offset correction (delta={base_delta})")
+                print(f"Fixed shoulder_pan localPos0: {old_lp0} -> {sp_prim.GetAttribute('physics:localPos0').Get()}")
+            link_names = ["shoulder_link", "upper_arm_link", "lower_arm_link",
+                         "wrist_link", "gripper_link", "moving_jaw_so101_v1_link",
+                         "camera_mount_link", "camera_link", "camera_optical_frame"]
+            for lname in link_names:
+                lp = stage.GetPrimAtPath(f"{prim_path}/{lname}")
+                if lp.IsValid():
+                    old_t = lp.GetAttribute("xformOp:translate").Get()
+                    lp.GetAttribute("xformOp:translate").Set(
+                        Gf.Vec3d(old_t[0] + base_delta[0], old_t[1] + base_delta[1], old_t[2] + base_delta[2])
+                    )
+            print(f"Applied URDF base-offset correction (delta={base_delta})")
 
         # 5. Setup Articulation
-        print("Setting up articulation...")
         self._robot_view = ArticulationView(prim_paths_expr=prim_path, name="so_arm101_view")
         World.instance().scene.add(self._robot_view)
         await World.instance().reset_async()
         self._timeline.stop()
-        print("Articulation ready.")
 
         self._articulation = Articulation(prim_path)
 
@@ -1040,200 +1014,6 @@ class DigitalTwin(omni.ext.IExt):
 
         print("ROS 2 Action Graph setup complete.")
 
-    def setup_gripper_action_graph(self):
-        """Setup gripper action graph for ROS2 control.
-
-        Uses the same pattern as the force publisher: a pure OmniGraph action
-        graph for ROS2 communication and an extension-level physics callback
-        for ArticulationView control. No ScriptNodes — the extension owns
-        the ArticulationView lifecycle so stop/play works without refresh.
-        """
-        import omni.physx
-
-        print("Setting up Gripper Action Graph...")
-
-        # SO-ARM101 has an integrated gripper — use the robot prim path
-        stage_check = omni.usd.get_context().get_stage()
-        if not stage_check.GetPrimAtPath("/World/SO_ARM101"):
-            print("Error: Robot not found at /World/SO_ARM101. Load robot first.")
-            return
-
-        # Clean up any previous physics callback
-        self._stop_gripper_physics()
-
-        graph_path = "/Graph/ActionGraph_Gripper"
-        keys = og.Controller.Keys
-
-        # Delete existing graph
-        stage = omni.usd.get_context().get_stage()
-        if stage.GetPrimAtPath(graph_path):
-            stage.RemovePrim(graph_path)
-
-        # Create graph with ROS2 nodes — width publisher + effort publisher
-        (graph, nodes, _, _) = og.Controller.edit(
-            {"graph_path": graph_path, "evaluator_name": "execution"},
-            {
-                keys.CREATE_NODES: [
-                    ("tick", "omni.graph.action.OnPlaybackTick"),
-                    ("context", "isaacsim.ros2.bridge.ROS2Context"),
-                    ("subscriber", "isaacsim.ros2.bridge.ROS2Subscriber"),
-                    ("ros2_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
-                    ("effort_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
-                    ("asymmetry_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
-                ],
-                keys.SET_VALUES: [
-                    ("subscriber.inputs:messageName", "String"),
-                    ("subscriber.inputs:messagePackage", "std_msgs"),
-                    ("subscriber.inputs:topicName", "gripper_command"),
-                    ("ros2_publisher.inputs:messageName", "Float64"),
-                    ("ros2_publisher.inputs:messagePackage", "std_msgs"),
-                    ("ros2_publisher.inputs:topicName", "gripper_width_sim"),
-                    ("effort_publisher.inputs:messageName", "Float64"),
-                    ("effort_publisher.inputs:messagePackage", "std_msgs"),
-                    ("effort_publisher.inputs:topicName", "gripper_effort_sim"),
-                    ("asymmetry_publisher.inputs:messageName", "Float64"),
-                    ("asymmetry_publisher.inputs:messagePackage", "std_msgs"),
-                    ("asymmetry_publisher.inputs:topicName", "gripper_asymmetry_sim"),
-                ],
-                keys.CONNECT: [
-                    ("tick.outputs:tick", "subscriber.inputs:execIn"),
-                    ("tick.outputs:tick", "ros2_publisher.inputs:execIn"),
-                    ("tick.outputs:tick", "effort_publisher.inputs:execIn"),
-                    ("tick.outputs:tick", "asymmetry_publisher.inputs:execIn"),
-                    ("context.outputs:context", "subscriber.inputs:context"),
-                    ("context.outputs:context", "ros2_publisher.inputs:context"),
-                    ("context.outputs:context", "effort_publisher.inputs:context"),
-                    ("context.outputs:context", "asymmetry_publisher.inputs:context"),
-                ],
-            }
-        )
-
-        # Create custom data attributes on publishers
-        publisher_prim = stage.GetPrimAtPath(f"{graph_path}/ros2_publisher")
-        publisher_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
-        effort_prim = stage.GetPrimAtPath(f"{graph_path}/effort_publisher")
-        effort_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
-        asym_prim = stage.GetPrimAtPath(f"{graph_path}/asymmetry_publisher")
-        asym_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
-
-        # Store attribute paths for the physics callback
-        self._gripper_graph_path = graph_path
-        self._gripper_sub_attr_path = f"{graph_path}/subscriber.outputs:data"
-        self._gripper_pub_attr_path = f"{graph_path}/ros2_publisher.inputs:data"
-        self._gripper_effort_pub_attr_path = f"{graph_path}/effort_publisher.inputs:data"
-        self._gripper_asym_pub_attr_path = f"{graph_path}/asymmetry_publisher.inputs:data"
-        self._gripper_articulation = None
-
-        # Subscribe to physics step events — gripper control runs at physics rate
-        self._gripper_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
-            self._on_physics_step_gripper
-        )
-        self._gripper_publish_active = True
-
-        print(f"Gripper Action Graph created at {graph_path}")
-        print("Gripper control runs at physics rate via extension callback (no ScriptNodes)")
-        print("\nTest commands:")
-        print("ros2 topic pub /gripper_command std_msgs/String 'data: \"open\"'")
-        print("ros2 topic pub /gripper_command std_msgs/String 'data: \"close\"'")
-        print("ros2 topic pub /gripper_command std_msgs/String 'data: \"1100\"'")
-        print("ros2 topic pub /gripper_command std_msgs/String 'data: \"550\"'")
-        print("\nMonitor gripper:")
-        print("ros2 topic echo /gripper_width_sim")
-        print("ros2 topic echo /gripper_effort_sim")
-        print("ros2 topic echo /gripper_asymmetry_sim")
-
-    def _on_physics_step_gripper(self, dt):
-        """Physics step callback — read ROS2 command, apply to SO-ARM101 integrated gripper, publish state.
-
-        The SO-ARM101 has a single 'gripper' revolute joint (index 5 in the articulation,
-        after the 5 arm joints). Commands map to jaw angle.
-        """
-        import numpy as np
-        from isaacsim.core.utils.types import ArticulationActions
-
-        try:
-            artic = self._lazy_init_articulation(
-                '_gripper_articulation', '/World/SO_ARM101',
-                'gripper_ctrl', '_gripper_warmup')
-            if artic is None:
-                return
-            self._gripper_articulation = artic
-
-            # Find gripper joint index (the 'gripper' joint is the 6th joint, index 5)
-            if not hasattr(self, '_gripper_joint_idx') or self._gripper_joint_idx is None:
-                joint_names = artic.joint_names
-                if joint_names is not None:
-                    for i, name in enumerate(joint_names):
-                        if 'gripper' in name.lower():
-                            self._gripper_joint_idx = i
-                            break
-                if not hasattr(self, '_gripper_joint_idx') or self._gripper_joint_idx is None:
-                    self._gripper_joint_idx = 5  # default: 6th joint
-
-            gripper_idx = self._gripper_joint_idx
-
-            # --- Read command from ROS2 subscriber ---
-            try:
-                raw = og.Controller.get(og.Controller.attribute(self._gripper_sub_attr_path))
-                input_str = str(raw).strip() if raw else ""
-            except Exception:
-                input_str = ""
-
-            # Parse command: "open", "close", or numeric angle in degrees
-            if input_str and input_str not in ("", "None", "0"):
-                if input_str == "open":
-                    target_angle_deg = 45.0  # fully open
-                elif input_str == "close":
-                    target_angle_deg = 0.0   # fully closed
-                else:
-                    try:
-                        target_angle_deg = float(input_str)
-                    except ValueError:
-                        target_angle_deg = None
-
-                if target_angle_deg is not None:
-                    target_angle_deg = float(np.clip(target_angle_deg, 0.0, 45.0))
-                    target_rad = np.deg2rad(target_angle_deg)
-                    action = ArticulationActions(
-                        joint_positions=np.array([target_rad]),
-                        joint_indices=np.array([gripper_idx])
-                    )
-                    self._gripper_articulation.apply_action(action)
-
-            # --- Read gripper state and publish ---
-            joint_positions = self._gripper_articulation.get_joint_positions()
-            if joint_positions is not None and joint_positions.shape[1] > gripper_idx:
-                gripper_angle_rad = float(joint_positions[0, gripper_idx])
-                gripper_angle_deg = np.rad2deg(gripper_angle_rad)
-
-                # Publish jaw angle in degrees as "width"
-                publish_value = float(np.clip(gripper_angle_deg, 0.0, 45.0))
-
-                og.Controller.set(
-                    og.Controller.attribute(self._gripper_pub_attr_path),
-                    publish_value
-                )
-
-                # Asymmetry: not applicable for single jaw, publish 0
-                og.Controller.set(
-                    og.Controller.attribute(self._gripper_asym_pub_attr_path),
-                    0.0
-                )
-
-                # Effort topic: publish gripper joint effort
-                measured_efforts = self._gripper_articulation.get_measured_joint_efforts()
-                if measured_efforts is not None and measured_efforts.shape[1] > gripper_idx:
-                    total_effort = abs(float(measured_efforts[0, gripper_idx]))
-                else:
-                    total_effort = 0.0
-
-                og.Controller.set(
-                    og.Controller.attribute(self._gripper_effort_pub_attr_path),
-                    total_effort
-                )
-        except Exception as e:
-            print(f"[Gripper callback] {e}")
-
     def _stop_physics_callback(self, sub_attr, artic_attr, active_attr, warmup_attr):
         """Stop a physics callback and clean up its resources."""
         if hasattr(self, sub_attr) and getattr(self, sub_attr) is not None:
@@ -1272,11 +1052,6 @@ class DigitalTwin(omni.ext.IExt):
             return None
 
         return artic
-
-    def _stop_gripper_physics(self):
-        """Stop the gripper physics callback and clean up resources."""
-        self._stop_physics_callback('_gripper_physx_sub', '_gripper_articulation',
-                                    '_gripper_publish_active', '_gripper_warmup')
 
     def setup_force_publish_action_graph(self):
         """Setup force publishing as geometry_msgs/WrenchStamped on /force_torque_sensor_broadcaster/wrench_sim.
@@ -1615,24 +1390,6 @@ class DigitalTwin(omni.ext.IExt):
         print("\nCamera ActionGraph created successfully!")
         print(f"Test with: ros2 topic echo /{ROS2_TOPIC}")
 
-    def import_camera_mount(self):
-        """Upload camera mount USD from local project to Nucleus."""
-        ext_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        local_usd = os.path.join(ext_dir, "data", "meshes", "camera_wrist_mount.usd")
-
-        if not os.path.exists(local_usd):
-            print(f"[ERROR] Camera mount USD not found at {local_usd}")
-            return
-
-        nucleus_path = "omniverse://localhost/Projects/so-arm101/meshes/camera_wrist_mount.usd"
-        ret = omni.client.copy(local_usd, nucleus_path)
-        if ret == omni.client.Result.OK:
-            print(f"Imported camera mount USD to {nucleus_path}")
-        elif ret == omni.client.Result.ERROR_ALREADY_EXISTS:
-            print(f"Camera mount USD already exists at {nucleus_path}")
-        else:
-            print(f"[ERROR] Failed to upload: {ret}")
-
     def attach_camera_mount_mesh(self):
         """Attach camera wrist mount mesh and create camera prim on camera_link."""
         stage = omni.usd.get_context().get_stage()
@@ -1651,9 +1408,7 @@ class DigitalTwin(omni.ext.IExt):
             print(f"Camera mount mesh already attached at {mesh_prim_path}")
         else:
             prim = stage.DefinePrim(mesh_prim_path, "Xform")
-            prim.GetReferences().AddReference(
-                "omniverse://localhost/Projects/so-arm101/meshes/camera_wrist_mount.usd"
-            )
+            prim.GetReferences().AddReference(_get_camera_mount_usd_path())
             # URDF visual origin: xyz="-0.763660 -0.207080 -0.025950" rpy="0 0 0"
             # STL is in mm, scale 0.001 for meters
             xformable = UsdGeom.Xformable(prim)
@@ -2956,6 +2711,14 @@ class DigitalTwin(omni.ext.IExt):
             stage.RemovePrim(pose_graph_path)
             print(f"Deleted {pose_graph_path}")
 
+        # Delete the bbox publisher graph if present
+        self._stop_bbox_publisher()
+        bbox_graph_path = "/Graph/ActionGraph_objects_bbox"
+        bbox_graph_prim = stage.GetPrimAtPath(bbox_graph_path)
+        if bbox_graph_prim and bbox_graph_prim.IsValid():
+            stage.RemovePrim(bbox_graph_path)
+            print(f"Deleted {bbox_graph_path}")
+
     def add_objects(self):
         """Import lego blocks (2 per color) using unique pre-colored USDs.
 
@@ -2974,7 +2737,7 @@ class DigitalTwin(omni.ext.IExt):
                 print(f"Warning: No USD files configured for color '{color_name}'")
                 continue
             for usd_file in usds:
-                usd_path = LEGO_FOLDER + usd_file
+                usd_path = _get_lego_folder() + usd_file
                 # Block name = USD body name (e.g. lego_red_2x2.usd -> red_2x2)
                 block_name = usd_file.replace('.usd', '').replace('lego_', '')
                 blocks.append((block_name, color_name, usd_path))
@@ -3007,7 +2770,7 @@ class DigitalTwin(omni.ext.IExt):
         physx_mat_api.CreateFrictionCombineModeAttr().Set(self._object_friction_combine_mode)
         physx_mat_api.CreateRestitutionCombineModeAttr().Set(self._object_restitution_combine_mode)
 
-        print(f"Adding {len(blocks)} lego blocks from {LEGO_FOLDER}")
+        print(f"Adding {len(blocks)} lego blocks from {_get_lego_folder()}")
 
         # First pass: create reference prims
         body_paths = []
@@ -3193,6 +2956,138 @@ class DigitalTwin(omni.ext.IExt):
             parent_prim="/World",
             topic_name="objects_poses_sim"
         )
+
+    # ==================== BBox Publisher ====================
+
+    def setup_bbox_publisher(self):
+        """Publish object bounding box dimensions to ROS2 as JSON on 'objects_bbox_sim'.
+
+        Creates an OmniGraph with a ROS2Publisher (std_msgs/String) and a physics
+        callback that periodically publishes a JSON dict mapping object names to
+        their world-aligned bounding box sizes {name: {sx, sy, sz}}.
+        Dimensions are in meters.
+        """
+        import omni.physx
+        import omni.graph.core as og
+
+        print("Setting up BBox Publisher...")
+
+        stage = omni.usd.get_context().get_stage()
+        objects_root = stage.GetPrimAtPath("/World/Objects")
+        if not objects_root or not objects_root.IsValid():
+            print("Error: /World/Objects does not exist. Add objects first.")
+            return
+
+        # Clean up previous
+        self._stop_bbox_publisher()
+
+        graph_path = "/Graph/ActionGraph_objects_bbox"
+        existing = stage.GetPrimAtPath(graph_path)
+        if existing and existing.IsValid():
+            print(f"BBox publisher already exists at {graph_path}")
+            return
+
+        keys = og.Controller.Keys
+        (graph, nodes, _, _) = og.Controller.edit(
+            {"graph_path": graph_path, "evaluator_name": "execution"},
+            {
+                keys.CREATE_NODES: [
+                    ("tick", "omni.graph.action.OnPlaybackTick"),
+                    ("context", "isaacsim.ros2.bridge.ROS2Context"),
+                    ("publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
+                ],
+                keys.CONNECT: [
+                    ("tick.outputs:tick", "publisher.inputs:execIn"),
+                    ("context.outputs:context", "publisher.inputs:context"),
+                ],
+                keys.SET_VALUES: [
+                    ("publisher.inputs:messageName", "String"),
+                    ("publisher.inputs:messagePackage", "std_msgs"),
+                    ("publisher.inputs:topicName", "objects_bbox_sim"),
+                ],
+            },
+        )
+
+        self._bbox_graph_path = graph_path
+        self._bbox_pub_attr_path = f"{graph_path}/publisher.inputs:data"
+        self._bbox_publish_counter = 0
+
+        # Publish at physics rate but only update the JSON every ~1s
+        self._bbox_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
+            self._on_physics_step_bbox
+        )
+
+        print(f"BBox publisher created at {graph_path}, topic: objects_bbox_sim")
+
+    def _on_physics_step_bbox(self, dt):
+        """Physics callback — publish object bbox dimensions as JSON.
+
+        Uses mesh extent × scale to get rotation-invariant physical dimensions
+        (not the world-aligned AABB which inflates with yaw rotation).
+        """
+        import json
+        import omni.graph.core as og
+
+        # Only update every ~60 steps (~1s at 60Hz) — dimensions are static
+        self._bbox_publish_counter += 1
+        if self._bbox_publish_counter % 60 != 1:
+            return
+
+        try:
+            stage = omni.usd.get_context().get_stage()
+            objects_root = stage.GetPrimAtPath("/World/Objects")
+            if not objects_root or not objects_root.IsValid():
+                return
+
+            bbox_dict = {}
+
+            for child in objects_root.GetChildren():
+                name = child.GetName()
+                if name == "PhysicsMaterial":
+                    continue
+                prim_path = f"/World/Objects/{name}/{name}"
+                prim = stage.GetPrimAtPath(prim_path)
+                if not prim or not prim.IsValid():
+                    continue
+
+                # Read intrinsic mesh extent (pre-transform, in mesh units)
+                extent_attr = prim.GetAttribute("extent")
+                if not extent_attr or not extent_attr.HasValue():
+                    continue
+                extent = extent_attr.Get()
+                ex = float(extent[1][0] - extent[0][0])
+                ey = float(extent[1][1] - extent[0][1])
+                ez = float(extent[1][2] - extent[0][2])
+
+                # Apply prim scale (mesh mm -> meters)
+                xf = UsdGeom.Xformable(prim)
+                sx = sy = sz = 1.0
+                for op in xf.GetOrderedXformOps():
+                    if op.GetOpName() == "xformOp:scale":
+                        s = op.Get()
+                        sx, sy, sz = float(s[0]), float(s[1]), float(s[2])
+                        break
+
+                bbox_dict[name] = {
+                    "sx": round(ex * sx, 5),
+                    "sy": round(ey * sy, 5),
+                    "sz": round(ez * sz, 5),
+                }
+
+            json_str = json.dumps(bbox_dict)
+            og.Controller.set(
+                og.Controller.attribute(self._bbox_pub_attr_path),
+                json_str
+            )
+        except Exception as e:
+            print(f"[BBox callback] {e}")
+
+    def _stop_bbox_publisher(self):
+        """Stop the bbox physics callback."""
+        if self._bbox_physx_sub is not None:
+            self._bbox_physx_sub = None
+        self._bbox_graph_path = None
+        self._bbox_pub_attr_path = None
 
     # ==================== MCP Socket Server Methods ====================
 
@@ -3808,8 +3703,8 @@ class DigitalTwin(omni.ext.IExt):
                 }
             return {
                 "status": "success",
-                "message": f"Lego blocks added from {LEGO_FOLDER}",
-                "folder_path": LEGO_FOLDER
+                "message": f"Lego blocks added from {_get_lego_folder()}",
+                "folder_path": _get_lego_folder()
             }
         except Exception as e:
             carb.log_error(f"Error in add_objects: {e}")
@@ -3873,109 +3768,20 @@ class DigitalTwin(omni.ext.IExt):
             return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
 
     def _cmd_load_scene(self) -> Dict[str, Any]:
-        """MCP handler: sync version of load_scene (no async needed)."""
+        """MCP handler: delegates to async load_scene (same as UI button)."""
         try:
-            stage = omni.usd.get_context().get_stage()
-
-            # Physics scene
-            physics_prim = stage.GetPrimAtPath("/physicsScene")
-            if not physics_prim or not physics_prim.IsValid():
-                from pxr import UsdPhysics as _UP
-                _UP.Scene.Define(stage, "/physicsScene")
-                carb.log_info("Created /physicsScene")
-
-            # Ground plane
-            ground_prim = stage.GetPrimAtPath("/World/defaultGroundPlane")
-            if not ground_prim or not ground_prim.IsValid():
-                from isaacsim.core.api.objects import GroundPlane
-                GroundPlane(prim_path="/World/defaultGroundPlane", z_position=0.0, size=5000)
-
-            # Physics settings
-            physics_prim = stage.GetPrimAtPath("/physicsScene")
-            if physics_prim and physics_prim.IsValid():
-                physx_api = PhysxSchema.PhysxSceneAPI.Apply(physics_prim)
-                physx_api.CreateEnableGPUDynamicsAttr().Set(False)
-                physx_api.CreateTimeStepsPerSecondAttr().Set(self._time_steps_per_second)
-                physx_api.CreateEnableCCDAttr().Set(False)
-
-            settings = carb.settings.get_settings()
-            settings.set("/persistent/simulation/minFrameRate", self._min_frame_rate)
-
+            from omni.kit.async_engine import run_coroutine
+            run_coroutine(self.load_scene())
             return {"status": "success", "message": "Scene loaded (physics, ground plane, frame rate)"}
         except Exception as e:
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
 
     def _cmd_load_robot(self) -> Dict[str, Any]:
-        """MCP handler: sync version of load_robot (USD + joint drives, no articulation view)."""
+        """MCP handler: delegates to async load_robot (same as UI button)."""
         try:
-            asset_path = "omniverse://localhost/Projects/so-arm101/SO-ARM101-USD.usd"
-            prim_path = "/World/SO_ARM101"
-
-            stage = omni.usd.get_context().get_stage()
-
-            # Check if already loaded
-            existing = stage.GetPrimAtPath(prim_path)
-            if existing and existing.IsValid():
-                return {"status": "success", "message": "SO-ARM101 already loaded at /World/SO_ARM101"}
-
-            # Add USD reference
-            add_reference_to_stage(usd_path=asset_path, prim_path=prim_path)
-
-            # Verify prim exists
-            prim = stage.GetPrimAtPath(prim_path)
-            if not prim or not prim.IsValid():
-                return {"status": "error", "message": f"Failed to load USD at {prim_path}"}
-
-            # Apply transform
-            xform = UsdGeom.Xform(prim)
-            xform.ClearXformOpOrder()
-            xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, self._robot_base_z_offset))
-            xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
-
-            # Apply URDF base-offset correction at runtime.
-            # The USD's shoulder_pan localPos0 is ~17mm off from the URDF origin.
-            # We fix it here rather than patching the USD file because re-saving
-            # the crate binary causes convexDecomposition collision jitter. See the
-            # longer note in the async load_robot() method above.
-            base_delta = Gf.Vec3d(0.016826307, 8.404913e-8, -0.00240026)
-            sp = stage.GetPrimAtPath(f"{prim_path}/joints/shoulder_pan")
-            if sp and sp.IsValid():
-                old_lp0 = sp.GetAttribute("physics:localPos0").Get()
-                sp.GetAttribute("physics:localPos0").Set(
-                    Gf.Vec3f(old_lp0[0] + base_delta[0], old_lp0[1] + base_delta[1], old_lp0[2] + base_delta[2])
-                )
-            for lname in ["shoulder_link", "upper_arm_link", "lower_arm_link",
-                          "wrist_link", "gripper_link", "moving_jaw_so101_v1_link",
-                          "camera_mount_link", "camera_link", "camera_optical_frame"]:
-                lp = stage.GetPrimAtPath(f"{prim_path}/{lname}")
-                if lp and lp.IsValid():
-                    old_t = lp.GetAttribute("xformOp:translate").Get()
-                    lp.GetAttribute("xformOp:translate").Set(
-                        Gf.Vec3d(old_t[0] + base_delta[0], old_t[1] + base_delta[1], old_t[2] + base_delta[2])
-                    )
-
-            # Configure arm joint drives
-            arm_joints = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
-            for jname in arm_joints:
-                jp = stage.GetPrimAtPath(f"{prim_path}/joints/{jname}")
-                if jp and jp.IsValid():
-                    drive = UsdPhysics.DriveAPI.Apply(jp, "angular")
-                    drive.GetMaxForceAttr().Set(self._robot_max_force)
-                    drive.GetStiffnessAttr().Set(self._robot_stiffness)
-                    drive.GetDampingAttr().Set(self._robot_damping)
-
-            # Configure gripper joint drive
-            gp = stage.GetPrimAtPath(f"{prim_path}/joints/gripper_joint")
-            if gp and gp.IsValid():
-                drive = UsdPhysics.DriveAPI.Apply(gp, "angular")
-                drive.GetMaxForceAttr().Set(self._gripper_max_force)
-                drive.GetStiffnessAttr().Set(self._gripper_stiffness)
-                drive.GetDampingAttr().Set(self._gripper_damping)
-
-            # Gripper physics material
-            self._configure_gripper_material(prim_path, stage)
-
+            from omni.kit.async_engine import run_coroutine
+            run_coroutine(self.load_robot())
             return {
                 "status": "success",
                 "message": "SO-ARM101 loaded with 5 arm joints + integrated gripper at /World/SO_ARM101"
@@ -3985,63 +3791,11 @@ class DigitalTwin(omni.ext.IExt):
             return {"status": "error", "message": str(e)}
 
     def _cmd_setup_action_graph(self) -> Dict[str, Any]:
-        """MCP handler: sync setup of ROS2 action graph."""
+        """MCP handler: delegates to async setup_action_graph (same as UI button)."""
         try:
-            stage = omni.usd.get_context().get_stage()
-            if not stage.GetPrimAtPath("/World/SO_ARM101"):
-                return {"status": "error", "message": "SO-ARM101 not loaded. Run load_robot first."}
-
-            from isaacsim.core.utils.extensions import enable_extension
-            enable_extension("isaacsim.ros2.bridge")
-            enable_extension("isaacsim.core.nodes")
-            enable_extension("omni.graph.action")
-
-            graph_path = "/Graph/ActionGraph_SO_ARM101"
-            if stage.GetPrimAtPath(graph_path):
-                return {"status": "success", "message": "Action graph already exists"}
-
-            (graph, nodes, _, _) = og.Controller.edit(
-                {"graph_path": graph_path, "evaluator_name": "execution"},
-                {
-                    og.Controller.Keys.CREATE_NODES: [
-                        ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
-                        ("ros2_context", "isaacsim.ros2.bridge.ROS2Context"),
-                        ("isaac_read_simulation_time", "isaacsim.core.nodes.IsaacReadSimulationTime"),
-                        ("ros2_subscribe_joint_state", "isaacsim.ros2.bridge.ROS2SubscribeJointState"),
-                        ("ros2_publish_clock", "isaacsim.ros2.bridge.ROS2PublishClock"),
-                        ("articulation_controller", "isaacsim.core.nodes.IsaacArticulationController"),
-                    ],
-                    og.Controller.Keys.SET_VALUES: [
-                        ("ros2_context.inputs:useDomainIDEnvVar", True),
-                        ("ros2_context.inputs:domain_id", 0),
-                        ("ros2_subscribe_joint_state.inputs:topicName", "/joint_states"),
-                        ("ros2_publish_clock.inputs:topicName", "/clock"),
-                        ("articulation_controller.inputs:robotPath", "/World/SO_ARM101"),
-                        ("articulation_controller.inputs:jointIndices", [0, 1, 2, 3, 4, 5]),
-                    ],
-                    og.Controller.Keys.CONNECT: [
-                        ("on_playback_tick.outputs:tick", "ros2_subscribe_joint_state.inputs:execIn"),
-                        ("on_playback_tick.outputs:tick", "ros2_publish_clock.inputs:execIn"),
-                        ("on_playback_tick.outputs:tick", "articulation_controller.inputs:execIn"),
-                        ("ros2_context.outputs:context", "ros2_subscribe_joint_state.inputs:context"),
-                        ("ros2_context.outputs:context", "ros2_publish_clock.inputs:context"),
-                        ("isaac_read_simulation_time.outputs:simulationTime", "ros2_publish_clock.inputs:timeStamp"),
-                        ("ros2_subscribe_joint_state.outputs:positionCommand", "articulation_controller.inputs:positionCommand"),
-                        ("ros2_subscribe_joint_state.outputs:velocityCommand", "articulation_controller.inputs:velocityCommand"),
-                        ("ros2_subscribe_joint_state.outputs:effortCommand", "articulation_controller.inputs:effortCommand"),
-                    ],
-                }
-            )
+            from omni.kit.async_engine import run_coroutine
+            run_coroutine(self.setup_action_graph())
             return {"status": "success", "message": "ROS2 action graph created for SO-ARM101 joint control"}
-        except Exception as e:
-            traceback.print_exc()
-            return {"status": "error", "message": str(e)}
-
-    def _cmd_setup_gripper_action_graph(self) -> Dict[str, Any]:
-        """MCP handler for setting up the gripper action graph."""
-        try:
-            self.setup_gripper_action_graph()
-            return {"status": "success", "message": "Gripper action graph created for SO-ARM101"}
         except Exception as e:
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
@@ -4055,6 +3809,24 @@ class DigitalTwin(omni.ext.IExt):
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
 
+    def _cmd_setup_bbox_publisher(self) -> Dict[str, Any]:
+        """MCP handler for setting up the bbox publisher."""
+        try:
+            self.setup_bbox_publisher()
+            return {"status": "success", "message": "BBox publisher created, topic: objects_bbox_sim"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_setup_wrist_camera_action_graph(self) -> Dict[str, Any]:
+        """MCP handler for setting up the wrist camera action graph."""
+        try:
+            self.setup_wrist_camera_action_graph()
+            return {"status": "success", "message": "Wrist camera action graph created, topics: wrist_camera_rgb_sim, wrist_camera_info"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
     def on_shutdown(self):
         """Clean shutdown"""
         self._teardown_log_redirect()
@@ -4064,8 +3836,8 @@ class DigitalTwin(omni.ext.IExt):
         self._stop_mcp_server()
 
         # Stop physics-rate callbacks
-        self._stop_gripper_physics()
         self._stop_force_publish()
+        self._stop_bbox_publisher()
 
         # Isaac Sim handles ROS2 shutdown automatically
         print("ROS2 bridge shutdown handled by Isaac Sim")

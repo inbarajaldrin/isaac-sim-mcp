@@ -1,6 +1,6 @@
 [package]
 # Semantic Versioning is used: https://semver.org/
-version = "1.0.0"
+version = "1.1.0"
 
 # Lists people or organizations that are considered the "authors" of the package.
 authors = ["NVIDIA"]
@@ -25,7 +25,7 @@ keywords = ["kit", "example"]
 # More info on writing changelog: https://keepachangelog.com/en/1.0.0/
 changelog="docs/CHANGELOG.md"
 
-# Preview image and icon. Folder named "data" automatically goes in git lfs (see .gitattributes file).
+# Preview image and icon.
 # Preview image is shown in "Overview" of Extensions window. Screenshot of an extension might be a good preview image.
 preview_image = "data/preview.png"
 

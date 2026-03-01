@@ -24,8 +24,8 @@ This extension exposes the following tools via MCP:
 | `load_scene` | Initialize scene with physics, ground plane, and frame rate settings |
 | `load_robot` | Import SO-ARM101 robot USD with joint drives and gripper physics |
 | `setup_action_graph` | Create ROS2 action graph for joint state subscription and clock |
-| `setup_gripper_action_graph` | Create ROS2 gripper control action graph |
 | `setup_force_publisher` | Create ROS2 force/torque publisher for end-effector wrench |
+| `setup_wrist_camera_action_graph` | Create ROS2 action graph for wrist camera (OV9732) RGB and camera_info |
 | `add_objects` | Add lego block objects to the scene |
 | `delete_objects` | Delete all objects and associated action graphs |
 | `sort_objects` | Sort blocks by placing same-color blocks in clusters |
