@@ -4,6 +4,7 @@ import asyncio
 import numpy as np
 import os
 import sys
+import io
 import threading
 import glob
 import omni.client
@@ -61,11 +62,19 @@ ASSEMBLIES = {
 
 MCP_TOOL_REGISTRY = {
     "execute_python_code": {
-        "description": "Execute Python code directly in Isaac Sim's environment with access to Omniverse APIs.",
+        "description": "Execute Python code directly in Isaac Sim's environment with access to Omniverse APIs. Set persistent=True with a session_id to keep variables alive between calls — useful for multi-step workflows where later calls need results from earlier ones.",
         "parameters": {
             "code": {
                 "type": "string",
                 "description": "Python code to execute in Isaac Sim"
+            },
+            "session_id": {
+                "type": "string",
+                "description": "Session identifier for persistent execution. Use the same ID across calls to share state. Defaults to 'default'."
+            },
+            "persistent": {
+                "type": "boolean",
+                "description": "If true, variables persist across calls with the same session_id."
             }
         }
     },
@@ -232,6 +241,9 @@ class DigitalTwin(omni.ext.IExt):
         self._mcp_server_thread = None
         self._mcp_server_running = False
         self._mcp_client_threads = []
+
+        # Persistent Python execution sessions (in-memory, keyed by session_id)
+        self._python_sessions = {}
 
         # Add Objects UI state
         self._selected_assembly = "fmb1"
@@ -3317,36 +3329,79 @@ class DigitalTwin(omni.ext.IExt):
 
     # ==================== Common MCP Handlers ====================
 
-    def _cmd_execute_python_code(self, code: str) -> Dict[str, Any]:
+    def _cmd_execute_python_code(self, code: str, session_id: str = "default", persistent: bool = False) -> Dict[str, Any]:
         """Execute Python code in Isaac Sim's environment.
+
+        When persistent=True, variables from the execution are saved in-memory
+        and restored on the next call with the same session_id. This avoids
+        redundant recomputation across sequential calls. Since everything is
+        in-process, functions, prim references, numpy arrays all survive.
 
         Args:
             code: Python code to execute
+            session_id: Session identifier for persistent execution
+            persistent: If True, variables persist across calls
 
         Returns:
             Dictionary with execution result.
         """
-        try:
-            # Create a local namespace with commonly used modules
-            local_ns = {}
-            local_ns["omni"] = omni
-            local_ns["carb"] = carb
-            local_ns["Usd"] = Usd
-            local_ns["UsdGeom"] = UsdGeom
-            local_ns["Sdf"] = Sdf
-            local_ns["Gf"] = Gf
+        # Built-in namespace symbols — not user-defined, don't save
+        _builtin_keys = {"omni", "carb", "Usd", "UsdGeom", "Sdf", "Gf", "__builtins__"}
 
-            # Execute the code
-            exec(code, local_ns)
+        try:
+            # Create exec namespace with commonly used modules
+            exec_globals = {
+                "omni": omni, "carb": carb,
+                "Usd": Usd, "UsdGeom": UsdGeom, "Sdf": Sdf, "Gf": Gf,
+                "__builtins__": __builtins__,
+            }
+
+            # Restore persistent session variables if requested
+            if persistent and session_id in self._python_sessions:
+                exec_globals.update(self._python_sessions[session_id])
+
+            # Capture stdout — same pattern as Fusion
+            old_stdout = sys.stdout
+            sys.stdout = capture = io.StringIO()
+            try:
+                exec(code, exec_globals)
+                output = capture.getvalue()
+            except Exception as e:
+                # Preserve partial stdout + append error (Fusion pattern)
+                output = capture.getvalue()
+                output += f"ERROR: {e}\n{traceback.format_exc()}"
+                carb.log_error(f"Error executing code: {e}")
+                return {
+                    "status": "error",
+                    "message": str(e),
+                    "output": output,
+                    "traceback": traceback.format_exc(),
+                }
+            finally:
+                sys.stdout = old_stdout
+
+            # Save session state if persistent
+            if persistent:
+                saved = {}
+                for k, v in exec_globals.items():
+                    if k.startswith("_") or k in _builtin_keys:
+                        continue
+                    saved[k] = v
+                self._python_sessions[session_id] = saved
 
             # Check for a result variable
-            result = local_ns.get("result", None)
+            result = exec_globals.get("result", None)
 
-            return {
+            response = {
                 "status": "success",
                 "message": "Code executed successfully",
-                "result": result
+                "output": output,
+                "result": result,
             }
+            if persistent:
+                response["session_id"] = session_id
+                response["session_vars"] = list(self._python_sessions.get(session_id, {}).keys())
+            return response
         except Exception as e:
             carb.log_error(f"Error executing code: {e}")
             traceback.print_exc()
