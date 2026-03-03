@@ -30,19 +30,40 @@ if BASE_OUTPUT_DIR:
 else:
     RESOURCES_DIR = "resources"
 
-# Assembly definitions: each entry pairs an objects folder with its assembly JSON
+# Local asset paths (no Nucleus dependency)
+_ext_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_assets_dir = os.path.join(_ext_dir, "assets")
+
+
+def _local_asset(relpath):
+    """Resolve a local asset path under exts/ur5e-dt/assets/ as a file:// URI."""
+    full = os.path.join(_assets_dir, relpath)
+    if not os.path.exists(full):
+        raise FileNotFoundError(f"Asset not found: {full}")
+    return "file://" + os.path.abspath(full)
+
+
+def _local_asset_dir(relpath):
+    """Resolve a local asset directory path (no file:// prefix, for os.listdir)."""
+    full = os.path.join(_assets_dir, relpath)
+    if not os.path.isdir(full):
+        raise FileNotFoundError(f"Asset directory not found: {full}")
+    return full
+
+
+# Assembly definitions: each entry pairs a local objects folder with its assembly JSON
 ASSEMBLIES = {
     "fmb1": {
-        "folder": "omniverse://localhost/Library/DT demo/fmb1/",
-        "assembly_file": os.path.expanduser("~/Projects/aruco-grasp-annotator/data/fmb_assembly1.json"),
+        "folder": "objects/fmb1",
+        "assembly_file": os.path.join(_assets_dir, "fmb_assembly1.json"),
     },
     "fmb2": {
-        "folder": "omniverse://localhost/Library/DT demo/fmb2/",
-        "assembly_file": os.path.expanduser("~/Projects/aruco-grasp-annotator/data/fmb_assembly2.json"),
+        "folder": "objects/fmb2",
+        "assembly_file": os.path.join(_assets_dir, "fmb_assembly2.json"),
     },
     "fmb3": {
-        "folder": "omniverse://localhost/Library/DT demo/fmb3/",
-        "assembly_file": os.path.expanduser("~/Projects/aruco-grasp-annotator/data/fmb_assembly3.json"),
+        "folder": "objects/fmb3",
+        "assembly_file": os.path.join(_assets_dir, "fmb_assembly3.json"),
     },
 }
 
@@ -636,7 +657,7 @@ class DigitalTwin(omni.ext.IExt):
 
     @property
     def _objects_folder_path(self):
-        return ASSEMBLIES[self._selected_assembly]["folder"]
+        return _local_asset_dir(ASSEMBLIES[self._selected_assembly]["folder"])
 
     @property
     def _assembly_file_path(self):
@@ -799,7 +820,7 @@ class DigitalTwin(omni.ext.IExt):
         print("=== Quick Start Complete ===")
 
     async def load_ur5e(self):
-        asset_path = "omniverse://localhost/Library/ur5e.usd"
+        asset_path = _local_asset("robot/ur5e.usd")
         prim_path = "/World/UR5e"
 
         # 1. Ensure World exists - create and initialize if needed (won't clear existing stage)
@@ -1289,7 +1310,7 @@ class DigitalTwin(omni.ext.IExt):
 
     def import_rg2_gripper(self):
         from isaacsim.core.utils.stage import add_reference_to_stage
-        rg2_usd_path = "omniverse://localhost/Library/RG2.usd"
+        rg2_usd_path = _local_asset("gripper/RG2.usd")
         add_reference_to_stage(rg2_usd_path, "/World/RG2_Gripper")
         print("RG2 Gripper imported at /World/RG2_Gripper")
 
@@ -1325,9 +1346,10 @@ class DigitalTwin(omni.ext.IExt):
 
         # Bind physics material to finger body prims
         gripper_mat_sdf_path = Sdf.Path(gripper_mat_path)
+        gripper_root = "/World/RG2_Gripper"
         finger_prims = [
-            f"{base_link}/left_inner_finger",
-            f"{base_link}/right_inner_finger",
+            f"{gripper_root}/left_inner_finger",
+            f"{gripper_root}/right_inner_finger",
         ]
         for finger_path in finger_prims:
             finger_prim = stage.GetPrimAtPath(finger_path)
@@ -1434,7 +1456,7 @@ class DigitalTwin(omni.ext.IExt):
 
     def import_realsense_camera(self):
         """Import Intel RealSense D455 camera"""
-        usd_path = "omniverse://localhost/NVIDIA/Assets/Isaac/5.0/Isaac/Sensors/Intel/RealSense/rsd455.usd"
+        usd_path = _local_asset("sensors/rsd455.usd")
         filename = os.path.splitext(os.path.basename(usd_path))[0]
         prim_path = f"/World/{filename}"
         add_reference_to_stage(usd_path=usd_path, prim_path=prim_path)
@@ -2381,7 +2403,7 @@ class DigitalTwin(omni.ext.IExt):
         import omni.kit.commands
         from pxr import Sdf, UsdShade, UsdGeom, Gf
 
-        ARUCO_DIR = os.path.expanduser("~/Projects/aruco-grasp-annotator/data/aruco")
+        ARUCO_DIR = os.path.join(_assets_dir, "objects", "aruco")
         ARUCO_PNG_DIR = os.path.join(ARUCO_DIR, "pngs")
 
         stage = omni.usd.get_context().get_stage()
@@ -2786,61 +2808,27 @@ class DigitalTwin(omni.ext.IExt):
             print(f"Deleted {pose_graph_path}")
 
     def add_objects(self):
-        """Import all objects from the selected assembly's folder into the scene"""
+        """Import all objects from the selected assembly's local folder into the scene"""
         folder_path = self._objects_folder_path
         if not folder_path:
             print("Error: No folder path for selected assembly")
             return
-        
-        # Check if path is a single USD file or a folder
-        if folder_path.endswith(('.usd', '.usda', '.usdc')):
-            # Single file: import it directly
-            print(f"Importing single file: {folder_path}")
-            stage = omni.usd.get_context().get_stage()
-            target_path = "/World/Objects"
-            if not stage.GetPrimAtPath(target_path):
-                UsdGeom.Xform.Define(stage, target_path)
-            base_name = os.path.splitext(os.path.basename(folder_path))[0]
-            prim_path = f"{target_path}/{base_name}"
 
-            # Skip if prim already exists
-            existing_prim = stage.GetPrimAtPath(prim_path)
-            if existing_prim and existing_prim.IsValid():
-                print(f"Skipping {base_name} - already exists at {prim_path}")
-                return
+        print(f"Adding objects from local folder: {folder_path}")
 
-            prim = stage.DefinePrim(prim_path)
-            prim.GetReferences().AddReference(folder_path)
-            xform = UsdGeom.Xform(prim)
-            xform.ClearXformOpOrder()
-            xform.AddTranslateOp().Set(Gf.Vec3d(0.0, self._y_offset, self._z_offset))
-            print(f"Added {folder_path} to {prim_path}")
-            return
-
-        # Ensure folder path ends with /
-        if not folder_path.endswith("/"):
-            folder_path += "/"
-
-        print(f"Adding objects from folder: {folder_path}")
-
-        # Get the current stage and selection
+        # Get the current stage
         stage = omni.usd.get_context().get_stage()
-        selection = omni.usd.get_context().get_selection()
-        selected_paths = selection.get_selected_prim_paths()
 
         # Always use /World/Objects as target path
         target_path = "/World/Objects"
         if not stage.GetPrimAtPath(target_path):
             UsdGeom.Xform.Define(stage, target_path)
 
-        # List all files in the folder
-        result, entries = omni.client.list(folder_path)
+        # List USD files from local directory
+        usd_files = sorted([f for f in os.listdir(folder_path)
+                            if f.endswith(('.usd', '.usda', '.usdc'))])
 
-        if result == omni.client.Result.OK:
-            # Filter for USD files
-            usd_files = [entry.relative_path for entry in entries 
-                         if entry.relative_path.endswith(('.usd', '.usda', '.usdc'))]
-            
+        if usd_files:
             print(f"Found {len(usd_files)} USD files")
 
             # Load object type map from assembly file
@@ -2860,7 +2848,7 @@ class DigitalTwin(omni.ext.IExt):
 
             # Import each USD file with positioning
             for i, usd_file in enumerate(usd_files):
-                usd_file_path = folder_path + usd_file
+                usd_file_path = "file://" + os.path.join(folder_path, usd_file)
 
                 # Create a child prim under the selected path
                 base_name = os.path.splitext(usd_file)[0]
@@ -2987,7 +2975,7 @@ class DigitalTwin(omni.ext.IExt):
                     else:
                         print(f"Bound physics material to {bound_count} collision prim(s) under {child_name} [{category}]")
         else:
-            print(f"Failed to list folder: {folder_path}")
+            print(f"No USD files found in {folder_path}")
 
     def create_pose_publisher(self):
         """Create action graph for publishing object poses to ROS2"""
