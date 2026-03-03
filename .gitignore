@@ -63,7 +63,7 @@ ehthumbs.db
 Thumbs.db
 
 # Isaac Sim specific
-*.usd
+# *.usd
 *.usda
 *.usdc
 *.usdz
