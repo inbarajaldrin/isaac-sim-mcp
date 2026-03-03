@@ -758,13 +758,13 @@ class DigitalTwin(omni.ext.IExt):
         self.setup_gripper_action_graph()
         await app.next_update_async()
 
-        # 8. Create workspace camera at 1280x720
-        print("--- Creating Workspace Camera (1280x720) ---")
+        # 8. Create workspace camera at 640x480
+        print("--- Creating Workspace Camera (640x480) ---")
         stage = omni.usd.get_context().get_stage()
         ws_prim_path = "/World/workspace_camera_sim"
         ws_position = (0.8572405778988392, -1.3321141046870788, 0.9906567613694909)
         ws_quat_xyzw = (0.4714, 0.1994, 0.3347, 0.7912)
-        ws_width, ws_height = 1280, 720
+        ws_width, ws_height = 640, 480
 
         camera_prim = UsdGeom.Camera.Define(stage, ws_prim_path)
         if not camera_prim:
@@ -806,7 +806,7 @@ class DigitalTwin(omni.ext.IExt):
         await app.next_update_async()
 
         # 9. Setup workspace camera action graph
-        print("--- Setting up Workspace Camera Action Graph (1280x720) ---")
+        print("--- Setting up Workspace Camera Action Graph (640x480) ---")
         self._create_camera_actiongraph(
             ws_prim_path, ws_width, ws_height,
             "workspace_camera_sim", "WorkspaceCameraSim"
