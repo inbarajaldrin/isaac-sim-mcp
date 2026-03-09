@@ -131,20 +131,20 @@ MCP_TOOL_REGISTRY = {
         }
     },
     "save_scene_state": {
-        "description": "Saves current object poses to a JSON file so it can be retrieved later. If json_file_path is not provided, a timestamped filename is used automatically.",
+        "description": "Save current scene object poses to a JSON file.\n\nReturns:\n    result: \"success\" or \"failure\"\n    file_path: path to the saved JSON file\n    error: failure reason (only on failure)",
         "parameters": {
             "json_file_path": {
                 "type": "string",
-                "description": "Optional filename for the saved JSON (e.g. 'assembled.json'). Saved inside the scene_states directory. If omitted, a timestamped name is generated."
+                "description": "Path to save file. If omitted, a timestamped filename is used."
             }
         }
     },
     "restore_scene_state": {
-        "description": "Restores previously saved object poses from a JSON file to the scene. If json_file_path is not provided, the most recent save is restored.",
+        "description": "Restore scene object poses from a previously saved JSON file.\n\nReturns:\n    result: \"success\" or \"failure\"\n    error: failure reason (only on failure)",
         "parameters": {
             "json_file_path": {
                 "type": "string",
-                "description": "Optional filename of the JSON to restore (e.g. 'assembled.json'). Looked up inside the scene_states directory. If omitted, the latest timestamped save is used."
+                "description": "Path to restore from. If omitted, the most recent save is used."
             }
         }
     },
