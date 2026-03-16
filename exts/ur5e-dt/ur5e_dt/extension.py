@@ -170,6 +170,14 @@ MCP_TOOL_REGISTRY = {
         "description": "Subscribe to /objects_poses_real ROS2 topic and update sim object poses to match real-world detected poses.",
         "parameters": {}
     },
+    "new_stage": {
+        "description": "Clear the entire USD stage and free accumulated memory. Use this when Isaac Sim's process memory has grown large after many scene loads/resets. This tears down all USD prims, Hydra render state, and PhysX allocations. The scene will be empty afterwards — use quick_start to rebuild it.",
+        "parameters": {}
+    },
+    "quick_start": {
+        "description": "One-click scene setup: loads the table scene, imports UR5e robot with action graphs, attaches RG2 gripper with action graphs, creates workspace camera, and starts simulation. Use after new_stage to rebuild the scene from scratch.",
+        "parameters": {}
+    },
 }
 
 # Handler method names for each tool (maps to self._cmd_<name> methods)
@@ -186,6 +194,8 @@ MCP_HANDLERS = {
     "delete_objects": "_cmd_delete_objects",
     "setup_pose_publisher": "_cmd_setup_pose_publisher",
     "sync_real_poses": "_cmd_sync_real_poses",
+    "new_stage": "_cmd_new_stage",
+    "quick_start": "_cmd_quick_start",
 }
 
 from isaacsim.core.utils.stage import add_reference_to_stage
@@ -684,6 +694,18 @@ class DigitalTwin(omni.ext.IExt):
             from isaacsim.core.api.objects import GroundPlane
             GroundPlane(prim_path="/World/defaultGroundPlane", z_position=-0.08, size=5000)
             print("Added ground plane")
+
+        # Add default dome light if no lights exist
+        from pxr import UsdLux
+        has_light = False
+        for prim in stage.Traverse():
+            if prim.IsA(UsdLux.DomeLight) or prim.IsA(UsdLux.DistantLight):
+                has_light = True
+                break
+        if not has_light:
+            dome = UsdLux.DomeLight.Define(stage, "/World/defaultDomeLight")
+            dome.CreateIntensityAttr().Set(1000.0)
+            print("Added default dome light")
 
         # Set minimum frame rate to 60
         settings = carb.settings.get_settings()
@@ -3234,7 +3256,7 @@ class DigitalTwin(omni.ext.IExt):
                         # Execute command in Isaac Sim's main thread
                         async def execute_wrapper():
                             try:
-                                response = self._execute_mcp_command(command)
+                                response = await self._execute_mcp_command(command)
                                 response_json = json.dumps(response)
                                 print(f"[MCP] response_json: {response_json}")
                                 try:
@@ -3271,7 +3293,7 @@ class DigitalTwin(omni.ext.IExt):
                 pass
             print("[MCP] Client handler stopped")
 
-    def _execute_mcp_command(self, command) -> Dict[str, Any]:
+    async def _execute_mcp_command(self, command) -> Dict[str, Any]:
         """Execute a command and return the response."""
         try:
             cmd_type = command.get("type")
@@ -3297,7 +3319,11 @@ class DigitalTwin(omni.ext.IExt):
             if handler:
                 try:
                     print(f"[MCP] Executing handler for {cmd_type}")
-                    result = handler(**params)
+                    import inspect
+                    if inspect.iscoroutinefunction(handler):
+                        result = await handler(**params)
+                    else:
+                        result = handler(**params)
                     print(f"[MCP] Handler execution complete: {result}")
                     if result and result.get("status") == "success":
                         return {"status": "success", "result": result}
@@ -3833,6 +3859,87 @@ class DigitalTwin(omni.ext.IExt):
             return {
                 "status": "error",
                 "message": f"Failed to delete objects: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    async def _cmd_new_stage(self) -> Dict[str, Any]:
+        """MCP handler: clear the entire USD stage to free accumulated memory."""
+        try:
+            import os, gc
+
+            # Measure memory before
+            with open(f"/proc/{os.getpid()}/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS"):
+                        rss_before = int(line.split()[1]) // 1024  # MB
+
+            # Stop physics callbacks to avoid crashes during teardown
+            self._stop_physics_callback(
+                "_gripper_physx_sub", "_gripper_articulation",
+                "_gripper_publish_active", "_gripper_warmup_remaining"
+            )
+            self._stop_physics_callback(
+                "_force_physx_sub", "_force_articulation",
+                "_force_publish_active", "_force_warmup_remaining"
+            )
+
+            # Stop simulation
+            timeline = omni.timeline.get_timeline_interface()
+            if timeline.is_playing():
+                timeline.stop()
+
+            # Clear Python-side caches
+            self._python_sessions.clear()
+            self._hidden_objects.clear()
+
+            # Open a fresh stage
+            omni.usd.get_context().new_stage()
+
+            # Let Kit process the stage teardown
+            app = omni.kit.app.get_app()
+            for _ in range(5):
+                await app.next_update_async()
+
+            # Force Python GC
+            gc.collect()
+
+            # Measure memory after
+            with open(f"/proc/{os.getpid()}/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS"):
+                        rss_after = int(line.split()[1]) // 1024  # MB
+
+            freed_mb = rss_before - rss_after
+            return {
+                "status": "success",
+                "message": f"Stage cleared. Freed {freed_mb} MB (RSS: {rss_before} MB -> {rss_after} MB).",
+                "rss_before_mb": rss_before,
+                "rss_after_mb": rss_after,
+                "freed_mb": freed_mb,
+            }
+        except Exception as e:
+            carb.log_error(f"Error in new_stage: {e}")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"Failed to create new stage: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    async def _cmd_quick_start(self) -> Dict[str, Any]:
+        """MCP handler: full scene setup (table, UR5e, gripper, camera, play)."""
+        try:
+            await self.quick_start()
+            return {
+                "status": "success",
+                "message": "Quick start complete: scene loaded with UR5e, RG2 gripper, workspace camera, and simulation running."
+            }
+        except Exception as e:
+            carb.log_error(f"Error in quick_start: {e}")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"Quick start failed: {str(e)}",
                 "traceback": traceback.format_exc()
             }
 
