@@ -4,6 +4,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-03-17
+
+### Added
+- USB camera module: `usb_cam_elp.usd` mesh in `assets/cameras/`, converted from URDF STL
+- `attach_usb_camera()` method: attaches USB camera mesh + camera prim to camera_mount_link using URDF `usb_camera_joint` transform
+- "Attach USB Camera" UI button in Wrist Camera section
+- `_get_usb_camera_usd_path()` helper for camera mesh asset loading
+
+### Fixed
+- **USD camera chain now matches URDF exactly**: deleted broken `camera_link_joint` (wrong combined transform from URDF converter), added missing `usb_camera_link` physics body (mass=0.001kg) + `usb_camera_joint` + correct `camera_link_joint` with exact URDF values
+- **Camera orientation**: `Rx(+90°)*Rz(-90°)` quaternion `(0.5, 0.5, 0.5, -0.5)` correctly maps Isaac Sim -Z rendering axis to physical lens direction with gripper at bottom of frame
+- **YOLOE detection accuracy**: 3.2mm avg error (previously 93mm+), matching Gazebo baseline (1.6mm) with identical `opencv_to_camera` calibration — no sim-specific tuning needed
+
+### Changed
+- `attach_camera_mount_mesh()` is now mount-only (no longer creates camera prim)
+- Camera prim lives at `camera_mount_link/usb_camera/wrist_camera` (was `camera_link/wrist_camera`)
+- Camera prim uses three-level structure: unscaled joint Xform → scaled mesh child + camera sibling (prevents scale mangling)
+- `setup_wrist_camera_action_graph()` updated to new camera prim path, auto-calls `attach_usb_camera()`
+- Quick Start calls both `attach_camera_mount_mesh()` + `attach_usb_camera()`
+
 ## [1.1.0] - 2026-02-28
 
 ### Added

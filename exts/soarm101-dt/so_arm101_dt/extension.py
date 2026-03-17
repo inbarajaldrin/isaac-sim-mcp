@@ -72,6 +72,17 @@ def _get_camera_mount_usd_path():
         )
     return "file://" + os.path.abspath(_local)
 
+def _get_usb_camera_usd_path():
+    """Local assets/cameras/ only."""
+    _ext_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _local = os.path.join(_ext_dir, "assets", "cameras", "usb_cam_elp.usd")
+    if not os.path.isfile(_local):
+        raise FileNotFoundError(
+            f"USB camera USD not found at {_local}. "
+            "Place usb_cam_elp.usd in exts/soarm101-dt/assets/cameras/"
+        )
+    return "file://" + os.path.abspath(_local)
+
 
 # Each color maps to a list of unique USD filenames — one per block instance.
 # Each USD has a uniquely-named body prim matching its filename (e.g. red_2x2).
@@ -419,6 +430,7 @@ class DigitalTwin(omni.ext.IExt):
                 with ui.VStack(spacing=5, height=0):
                     with ui.HStack(spacing=5):
                         ui.Button("Attach Camera Mount", width=170, height=35, clicked_fn=self.attach_camera_mount_mesh)
+                        ui.Button("Attach USB Camera", width=160, height=35, clicked_fn=self.attach_usb_camera)
                         ui.Button("Setup Camera Action Graph", width=200, height=35, clicked_fn=self.setup_wrist_camera_action_graph)
 
             # NEW SECTION: Additional Camera
@@ -775,9 +787,12 @@ class DigitalTwin(omni.ext.IExt):
         await self.setup_action_graph()
         await app.next_update_async()
 
-        # 4. Attach camera mount (uses local assets/wrist_mounts/)
+        # 4. Attach camera mount + USB camera (uses local assets/wrist_mounts/)
         print("--- Attaching camera mount ---")
         self.attach_camera_mount_mesh()
+        await app.next_update_async()
+        print("--- Attaching USB camera ---")
+        self.attach_usb_camera()
         await app.next_update_async()
 
         # 5. Add objects, randomize, and setup publishers
@@ -1391,18 +1406,16 @@ class DigitalTwin(omni.ext.IExt):
         print(f"Test with: ros2 topic echo /{ROS2_TOPIC}")
 
     def attach_camera_mount_mesh(self):
-        """Attach camera wrist mount mesh and create camera prim on camera_link."""
+        """Attach camera wrist mount mesh to camera_mount_link (visual only)."""
         stage = omni.usd.get_context().get_stage()
 
         robot_path = "/World/SO_ARM101"
         camera_mount_link = f"{robot_path}/camera_mount_link"
-        camera_link = f"{robot_path}/camera_link"
 
         if not stage.GetPrimAtPath(camera_mount_link).IsValid():
             print(f"[ERROR] {camera_mount_link} not found — load the robot first")
             return
 
-        # Attach visual mesh to camera_mount_link
         mesh_prim_path = f"{camera_mount_link}/camera_wrist_mount"
         if stage.GetPrimAtPath(mesh_prim_path).IsValid():
             print(f"Camera mount mesh already attached at {mesh_prim_path}")
@@ -1417,12 +1430,57 @@ class DigitalTwin(omni.ext.IExt):
             xformable.AddScaleOp().Set(Gf.Vec3d(0.001, 0.001, 0.001))
             print(f"Attached camera mount mesh at {mesh_prim_path}")
 
-        # Create OV9732 camera prim at camera_link
-        if not stage.GetPrimAtPath(camera_link).IsValid():
-            print(f"[WARN] {camera_link} not found — camera prim not created")
+    def attach_usb_camera(self):
+        """Attach USB camera (ELP OV9732) mesh to camera_mount_link and create camera prim.
+
+        URDF chain: camera_mount -> usb_camera (usb_camera_joint) -> camera_link (camera_link_joint)
+        The USB camera mesh is placed using usb_camera_joint transform.
+        The camera prim is placed at the lens center using camera_link_joint transform,
+        with Ry(90°) applied to convert ROS +X-forward to Isaac Sim -Z-forward.
+
+        Structure under camera_mount_link:
+          usb_camera/            <- Xform with usb_camera_joint pos + rot (NO scale)
+            usb_cam_mesh/        <- Xform with mesh reference + visual origin + scale 0.001
+            wrist_camera         <- Camera at lens center with Isaac Sim orientation
+        """
+        stage = omni.usd.get_context().get_stage()
+
+        robot_path = "/World/SO_ARM101"
+        camera_mount_link = f"{robot_path}/camera_mount_link"
+
+        if not stage.GetPrimAtPath(camera_mount_link).IsValid():
+            print(f"[ERROR] {camera_mount_link} not found — attach camera mount first")
             return
 
-        camera_prim_path = f"{camera_link}/wrist_camera"
+        # 1. Parent Xform with usb_camera_joint transform (no scale)
+        usb_cam_path = f"{camera_mount_link}/usb_camera"
+        if not stage.GetPrimAtPath(usb_cam_path).IsValid():
+            prim = stage.DefinePrim(usb_cam_path, "Xform")
+            xformable = UsdGeom.Xformable(prim)
+            # usb_camera_joint: xyz=(-0.010340, 0.004827, -0.019687)
+            #                   rpy=(1.570625, 0.000515, 2.705234)
+            xformable.AddTranslateOp().Set(Gf.Vec3d(-0.010340, 0.004827, -0.019687))
+            xformable.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(
+                Gf.Quatd(0.15324586, 0.15286412, 0.69032376, 0.69036321))
+            print(f"Created usb_camera Xform at {usb_cam_path}")
+
+        # 2. Mesh child with visual origin + scale 0.001
+        mesh_path = f"{usb_cam_path}/usb_cam_mesh"
+        if not stage.GetPrimAtPath(mesh_path).IsValid():
+            mesh_prim = stage.DefinePrim(mesh_path, "Xform")
+            mesh_prim.GetReferences().AddReference(_get_usb_camera_usd_path())
+            xformable = UsdGeom.Xformable(mesh_prim)
+            # URDF visual origin: xyz=(0.0, -0.007299, 0.0) — in meters, but parent
+            # is unscaled so translate is in meters. Scale converts STL mm to meters.
+            xformable.AddTranslateOp().Set(Gf.Vec3d(0.0, -0.007299, 0.0))
+            xformable.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
+            xformable.AddScaleOp().Set(Gf.Vec3d(0.001, 0.001, 0.001))
+            print(f"Attached USB camera mesh at {mesh_path}")
+        else:
+            print(f"USB camera mesh already at {mesh_path}")
+
+        # 3. Camera prim as sibling of mesh (not inside scaled mesh)
+        camera_prim_path = f"{usb_cam_path}/wrist_camera"
         if stage.GetPrimAtPath(camera_prim_path).IsValid():
             print(f"Wrist camera already exists at {camera_prim_path}")
             return
@@ -1448,26 +1506,33 @@ class DigitalTwin(omni.ext.IExt):
         camera.CreateFocalLengthAttr().Set(focal_length)
         camera.CreateClippingRangeAttr().Set(Gf.Vec2f(0.01, 100.0))
 
+        # Lens center: camera_link_joint xyz=(0, 0.0139, 0) in usb_camera frame
+        # Orientation: Rx(+90°) * Rz(-90°) — points camera -Z along lens direction
+        # and aligns image up-vector so gripper appears at bottom of frame.
+        # Combined quaternion (wxyz) = (0.5, 0.5, 0.5, -0.5)
         xformable = UsdGeom.Xformable(camera_prim)
-        xformable.AddTranslateOp().Set(Gf.Vec3d(0, 0, 0))
-        xformable.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
+        xformable.AddTranslateOp().Set(Gf.Vec3d(0, 0.0139, 0))
+        xformable.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(
+            Gf.Quatd(0.5, 0.5, 0.5, -0.5))
 
         print(f"Created OV9732 wrist camera at {camera_prim_path}")
+        print(f"  Lens at usb_camera (0, 13.9mm, 0), looking along usb_camera -Y")
         print(f"  HFOV={HFOV_DEG}, {IMAGE_WIDTH}x{IMAGE_HEIGHT}, fl={focal_length:.2f}mm")
 
     def setup_wrist_camera_action_graph(self):
         """Create ActionGraph for wrist camera (OV9732) ROS2 publishing.
-        Also attaches camera mount mesh and creates camera prim if not present."""
-        CAMERA_PRIM = "/World/SO_ARM101/camera_link/wrist_camera"
+        Also attaches USB camera and creates camera prim if not present."""
+        CAMERA_PRIM = "/World/SO_ARM101/camera_mount_link/usb_camera/wrist_camera"
         IMAGE_WIDTH = 1280
         IMAGE_HEIGHT = 720
         ROS2_TOPIC = "wrist_camera_rgb_sim"
 
         stage = omni.usd.get_context().get_stage()
 
-        # Auto-attach mount mesh and create camera prim if needed
+        # Auto-attach USB camera module if camera prim doesn't exist
         if not stage.GetPrimAtPath(CAMERA_PRIM).IsValid():
             self.attach_camera_mount_mesh()
+            self.attach_usb_camera()
         if not stage.GetPrimAtPath(CAMERA_PRIM).IsValid():
             print(f"[ERROR] Wrist camera not found at {CAMERA_PRIM} after attach attempt.")
             return
