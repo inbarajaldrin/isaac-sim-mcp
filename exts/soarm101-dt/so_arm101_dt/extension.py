@@ -41,13 +41,23 @@ OBJECTS_CONFIG = {
     "skip_patterns": ["ARM101"],  # skip robot USDs when loading objects
 }
 
-# Lego block color definitions (RGB float values)
-BLOCK_COLORS = {
-    "red":    (0.647, 0.059, 0.059),
-    "green":  (0.137, 0.475, 0.110),
-    "blue":   (0.059, 0.129, 0.647),
+# Shared color palette — cups and legos use the same colors so they visually match.
+# Values are in LINEAR RGB (what USD materials expect).
+OBJECT_COLORS = {
+    "red":    (0.629, 0.108, 0.000),   # reddish orange
+    "green":  (0.255, 0.676, 0.003),   # lime green
+    "blue":   (0.000, 0.138, 0.487),
     # "yellow": (0.863, 0.765, 0.110),
 }
+BLOCK_COLORS = OBJECT_COLORS
+
+def _linear_to_srgb(c):
+    """Convert a single linear RGB channel to sRGB."""
+    return c * 12.92 if c <= 0.0031308 else 1.055 * (c ** (1.0 / 2.4)) - 0.055
+
+def _srgb_to_linear(c):
+    """Convert a single sRGB channel to linear RGB."""
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
 
 # Lego assets folder and per-color USD files (local only)
 def _get_lego_folder():
@@ -91,6 +101,161 @@ LEGO_USDS = {
     "green":  ["lego_green_2x2.usd", "lego_green_2x3.usd", "lego_green_2x4.usd"],
     "blue":   ["lego_blue_2x2.usd", "lego_blue_2x3.usd", "lego_blue_2x4.usd"],
 }
+
+# =============================================================================
+# ROBOT COORDINATE FRAME
+# =============================================================================
+# All positions below are defined in robot-relative coordinates:
+#   forward  = along the robot's facing direction (toward workspace)
+#   lateral  = perpendicular to forward (positive = left of robot)
+#   up       = +Z always
+#
+# ROBOT_FORWARD_AXIS maps robot-relative → world coordinates:
+#   "X" → forward=+X, lateral=+Y   (SO-ARM101 default)
+#   "Y" → forward=+Y, lateral=-X
+# =============================================================================
+ROBOT_FORWARD_AXIS = "X"
+
+def _to_world(forward, lateral):
+    """Convert (forward, lateral) robot-relative coords to (world_x, world_y)."""
+    if ROBOT_FORWARD_AXIS == "X":
+        return forward, lateral
+    else:  # "Y"
+        return -lateral, forward
+
+# Block workspace (robot-relative)
+BLOCK_SPAWN_FORWARD = 0.3     # forward distance for initial row layout
+BLOCK_RANDOM_FORWARD = (0.10, 0.25)   # randomization range along forward
+BLOCK_RANDOM_LATERAL = (-0.10, 0.10)  # randomization range along lateral
+
+# Cup container assets (one per block color)
+CUP_USDS = {
+    "red":   "cup_red.usd",
+    "green": "cup_green.usd",
+    "blue":  "cup_blue.usd",
+}
+
+# Cup placement config (robot-relative)
+#
+# mode: "arc"  — cups spread along a circular arc (each cup at its own angle)
+#        "line" — cups in a straight row; center cup at the angle, others extend along lateral axis
+#
+# radius:      distance from robot base to center cup
+# angle_deg:   direction of center cup (0°=straight ahead, negative=right, positive=left)
+# gap:         spacing between cup edges in "line" mode (meters). Computed from bbox at runtime.
+# color_order: left-to-right order when facing the cups
+#
+# In "arc" mode, angles_deg overrides angle_deg — one angle per cup.
+CUP_LAYOUT_DEFAULTS = {
+    "mode": "line",
+    "radius": 0.28,
+    "angle_deg": 0,
+    "angles_deg": [-35, 0, 35],
+    "gap": 0.01,
+    "face_origin": True,       # rotate cups to face the robot base (perpendicular to radial)
+    "color_order": ["red", "green", "blue"],
+}
+CUP_LAYOUT = dict(CUP_LAYOUT_DEFAULTS)
+
+# ArUco markers on cup surfaces — one marker per cup, placed on the side facing the robot.
+# dictionary: ArUco dictionary name
+# marker_size_m: physical marker size in meters (printed area)
+# height_fraction: how far up the cup side (0=bottom, 1=top rim)
+CUP_ARUCO_CONFIG = {
+    "dictionary": "DICT_4X4_50",
+    "marker_size_m": 0.025,       # 25mm marker on ~78mm diameter cup
+    "marker_png_pixels": 200,     # resolution of generated PNG
+    "height_fraction": 0.45,      # marker center at 45% of cup height
+    "ids": {                      # ArUco ID per cup color
+        "red": 0,
+        "green": 1,
+        "blue": 2,
+    },
+}
+
+def _cup_positions_arc():
+    """Compute cup (forward, lateral) from arc config.
+
+    angle_deg: center direction of the arc
+    gap: angular spacing between cups (converted from meters to degrees via arc length)
+    """
+    colors = CUP_LAYOUT["color_order"]
+    radius = CUP_LAYOUT["radius"]
+    center_deg = CUP_LAYOUT["angle_deg"]
+    gap_m = CUP_LAYOUT["gap"]
+
+    # Convert gap (meters) to angular spacing (degrees) along the arc
+    # arc_length = radius * angle_rad  →  angle_deg = gap / radius * 180/pi
+    # Add cup width (~0.078m) to gap for edge-to-edge spacing
+    cup_width = 0.078
+    spacing_deg = math.degrees((cup_width + gap_m) / radius)
+
+    # Center the spread around angle_deg
+    n = len(colors)
+    total_spread = spacing_deg * (n - 1)
+    start_deg = center_deg - total_spread / 2.0
+
+    positions = {}
+    for i, color in enumerate(colors):
+        angle_rad = math.radians(start_deg + spacing_deg * i)
+        fwd = radius * math.cos(angle_rad)
+        lat = radius * math.sin(angle_rad)
+        positions[color] = (fwd, lat)
+    return positions
+
+def _cup_positions_line(cup_widths):
+    """Compute cup (forward, lateral) in a straight row.
+
+    Center cup sits at (radius * cos(angle), radius * sin(angle)).
+    Other cups extend **perpendicular** to the direction from the robot
+    base to the center cup, spaced by bbox widths + gap.
+
+    At angle=0 (front):  row extends along lateral axis
+    At angle=-90 (right): row extends along forward axis
+    At angle=45 (front-left): row extends diagonally
+
+    Args:
+        cup_widths: dict {color: width_meters} — extent of each cup bbox.
+    """
+    colors = CUP_LAYOUT["color_order"]
+    gap = CUP_LAYOUT["gap"]
+    angle_rad = math.radians(CUP_LAYOUT["angle_deg"])
+
+    # Center cup position in robot-relative (forward, lateral)
+    center_fwd = CUP_LAYOUT["radius"] * math.cos(angle_rad)
+    center_lat = CUP_LAYOUT["radius"] * math.sin(angle_rad)
+
+    # Perpendicular direction to the radial line (rotated 90° CCW)
+    # If radial direction is (cos(a), sin(a)), perpendicular is (-sin(a), cos(a))
+    perp_fwd = -math.sin(angle_rad)
+    perp_lat = math.cos(angle_rad)
+
+    # Compute offsets along the perpendicular
+    widths = [cup_widths.get(c, 0.08) for c in colors]
+    total = sum(widths) + gap * (len(widths) - 1)
+    cursor = -total / 2.0
+
+    positions = {}
+    for i, color in enumerate(colors):
+        w = widths[i]
+        offset = cursor + w / 2.0
+        positions[color] = (
+            center_fwd + offset * perp_fwd,
+            center_lat + offset * perp_lat,
+        )
+        cursor += w + gap
+    return positions
+
+def _get_cups_folder():
+    """Local assets/cups/ only."""
+    _ext_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _local = os.path.join(_ext_dir, "assets", "cups")
+    if not os.path.isdir(_local):
+        raise FileNotFoundError(
+            f"Cup assets folder not found at {_local}. "
+            "Place cup USD files in exts/soarm101-dt/assets/cups/"
+        )
+    return "file://" + os.path.abspath(_local) + "/"
 
 
 # =============================================================================
@@ -210,6 +375,27 @@ MCP_TOOL_REGISTRY = {
         "description": "Create ROS2 action graph for wrist camera (OV9732) RGB and camera_info publishing.",
         "parameters": {}
     },
+    "add_cups": {
+        "description": "Add sorting cups (red, green, blue) in an arc in front of the robot base. Cups serve as containers for color-sorted lego blocks.",
+        "parameters": {}
+    },
+    "delete_cups": {
+        "description": "Delete all sorting cups from /World/Containers.",
+        "parameters": {}
+    },
+    "sort_into_cups": {
+        "description": "Sort lego blocks by moving each block to its matching color cup position. Optionally filter by color.",
+        "parameters": {
+            "color": {
+                "type": "string",
+                "description": "Optional color to sort ('red', 'green', 'blue'). If omitted, sorts all colors."
+            }
+        }
+    },
+    "quick_start": {
+        "description": "One-click setup: loads scene, robot, action graph, force publisher, wrist camera, objects, cups, publishers, and starts simulation.",
+        "parameters": {}
+    },
 }
 
 # Handler method names for each tool (maps to self._cmd_<name> methods)
@@ -232,6 +418,10 @@ MCP_HANDLERS = {
     "setup_force_publisher": "_cmd_setup_force_publisher",
     "setup_bbox_publisher": "_cmd_setup_bbox_publisher",
     "setup_wrist_camera_action_graph": "_cmd_setup_wrist_camera_action_graph",
+    "add_cups": "_cmd_add_cups",
+    "delete_cups": "_cmd_delete_cups",
+    "sort_into_cups": "_cmd_sort_into_cups",
+    "quick_start": "_cmd_quick_start",
 }
 
 from isaacsim.core.utils.stage import add_reference_to_stage
@@ -307,7 +497,7 @@ class DigitalTwin(omni.ext.IExt):
         # Add Objects UI state
         self._objects_config = OBJECTS_CONFIG
         self._object_gap = 0.02  # Gap (meters) between object bounding boxes
-        self._y_offset = 0.20  # Y offset for all objects (positive Y = in front of robot)
+        self._y_offset = 0.20  # Y offset for all objects
         self._ground_plane_z = 0.0  # Ground plane Z position
         self._robot_base_z_offset = 0.0
         self._robot_base_rpy_deg = np.array([0.0, 0.0, 0.0])  # Robot base orientation (roll, pitch, yaw)
@@ -473,6 +663,18 @@ class DigitalTwin(omni.ext.IExt):
 
             with ui.CollapsableFrame(title="Objects", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
+                    with ui.CollapsableFrame(title="Colors", name="subFrame", collapsed=False, height=0):
+                        with ui.VStack(spacing=3, height=0):
+                            self._color_pickers = {}
+                            for cname in OBJECT_COLORS:
+                                # Convert linear → sRGB for display (ColorWidget shows raw values)
+                                sr, sg, sb = [_linear_to_srgb(c) for c in OBJECT_COLORS[cname]]
+                                with ui.HStack(spacing=5):
+                                    ui.Label(cname.capitalize(), width=50, alignment=ui.Alignment.LEFT_CENTER)
+                                    cw = ui.ColorWidget(sr, sg, sb, 1.0, width=80, height=20)
+                                    self._color_pickers[cname] = cw
+                            ui.Button("Apply", width=60, height=25, clicked_fn=self._apply_color_pickers)
+
                     with ui.CollapsableFrame(title="Objects", name="subFrame", collapsed=False, height=0):
                         with ui.VStack(spacing=5, height=0):
                             with ui.HStack(spacing=5):
@@ -486,6 +688,61 @@ class DigitalTwin(omni.ext.IExt):
                                 ui.Button("Setup Pose Publisher", width=180, height=35, clicked_fn=self.create_pose_publisher)
                             with ui.HStack(spacing=5):
                                 ui.Button("Setup BBox Publisher", width=180, height=35, clicked_fn=self.setup_bbox_publisher)
+                    with ui.CollapsableFrame(title="Containers", name="subFrame", collapsed=False, height=0):
+                        with ui.VStack(spacing=5, height=0):
+                            # Layout mode dropdown + reset
+                            with ui.HStack(spacing=5):
+                                ui.Label("Mode:", width=60, alignment=ui.Alignment.LEFT)
+                                self._cup_mode_combo = ui.ComboBox(
+                                    0 if CUP_LAYOUT["mode"] == "line" else 1,
+                                    "Line", "Arc", width=100)
+                                self._cup_mode_combo.model.add_item_changed_fn(self._on_cup_layout_changed)
+                                ui.Button("Reset", width=45, height=25, clicked_fn=self._reset_cup_defaults,
+                                          tooltip="Reset to defaults")
+
+                            # Angle slider
+                            with ui.HStack(spacing=5):
+                                ui.Label("Angle:", width=60, alignment=ui.Alignment.LEFT)
+                                self._cup_angle_slider = ui.FloatSlider(
+                                    min=-180, max=180, step=5, width=180)
+                                self._cup_angle_slider.model.set_value(float(CUP_LAYOUT["angle_deg"]))
+                                self._cup_angle_slider.model.add_value_changed_fn(self._on_cup_layout_changed)
+                                self._cup_angle_label = ui.Label(f"{CUP_LAYOUT['angle_deg']}°", width=40)
+
+                            # Radius slider
+                            with ui.HStack(spacing=5):
+                                ui.Label("Radius:", width=60, alignment=ui.Alignment.LEFT)
+                                self._cup_radius_slider = ui.FloatSlider(
+                                    min=0.15, max=0.40, step=0.01, width=180)
+                                self._cup_radius_slider.model.set_value(CUP_LAYOUT["radius"])
+                                self._cup_radius_slider.model.add_value_changed_fn(self._on_cup_layout_changed)
+                                self._cup_radius_label = ui.Label(f"{CUP_LAYOUT['radius']:.2f}m", width=45)
+
+                            # Gap slider (line mode)
+                            with ui.HStack(spacing=5):
+                                ui.Label("Gap:", width=60, alignment=ui.Alignment.LEFT)
+                                self._cup_gap_slider = ui.FloatSlider(
+                                    min=0.0, max=0.05, step=0.005, width=180)
+                                self._cup_gap_slider.model.set_value(CUP_LAYOUT["gap"])
+                                self._cup_gap_slider.model.add_value_changed_fn(self._on_cup_layout_changed)
+                                self._cup_gap_label = ui.Label(f"{CUP_LAYOUT['gap']*100:.0f}cm", width=45)
+
+                            # Face origin checkbox
+                            with ui.HStack(spacing=5):
+                                self._cup_face_origin_cb = ui.CheckBox(width=20)
+                                self._cup_face_origin_cb.model.set_value(CUP_LAYOUT.get("face_origin", True))
+                                self._cup_face_origin_cb.model.add_value_changed_fn(self._on_cup_layout_changed)
+                                ui.Label("Face origin", alignment=ui.Alignment.LEFT)
+
+                            # Buttons
+                            with ui.HStack(spacing=5):
+                                ui.Button("Add Cups", width=80, height=35, clicked_fn=self.add_cups)
+                                ui.Button("Update", width=70, height=35, clicked_fn=self._add_cups_from_ui)
+                                ui.Button("Delete", width=70, height=35, clicked_fn=self.delete_cups)
+                            with ui.HStack(spacing=5):
+                                ui.Button("Sort Into Cups", width=150, height=35, clicked_fn=self.sort_into_cups)
+                                ui.Button("Unsort", width=100, height=35, clicked_fn=self.disassemble_objects)
+
                     with ui.CollapsableFrame(title="Scene State", name="subFrame", collapsed=True, height=0):
                         with ui.VStack(spacing=5, height=0):
                             with ui.HStack(spacing=5):
@@ -732,6 +989,18 @@ class DigitalTwin(omni.ext.IExt):
             GroundPlane(prim_path="/World/defaultGroundPlane", z_position=0.0, size=5000)
             print("Added ground plane")
 
+        # Add default dome light if no lights exist
+        from pxr import UsdLux
+        has_light = False
+        for prim in stage.Traverse():
+            if prim.IsA(UsdLux.DomeLight) or prim.IsA(UsdLux.DistantLight):
+                has_light = True
+                break
+        if not has_light:
+            dome = UsdLux.DomeLight.Define(stage, "/World/defaultDomeLight")
+            dome.CreateIntensityAttr().Set(1000.0)
+            print("Added default dome light at 1000 lux")
+
         # Set minimum frame rate to 60
         settings = carb.settings.get_settings()
         settings.set("/persistent/simulation/minFrameRate", self._min_frame_rate)
@@ -795,7 +1064,17 @@ class DigitalTwin(omni.ext.IExt):
         self.attach_usb_camera()
         await app.next_update_async()
 
-        # 5. Add objects, randomize, and setup publishers
+        # 5. Setup wrist camera action graph
+        print("--- Setting up wrist camera action graph ---")
+        self.setup_wrist_camera_action_graph()
+        await app.next_update_async()
+
+        # 6. Setup force publisher
+        print("--- Setting up force publisher ---")
+        self.setup_force_publish_action_graph()
+        await app.next_update_async()
+
+        # 7. Add objects and setup publishers
         print("--- Adding lego objects ---")
         self.add_objects()
         await app.next_update_async()
@@ -1489,8 +1768,8 @@ class DigitalTwin(omni.ext.IExt):
         camera_prim = stage.GetPrimAtPath(camera_prim_path)
         camera = UsdGeom.Camera(camera_prim)
 
-        # OV9732: 1MP, 100° HFOV, 1280x720
-        IMAGE_WIDTH, IMAGE_HEIGHT = 1280, 720
+        # OV9732: 100° HFOV, rendered at 640x480
+        IMAGE_WIDTH, IMAGE_HEIGHT = 640, 480
         HFOV_DEG = 100.0
         VFOV_DEG = HFOV_DEG * IMAGE_HEIGHT / IMAGE_WIDTH
 
@@ -1523,8 +1802,8 @@ class DigitalTwin(omni.ext.IExt):
         """Create ActionGraph for wrist camera (OV9732) ROS2 publishing.
         Also attaches USB camera and creates camera prim if not present."""
         CAMERA_PRIM = "/World/SO_ARM101/camera_mount_link/usb_camera/wrist_camera"
-        IMAGE_WIDTH = 1280
-        IMAGE_HEIGHT = 720
+        IMAGE_WIDTH = 640
+        IMAGE_HEIGHT = 480
         ROS2_TOPIC = "wrist_camera_rgb_sim"
 
         stage = omni.usd.get_context().get_stage()
@@ -1877,16 +2156,19 @@ class DigitalTwin(omni.ext.IExt):
         return None
 
     def _set_block_material_color(self, prim_path, color_rgb):
-        """Override the diffuseColor of all shaders under a block prim."""
+        """Override the color of all shaders under a prim (UsdPreviewSurface + OmniPBR)."""
         stage = omni.usd.get_context().get_stage()
         prim = stage.GetPrimAtPath(prim_path)
         if not prim or not prim.IsValid():
             return
+        rgb = Gf.Vec3f(*color_rgb)
         for desc in Usd.PrimRange(prim):
             if desc.IsA(UsdShade.Shader):
-                color_attr = desc.GetAttribute("inputs:diffuseColor")
-                if color_attr:
-                    color_attr.Set(Gf.Vec3f(*color_rgb))
+                # UsdPreviewSurface
+                for attr_name in ("inputs:diffuseColor", "inputs:diffuse_color_constant"):
+                    attr = desc.GetAttribute(attr_name)
+                    if attr:
+                        attr.Set(rgb)
 
     def _get_blocks_by_color(self, color=None, folder_path="/World/Objects"):
         """Get block names filtered by color. If color is None, return all blocks."""
@@ -1906,8 +2188,8 @@ class DigitalTwin(omni.ext.IExt):
     def _sample_non_overlapping_objects(
         self,
         num_objects,
-        x_range=(0.10, 0.25),
-        y_range=(-0.10, 0.10),
+        x_range=None,
+        y_range=None,
         min_sep=0.05,
         yaw_range=(-180.0, 180.0),
         z_values=None,
@@ -1915,6 +2197,7 @@ class DigitalTwin(omni.ext.IExt):
         max_attempts=10_000,
         max_retries=100,
         radii=None,
+        exclusion_zones=None,
     ):
         """
         Sample non-overlapping object poses in world frame.
@@ -1936,6 +2219,17 @@ class DigitalTwin(omni.ext.IExt):
                    the required separation between objects i and j is
                    radii[i] + radii[j] + gap instead of a flat min_sep.
         """
+        # Default ranges from module-level config (robot-relative → world)
+        if x_range is None or y_range is None:
+            fwd_range = BLOCK_RANDOM_FORWARD
+            lat_range = BLOCK_RANDOM_LATERAL
+            if ROBOT_FORWARD_AXIS == "X":
+                x_range = x_range or fwd_range
+                y_range = y_range or lat_range
+            else:
+                x_range = x_range or (lat_range[0], lat_range[1])  # lateral maps to X when forward=Y
+                y_range = y_range or fwd_range
+
         gap = self._object_gap
 
         # Convert fixed positions to numpy arrays for distance checking
@@ -1985,6 +2279,16 @@ class DigitalTwin(omni.ext.IExt):
                     req_fixed = (radii[orig_idx] + min_sep / 2) if radii is not None else min_sep
                     for fixed in fixed_xy:
                         if np.linalg.norm(candidate_xy - fixed) < req_fixed:
+                            valid = False
+                            break
+
+                # Check against AABB exclusion zones (e.g. cup footprints)
+                if valid and exclusion_zones:
+                    obj_r = radii[orig_idx] if radii is not None else min_sep / 2
+                    margin = obj_r + gap
+                    for cx, cy, hw, hh in exclusion_zones:
+                        if (abs(candidate_xy[0] - cx) < hw + margin and
+                            abs(candidate_xy[1] - cy) < hh + margin):
                             valid = False
                             break
 
@@ -2084,41 +2388,509 @@ class DigitalTwin(omni.ext.IExt):
             print(f"[sort] No blocks found for color={color or 'all'}")
             return 0, 0
 
-        # Layout clusters along Y, centered at 0
+        # Layout clusters along lateral axis, centered at 0
         cluster_gap = self._object_gap * 3  # wider gap between color groups
-        total_y_span = sum(c[3] for c in clusters) + cluster_gap * (len(clusters) - 1)
-        y_cursor = -total_y_span / 2.0
+        total_lat_span = sum(c[3] for c in clusters) + cluster_gap * (len(clusters) - 1)
+        lat_cursor = -total_lat_span / 2.0
 
-        for clr, block_info, cluster_x_span, max_sy in clusters:
-            cluster_y = y_cursor + max_sy / 2.0
+        for clr, block_info, cluster_fwd_span, max_lat in clusters:
+            cluster_lat = lat_cursor + max_lat / 2.0
 
-            # Place blocks in a row along X, centered at 0.3
-            x_cursor = 0.3 - cluster_x_span / 2.0
+            # Place blocks in a row along forward, centered at BLOCK_SPAWN_FORWARD
+            fwd_cursor = BLOCK_SPAWN_FORWARD - cluster_fwd_span / 2.0
             for name, prim_path, sx, sy in block_info:
                 prim = stage.GetPrimAtPath(prim_path)
                 if not prim or not prim.IsValid():
                     continue
-                x_position = x_cursor + sx / 2.0
+                fwd_position = fwd_cursor + sx / 2.0
                 z = self._get_ground_z(prim_path)
-                pos = Gf.Vec3d(x_position, cluster_y, z)
+                wx, wy = _to_world(fwd_position, cluster_lat)
+                pos = Gf.Vec3d(wx, wy, z)
                 self._set_obj_prim_pose(prim_path, pos)
-                x_cursor += sx + self._object_gap
+                fwd_cursor += sx + self._object_gap
                 sorted_count += 1
 
-            y_cursor += max_sy + cluster_gap
+            lat_cursor += max_lat + cluster_gap
 
         print(f"[sort] Sorted {sorted_count} blocks (color={color or 'all'})")
         return sorted_count, 0
 
+    # ==================== Color Pickers ====================
+
+    def _apply_color_pickers(self):
+        """Read colors from UI pickers and defer actual application to next frame.
+
+        Deferring ensures the ColorWidget model values are fully committed
+        before we read them (fixes the double-click issue).
+        """
+        async def _deferred_apply():
+            await omni.kit.app.get_app().next_update_async()
+            for cname, cw in self._color_pickers.items():
+                model = cw.model
+                items = model.get_item_children()
+                # ColorWidget values are in sRGB — convert to linear for USD materials
+                r = _srgb_to_linear(model.get_item_value_model(items[0]).as_float)
+                g = _srgb_to_linear(model.get_item_value_model(items[1]).as_float)
+                b = _srgb_to_linear(model.get_item_value_model(items[2]).as_float)
+                OBJECT_COLORS[cname] = (r, g, b)
+
+            # Apply to all legos in scene
+            stage = omni.usd.get_context().get_stage()
+            objects_prim = stage.GetPrimAtPath("/World/Objects")
+            if objects_prim and objects_prim.IsValid():
+                for child in objects_prim.GetChildren():
+                    name = child.GetName()
+                    for cname in OBJECT_COLORS:
+                        if name.startswith(cname):
+                            self._set_block_material_color(str(child.GetPath()), OBJECT_COLORS[cname])
+                            break
+
+            # Apply to all cups in scene
+            containers_prim = stage.GetPrimAtPath("/World/Containers")
+            if containers_prim and containers_prim.IsValid():
+                for child in containers_prim.GetChildren():
+                    cname = child.GetName().replace("cup_", "")
+                    if cname in OBJECT_COLORS:
+                        self._set_block_material_color(str(child.GetPath()), OBJECT_COLORS[cname])
+
+            print(f"[colors] Applied: { {k: tuple(round(c,3) for c in v) for k,v in OBJECT_COLORS.items()} }")
+
+        asyncio.ensure_future(_deferred_apply())
+
+    # ==================== Containers (Cups) ====================
+
+    def _on_cup_layout_changed(self, *args):
+        """Update CUP_LAYOUT from UI sliders/combo and refresh labels."""
+        if getattr(self, '_cup_updating', False):
+            return
+        mode_idx = self._cup_mode_combo.model.get_item_value_model().as_int
+        CUP_LAYOUT["mode"] = "line" if mode_idx == 0 else "arc"
+        CUP_LAYOUT["angle_deg"] = self._cup_angle_slider.model.as_float
+        CUP_LAYOUT["radius"] = self._cup_radius_slider.model.as_float
+        CUP_LAYOUT["gap"] = self._cup_gap_slider.model.as_float
+        CUP_LAYOUT["face_origin"] = self._cup_face_origin_cb.model.get_value_as_bool()
+
+        self._cup_angle_label.text = f"{CUP_LAYOUT['angle_deg']:.0f}°"
+        self._cup_radius_label.text = f"{CUP_LAYOUT['radius']:.2f}m"
+        self._cup_gap_label.text = f"{CUP_LAYOUT['gap']*100:.0f}cm"
+
+    def _reset_cup_defaults(self):
+        """Reset cup layout sliders to defaults (deferred to next frame)."""
+        async def _do_reset():
+            await omni.kit.app.get_app().next_update_async()
+            self._cup_updating = True
+            CUP_LAYOUT.update(CUP_LAYOUT_DEFAULTS)
+            self._cup_mode_combo.model.get_item_value_model().set_value(0 if CUP_LAYOUT["mode"] == "line" else 1)
+            self._cup_angle_slider.model.set_value(float(CUP_LAYOUT["angle_deg"]))
+            self._cup_radius_slider.model.set_value(CUP_LAYOUT["radius"])
+            self._cup_gap_slider.model.set_value(CUP_LAYOUT["gap"])
+            self._cup_angle_label.text = f"{CUP_LAYOUT['angle_deg']:.0f}°"
+            self._cup_radius_label.text = f"{CUP_LAYOUT['radius']:.2f}m"
+            self._cup_gap_label.text = f"{CUP_LAYOUT['gap']*100:.0f}cm"
+            self._cup_face_origin_cb.model.set_value(CUP_LAYOUT.get("face_origin", True))
+            self._cup_updating = False
+            print("[cups] Reset to defaults")
+        asyncio.ensure_future(_do_reset())
+
+    def _add_cups_from_ui(self):
+        """Delete existing cups and re-add with current UI settings."""
+        self._on_cup_layout_changed()  # sync UI → config
+        self.delete_cups()
+        self.add_cups()
+
+    def add_cups(self, container_path="/World/Containers"):
+        """Add colored cups using CUP_LAYOUT config (arc or line mode).
+
+        In "arc" mode each cup gets its own angle around the forward axis.
+        In "line" mode the center cup sits at the configured angle/radius
+        and others extend in a straight row along the lateral axis,
+        spaced by their measured bounding box width + gap.
+        """
+        stage = omni.usd.get_context().get_stage()
+
+        # Skip if containers already exist
+        if stage.GetPrimAtPath(container_path).IsValid():
+            existing = [c.GetName() for c in stage.GetPrimAtPath(container_path).GetChildren()
+                        if c.GetName() != "PhysicsMaterial"]
+            if len(existing) >= len(CUP_USDS):
+                print(f"[add_cups] Cups already exist: {existing}")
+                return False
+
+        # Create container folder
+        if not stage.GetPrimAtPath(container_path):
+            UsdGeom.Xform.Define(stage, container_path)
+
+        cups_folder = _get_cups_folder()
+        mode = CUP_LAYOUT["mode"]
+        colors = CUP_LAYOUT["color_order"]
+
+        # --- First pass: create USD references (needed to measure bbox in line mode) ---
+        for color_name in colors:
+            usd_file = CUP_USDS.get(color_name)
+            if not usd_file:
+                continue
+            prim_path = f"{container_path}/cup_{color_name}"
+            if stage.GetPrimAtPath(prim_path).IsValid():
+                continue
+            prim = stage.DefinePrim(prim_path)
+            prim.GetReferences().AddReference(cups_folder + usd_file)
+
+        # --- Compute positions ---
+        if mode == "line":
+            # Measure lateral bbox width of each cup
+            bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+            cup_widths = {}
+            for color_name in colors:
+                prim_path = f"{container_path}/cup_{color_name}"
+                cup_prim = stage.GetPrimAtPath(prim_path)
+                if cup_prim.IsValid():
+                    bbox = bbox_cache.ComputeWorldBound(cup_prim)
+                    r = bbox.ComputeAlignedRange()
+                    mn, mx = r.GetMin(), r.GetMax()
+                    # Lateral width depends on forward axis
+                    if ROBOT_FORWARD_AXIS == "X":
+                        cup_widths[color_name] = mx[1] - mn[1]
+                    else:
+                        cup_widths[color_name] = mx[0] - mn[0]
+            positions = _cup_positions_line(cup_widths)
+        else:
+            positions = _cup_positions_arc()
+
+        # --- Second pass: apply transforms, collision, physics ---
+        placed = 0
+        for color_name in colors:
+            prim_path = f"{container_path}/cup_{color_name}"
+            cup_prim = stage.GetPrimAtPath(prim_path)
+            if not cup_prim or not cup_prim.IsValid():
+                continue
+
+            fwd, lat = positions.get(color_name, (0, 0))
+            x, y = _to_world(fwd, lat)
+            z = self._ground_plane_z
+
+            # Compute orientation: face_origin rotates cup to face the robot base
+            if CUP_LAYOUT.get("face_origin", False) and (x != 0 or y != 0):
+                if mode == "arc":
+                    # Arc mode: each cup faces origin individually
+                    yaw_rad = math.atan2(-y, -x)
+                else:
+                    # Line mode: all cups face the same direction (along the line's radial)
+                    # Use the configured angle, not each cup's individual position
+                    angle_rad = math.radians(CUP_LAYOUT["angle_deg"])
+                    yaw_rad = angle_rad + math.pi  # face back toward origin along the radial
+                # Quaternion for Z-axis rotation: (cos(θ/2), 0, 0, sin(θ/2))
+                orient = Gf.Quatd(math.cos(yaw_rad / 2), 0, 0, math.sin(yaw_rad / 2))
+            else:
+                orient = Gf.Quatd(1, 0, 0, 0)
+
+            xform = UsdGeom.Xform(cup_prim)
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(x, y, z))
+            xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(orient)
+
+            # Rigid body + collision (convexDecomposition preserves hollow interior)
+            UsdPhysics.RigidBodyAPI.Apply(cup_prim)
+            for child in Usd.PrimRange(cup_prim):
+                if child.GetTypeName() == "Mesh":
+                    UsdPhysics.CollisionAPI.Apply(child)
+                    mesh_col = UsdPhysics.MeshCollisionAPI.Apply(child)
+                    mesh_col.CreateApproximationAttr().Set("convexDecomposition")
+
+            placed += 1
+            print(f"  Added cup_{color_name} at ({x:.3f}, {y:.3f}, {z:.3f})")
+
+        # Physics material for cups
+        physics_mat_path = f"{container_path}/PhysicsMaterial"
+        material = UsdShade.Material.Define(stage, physics_mat_path)
+        physics_mat_api = UsdPhysics.MaterialAPI.Apply(material.GetPrim())
+        physics_mat_api.CreateDynamicFrictionAttr().Set(self._object_dynamic_friction)
+        physics_mat_api.CreateRestitutionAttr().Set(self._object_restitution)
+        physics_mat_api.CreateStaticFrictionAttr().Set(self._object_static_friction)
+        physx_mat_api = PhysxSchema.PhysxMaterialAPI.Apply(material.GetPrim())
+        physx_mat_api.CreateFrictionCombineModeAttr().Set(self._object_friction_combine_mode)
+        physx_mat_api.CreateRestitutionCombineModeAttr().Set(self._object_restitution_combine_mode)
+
+        # Bind physics material to all cup collision prims
+        from omni.physx.scripts import physicsUtils
+        physics_mat_sdf_path = Sdf.Path(physics_mat_path)
+        containers_prim = stage.GetPrimAtPath(container_path)
+        if containers_prim.IsValid():
+            for child in containers_prim.GetChildren():
+                if child.GetName() == "PhysicsMaterial":
+                    continue
+                for desc in Usd.PrimRange(child):
+                    if desc.HasAPI(UsdPhysics.CollisionAPI):
+                        physicsUtils.add_physics_material_to_prim(stage, desc, physics_mat_sdf_path)
+
+        print(f"[add_cups] Placed {placed} cups ({mode} mode, radius={CUP_LAYOUT['radius']}m)")
+
+        # Override cup material colors to match OBJECT_COLORS palette
+        for color_name in colors:
+            if color_name not in OBJECT_COLORS:
+                continue
+            cup_prim_path = f"{container_path}/cup_{color_name}"
+            self._set_block_material_color(cup_prim_path, OBJECT_COLORS[color_name])
+
+        # Add ArUco markers on cup sides
+        try:
+            self._add_aruco_to_cups(container_path)
+        except Exception as e:
+            print(f"[add_cups] ArUco marker error: {e}")
+            traceback.print_exc()
+
+        return True
+
+    def _add_aruco_to_cups(self, container_path="/World/Containers"):
+        """Add pre-baked ArUco marker USD meshes onto cup surfaces.
+
+        Each marker is a Blender-generated curved mesh (shrinkwrapped onto the
+        actual cup STL) stored as a USDA in assets/aruco_markers/.  At runtime
+        we simply add a USD reference as a child of the cup prim — the mesh
+        already has the correct shape, UVs, and material.
+
+        If a marker USD is missing, falls back to generating it via Blender
+        headless (requires blender on PATH).
+        """
+        import omni.kit.commands
+        from pxr import Sdf, UsdShade, UsdGeom, Gf
+
+        stage = omni.usd.get_context().get_stage()
+        containers = stage.GetPrimAtPath(container_path)
+        if not containers or not containers.IsValid():
+            return
+
+        cfg = CUP_ARUCO_CONFIG
+        ext_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        aruco_dir = os.path.join(ext_dir, "assets", "aruco_markers")
+
+        looks_path = f"{container_path}/Looks"
+        if not stage.GetPrimAtPath(looks_path):
+            UsdGeom.Scope.Define(stage, looks_path)
+
+        total = 0
+        for child in containers.GetChildren():
+            cup_name = child.GetName()
+            color = cup_name.replace("cup_", "")
+            aruco_id = cfg["ids"].get(color)
+            if aruco_id is None:
+                continue
+
+            marker_prim_path = f"{child.GetPath()}/aruco_{aruco_id:03d}"
+            if stage.GetPrimAtPath(marker_prim_path).IsValid():
+                continue
+
+            # Locate the pre-baked marker USD
+            marker_usda = os.path.join(aruco_dir, "meshes", f"aruco_marker_{aruco_id:03d}.usda")
+            if not os.path.isfile(marker_usda):
+                # Try to generate via Blender if available
+                self._generate_marker_usd(aruco_id, aruco_dir, ext_dir, cfg)
+                if not os.path.isfile(marker_usda):
+                    print(f"[aruco] Marker USD not found: {marker_usda}")
+                    continue
+
+            # Add as a referenced prim under the cup
+            prim = stage.DefinePrim(marker_prim_path)
+            marker_usd_uri = "file://" + os.path.abspath(marker_usda)
+            prim.GetReferences().AddReference(
+                marker_usd_uri,
+                "/root/aruco_marker"
+            )
+
+            # The Blender-exported material uses UsdPreviewSurface which Isaac
+            # Sim's RTX renderer ignores.  Create an OmniPBR material and bind
+            # it to the marker mesh so the ArUco texture actually renders.
+            mesh_path = f"{marker_prim_path}/aruco_marker_mesh"
+            mesh_prim = stage.GetPrimAtPath(mesh_path)
+            if mesh_prim and mesh_prim.IsValid():
+                # Ensure marker PNG exists for the texture
+                png_path = os.path.join(aruco_dir, "pngs", f"aruco_4x4_{aruco_id:03d}.png")
+                if not os.path.isfile(png_path):
+                    try:
+                        from .generate_aruco_marker import generate_marker_png
+                    except ImportError:
+                        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                        from generate_aruco_marker import generate_marker_png
+                    generate_marker_png(cfg["dictionary"], aruco_id, png_path, cfg["marker_png_pixels"])
+
+                out = []
+                omni.kit.commands.execute(
+                    "CreateAndBindMdlMaterialFromLibrary",
+                    mdl_name="OmniPBR.mdl",
+                    mtl_name="OmniPBR",
+                    mtl_created_list=out,
+                    select_new_prim=False,
+                )
+                if out:
+                    target_mat_path = f"{looks_path}/aruco_{color}_{aruco_id:03d}"
+                    omni.kit.commands.execute(
+                        "MovePrim", path_from=out[0], path_to=target_mat_path
+                    )
+                    shader = stage.GetPrimAtPath(target_mat_path + "/Shader")
+                    if shader:
+                        shader.CreateAttribute(
+                            "inputs:diffuse_texture", Sdf.ValueTypeNames.Asset
+                        ).Set(Sdf.AssetPath(f"file:{png_path}"))
+                        shader.CreateAttribute(
+                            "inputs:reflection_roughness_constant", Sdf.ValueTypeNames.Float
+                        ).Set(0.9)
+                    UsdShade.MaterialBindingAPI.Apply(mesh_prim)
+                    UsdShade.MaterialBindingAPI(mesh_prim).Bind(
+                        UsdShade.Material(stage.GetPrimAtPath(target_mat_path))
+                    )
+
+            total += 1
+            print(f"  [aruco] Loaded marker ID {aruco_id} onto {cup_name}")
+
+        if total:
+            print(f"[aruco] Loaded {total} ArUco markers onto cups")
+
+    def _generate_marker_usd(self, aruco_id, aruco_dir, ext_dir, cfg):
+        """Generate a marker USD via Blender headless (fallback if not pre-baked)."""
+        import subprocess
+
+        # Ensure marker PNG exists
+        try:
+            from .generate_aruco_marker import generate_marker_png
+        except ImportError:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from generate_aruco_marker import generate_marker_png
+
+        png_path = os.path.join(aruco_dir, "pngs", f"aruco_4x4_{aruco_id:03d}.png")
+        generate_marker_png(cfg["dictionary"], aruco_id, png_path, cfg["marker_png_pixels"])
+
+        # Cup STL path
+        cup_stl = os.path.join(ext_dir, "..", "..", "transfer", "cad", "cup_urdf", "meshes", "cup.stl")
+        if not os.path.isfile(cup_stl):
+            # Try common location
+            cup_stl = os.path.expanduser("~/transfer/cad/cup_urdf/meshes/cup.stl")
+        if not os.path.isfile(cup_stl):
+            print(f"[aruco] Cup STL not found for Blender generation")
+            return
+
+        script = os.path.join(ext_dir, "scripts", "bake_aruco_on_cup.py")
+        output = os.path.join(aruco_dir, "meshes", f"aruco_marker_{aruco_id:03d}.usda")
+
+        cmd = [
+            "blender", "--background", "--python", script, "--",
+            "--cup-stl", cup_stl,
+            "--marker-png", png_path,
+            "--output", output,
+            "--marker-size", str(cfg["marker_size_m"]),
+            "--height-fraction", str(cfg["height_fraction"]),
+            "--subdivisions", "16",
+        ]
+        print(f"[aruco] Generating marker {aruco_id} via Blender...")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode == 0:
+                print(f"[aruco] Generated: {output}")
+            else:
+                print(f"[aruco] Blender failed: {result.stderr[-200:]}")
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            print(f"[aruco] Blender generation failed: {e}")
+
+    def delete_cups(self, container_path="/World/Containers"):
+        """Delete all cups and their ArUco markers from the scene."""
+        stage = omni.usd.get_context().get_stage()
+        prim = stage.GetPrimAtPath(container_path)
+        if prim and prim.IsValid():
+            stage.RemovePrim(container_path)
+            print(f"[delete_cups] Deleted {container_path} (including ArUco markers)")
+        else:
+            print(f"[delete_cups] {container_path} does not exist")
+
+        # Also clean up any stale ArUco materials left in /World/Looks
+        world_looks = stage.GetPrimAtPath("/World/Looks")
+        if world_looks and world_looks.IsValid():
+            for child in world_looks.GetChildren():
+                if "aruco" in child.GetName():
+                    stage.RemovePrim(child.GetPath())
+                    print(f"[delete_cups] Cleaned up stale {child.GetPath()}")
+
+    def _get_cup_positions(self, container_path="/World/Containers"):
+        """Return dict of {color: {center_x, center_y, rim_z, opening_radius}} for each cup."""
+        stage = omni.usd.get_context().get_stage()
+        positions = {}
+        containers = stage.GetPrimAtPath(container_path)
+        if not containers or not containers.IsValid():
+            return positions
+        bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+        for child in containers.GetChildren():
+            name = child.GetName()  # e.g. "cup_red"
+            color = name.replace("cup_", "")
+            if color in BLOCK_COLORS:
+                bbox = bbox_cache.ComputeWorldBound(child)
+                r = bbox.ComputeAlignedRange()
+                mn, mx = r.GetMin(), r.GetMax()
+                positions[color] = {
+                    "center_x": (mn[0] + mx[0]) / 2.0,
+                    "center_y": (mn[1] + mx[1]) / 2.0,
+                    "rim_z": mx[2],
+                    "opening_radius": min(mx[0] - mn[0], mx[1] - mn[1]) / 2.0,
+                }
+        return positions
+
+    def sort_into_cups(self, color=None, folder_path="/World/Objects"):
+        """Sort lego blocks by dropping each into its matching color cup.
+
+        Blocks are placed above the cup rim so they fall in when
+        physics is running. Small XY offsets keep them from stacking
+        perfectly (more natural drop).
+
+        Args:
+            color: Optional color filter ('red', 'green', 'blue').
+            folder_path: Parent prim path for objects.
+        """
+        cup_info = self._get_cup_positions()
+        if not cup_info:
+            print("[sort_into_cups] No cups found. Run add_cups first.")
+            return 0
+
+        stage = omni.usd.get_context().get_stage()
+        colors_to_sort = [color] if color else list(BLOCK_COLORS.keys())
+        sorted_count = 0
+
+        for clr in colors_to_sort:
+            if clr not in cup_info:
+                print(f"[sort_into_cups] No cup for color '{clr}'")
+                continue
+
+            cup = cup_info[clr]
+            cx, cy = cup["center_x"], cup["center_y"]
+            rim_z = cup["rim_z"]
+            opening_r = cup["opening_radius"]
+
+            blocks = self._get_blocks_by_color(clr, folder_path)
+
+            # Keep XY offsets within ~40% of opening radius so blocks land inside
+            max_offset = opening_r * 0.3
+
+            for i, block_name in enumerate(sorted(blocks)):
+                prim_path = self._get_prim_path(block_name, folder_path)
+                prim = stage.GetPrimAtPath(prim_path)
+                if not prim or not prim.IsValid():
+                    continue
+
+                # Drop from above the rim, stagger height so they don't collide mid-air
+                drop_z = rim_z + 0.02 + 0.025 * i
+                offset_x = np.random.uniform(-max_offset, max_offset)
+                offset_y = np.random.uniform(-max_offset, max_offset)
+                pos = Gf.Vec3d(cx + offset_x, cy + offset_y, drop_z)
+                self._set_obj_prim_pose(prim_path, pos)
+                sorted_count += 1
+
+        print(f"[sort_into_cups] Dropped {sorted_count} blocks above cups (color={color or 'all'})")
+        return sorted_count
+
     def disassemble_objects(self, folder_path="/World/Objects"):
-        """Lay out objects in a row along Y at X=0.3, using bbox-aware spacing."""
+        """Lay out objects in a row along lateral axis at forward=BLOCK_SPAWN_FORWARD."""
         stage = omni.usd.get_context().get_stage()
         objects_root = stage.GetPrimAtPath(folder_path)
         if not objects_root.IsValid():
             print(f"[disassemble] Error: {folder_path} does not exist")
             return 0
 
-        # Collect valid block prims and their Y extents
+        # Collect valid block prims and their lateral extents
         block_info = []
         for child in objects_root.GetChildren():
             obj_name = child.GetName()
@@ -2128,24 +2900,25 @@ class DigitalTwin(omni.ext.IExt):
             body_prim = stage.GetPrimAtPath(body_path)
             if not body_prim or not body_prim.IsValid():
                 continue
-            _, sy, _ = self._get_prim_bbox_size(body_path)
-            block_info.append((body_path, sy))
+            sx, sy, _ = self._get_prim_bbox_size(body_path)
+            lat_ext = sy if ROBOT_FORWARD_AXIS == "X" else sx
+            block_info.append((body_path, lat_ext))
 
         if not block_info:
             return 0
 
-        # Compute total span and center the row at Y=0
-        total_span = sum(sy for _, sy in block_info) + self._object_gap * (len(block_info) - 1)
-        y_cursor = -total_span / 2.0
+        # Compute total span and center the row at lateral=0
+        total_span = sum(le for _, le in block_info) + self._object_gap * (len(block_info) - 1)
+        lat_cursor = -total_span / 2.0
 
-        for body_path, sy in block_info:
-            half_ext = sy / 2.0
-            y_position = y_cursor + half_ext
+        for body_path, lat_ext in block_info:
+            lat_position = lat_cursor + lat_ext / 2.0
 
             z = self._get_ground_z(body_path)
-            self._set_obj_prim_pose(body_path, Gf.Vec3d(0.3, y_position, z))
+            wx, wy = _to_world(BLOCK_SPAWN_FORWARD, lat_position)
+            self._set_obj_prim_pose(body_path, Gf.Vec3d(wx, wy, z))
 
-            y_cursor += sy + self._object_gap
+            lat_cursor += lat_ext + self._object_gap
 
         print(f"[disassemble] Disassembled {len(block_info)} objects")
         return len(block_info)
@@ -2199,6 +2972,15 @@ class DigitalTwin(omni.ext.IExt):
             print(f"[randomize] No blocks found for color={color or 'all'}")
             return 0, 0
 
+        # Add cup bbox footprints as exclusion zones (if cups exist)
+        cup_exclusions = []  # [(center_x, center_y, half_w, half_h)]
+        cup_info = self._get_cup_positions()
+        for clr, info in cup_info.items():
+            cup_exclusions.append((
+                info["center_x"], info["center_y"],
+                info["opening_radius"], info["opening_radius"],
+            ))
+
         z_values = [info["current_z"] for info in to_randomize]
 
         # Compute per-object half-diagonal for pair-wise separation
@@ -2212,6 +2994,7 @@ class DigitalTwin(omni.ext.IExt):
             z_values=z_values,
             fixed_positions=fixed_positions,
             radii=radii,
+            exclusion_zones=cup_exclusions,
         )
 
         for obj_info, pose in zip(to_randomize, poses):
@@ -2223,7 +3006,7 @@ class DigitalTwin(omni.ext.IExt):
         return len(to_randomize), 0
 
     def randomize_single_object(self, object_name, folder_path="/World/Objects",
-                                x_range=(0.10, 0.25), y_range=(-0.10, 0.10),
+                                x_range=None, y_range=None,
                                 min_sep=None, yaw_range=(-180.0, 180.0), max_attempts=1000):
         """Randomize a single object's pose in a clear workspace area, keeping all others fixed.
 
@@ -2269,6 +3052,15 @@ class DigitalTwin(omni.ext.IExt):
                 fsx, fsy, _ = self._get_prim_bbox_size(child_path)
                 fixed_radii.append((fsx**2 + fsy**2) ** 0.5 / 2.0)
 
+        # Collect cup exclusion zones as AABB (if cups exist)
+        cup_exclusions = []  # [(cx, cy, half_w, half_h)]
+        cup_info = self._get_cup_positions()
+        for clr, info in cup_info.items():
+            cup_exclusions.append((
+                info["center_x"], info["center_y"],
+                info["opening_radius"], info["opening_radius"],
+            ))
+
         # Get current Z of target object
         target_xform = UsdGeom.Xformable(target_child_prim)
         target_world_pos = target_xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default()).ExtractTranslation()
@@ -2280,19 +3072,31 @@ class DigitalTwin(omni.ext.IExt):
         else:
             fixed_seps = [target_radius + fr + self._object_gap for fr in fixed_radii]
 
-        # Sample one non-overlapping position with per-pair separation
+        # Sample one non-overlapping position
         pose = None
         for _ in range(max_attempts):
             candidate = np.array([
                 np.random.uniform(*x_range),
                 np.random.uniform(*y_range)
             ])
-            if all(np.linalg.norm(candidate - fxy) >= fsep
-                   for fxy, fsep in zip(fixed_xy, fixed_seps)):
-                yaw_deg = np.random.uniform(*yaw_range)
-                pose = {"position": np.array([candidate[0], candidate[1], target_z]),
-                        "yaw_deg": yaw_deg}
-                break
+            # Check circular separation against other blocks
+            if not all(np.linalg.norm(candidate - fxy) >= fsep
+                       for fxy, fsep in zip(fixed_xy, fixed_seps)):
+                continue
+            # Check AABB exclusion against cup footprints
+            in_cup = False
+            for cx, cy, hw, hh in cup_exclusions:
+                margin = target_radius + self._object_gap
+                if (abs(candidate[0] - cx) < hw + margin and
+                    abs(candidate[1] - cy) < hh + margin):
+                    in_cup = True
+                    break
+            if in_cup:
+                continue
+            yaw_deg = np.random.uniform(*yaw_range)
+            pose = {"position": np.array([candidate[0], candidate[1], target_z]),
+                    "yaw_deg": yaw_deg}
+            break
 
         if pose is None:
             raise RuntimeError(
@@ -2858,26 +3662,58 @@ class DigitalTwin(omni.ext.IExt):
                     mc = UsdPhysics.MeshCollisionAPI.Apply(body_prim)
                     mc.CreateApproximationAttr().Set("convexHull")
 
-        # Measure Y extents for each block
-        y_extents = []
-        for body_path in body_paths:
-            _, sy, _ = self._get_prim_bbox_size(body_path)
-            y_extents.append(sy)
+        # Uniformly distribute blocks in a grid within the workspace, skipping cup zones
+        fwd_min, fwd_max = BLOCK_RANDOM_FORWARD
+        lat_min, lat_max = BLOCK_RANDOM_LATERAL
 
-        # Compute total span and center the row at Y=0
-        total_span = sum(y_extents) + self._object_gap * (len(blocks) - 1)
-        y_cursor = -total_span / 2.0
+        # Collect cup exclusion zones
+        cup_exclusions = []
+        cup_info = self._get_cup_positions()
+        for clr, info in cup_info.items():
+            cup_exclusions.append((
+                info["center_x"], info["center_y"],
+                info["opening_radius"], info["opening_radius"],
+            ))
+
+        # Generate grid candidates, filter out those overlapping cups
+        n = len(blocks)
+        cols = math.ceil(math.sqrt(n * 2))  # oversample to account for excluded cells
+        rows = math.ceil(n * 2 / cols)
+        fwd_step = (fwd_max - fwd_min) / max(rows, 1)
+        lat_step = (lat_max - lat_min) / max(cols, 1)
+
+        valid_cells = []
+        for row in range(rows):
+            for col in range(cols):
+                fwd = fwd_min + fwd_step * (row + 0.5)
+                lat = lat_min + lat_step * (col + 0.5)
+                wx, wy = _to_world(fwd, lat)
+                # Check AABB exclusion against cups
+                blocked = False
+                for cx, cy, hw, hh in cup_exclusions:
+                    margin = 0.025  # half block size + gap
+                    if abs(wx - cx) < hw + margin and abs(wy - cy) < hh + margin:
+                        blocked = True
+                        break
+                if not blocked:
+                    valid_cells.append((wx, wy))
+                if len(valid_cells) >= n:
+                    break
+            if len(valid_cells) >= n:
+                break
 
         # Second pass: position each block on its body prim
         for i, (block_name, color_name, usd_path) in enumerate(blocks):
             body_path = body_paths[i]
-            y_position = y_cursor + y_extents[i] / 2.0
-
+            if i < len(valid_cells):
+                wx, wy = valid_cells[i]
+            else:
+                # Fallback: place at workspace center if grid exhausted
+                wx, wy = _to_world((fwd_min + fwd_max) / 2, (lat_min + lat_max) / 2)
             z = self._get_ground_z(body_path)
-            self._set_obj_prim_pose(body_path, Gf.Vec3d(0.3, y_position, z))
 
-            y_cursor += y_extents[i] + self._object_gap
-            print(f"  Added {block_name} ({color_name}) from {usd_path.split('/')[-1]}")
+            self._set_obj_prim_pose(body_path, Gf.Vec3d(wx, wy, z))
+            print(f"  Added {block_name} ({color_name}) at ({wx:.3f}, {wy:.3f})")
 
         # Bind physics material to collision prims
         from omni.physx.scripts import physicsUtils
@@ -2890,6 +3726,12 @@ class DigitalTwin(omni.ext.IExt):
                 for desc in Usd.PrimRange(child):
                     if desc.HasAPI(UsdPhysics.CollisionAPI):
                         physicsUtils.add_physics_material_to_prim(stage, desc, physics_mat_sdf_path)
+
+        # Override lego colors to match the shared OBJECT_COLORS palette
+        for block_name, color_name, _ in blocks:
+            if color_name in OBJECT_COLORS:
+                prim_path = f"{target_path}/{block_name}"
+                self._set_block_material_color(prim_path, OBJECT_COLORS[color_name])
 
         print(f"[add_objects] Added {len(blocks)} lego blocks")
         return True
@@ -3272,7 +4114,7 @@ class DigitalTwin(omni.ext.IExt):
                         # Execute command in Isaac Sim's main thread
                         async def execute_wrapper():
                             try:
-                                response = self._execute_mcp_command(command)
+                                response = await self._execute_mcp_command(command)
                                 response_json = json.dumps(response)
                                 print(f"[MCP] response_json: {response_json}")
                                 try:
@@ -3309,7 +4151,7 @@ class DigitalTwin(omni.ext.IExt):
                 pass
             print("[MCP] Client handler stopped")
 
-    def _execute_mcp_command(self, command) -> Dict[str, Any]:
+    async def _execute_mcp_command(self, command) -> Dict[str, Any]:
         """Execute a command and return the response."""
         try:
             cmd_type = command.get("type")
@@ -3335,7 +4177,11 @@ class DigitalTwin(omni.ext.IExt):
             if handler:
                 try:
                     print(f"[MCP] Executing handler for {cmd_type}")
-                    result = handler(**params)
+                    import inspect
+                    if inspect.iscoroutinefunction(handler):
+                        result = await handler(**params)
+                    else:
+                        result = handler(**params)
                     print(f"[MCP] Handler execution complete: {result}")
                     if result and result.get("status") == "success":
                         return {"status": "success", "result": result}
@@ -3888,6 +4734,55 @@ class DigitalTwin(omni.ext.IExt):
         try:
             self.setup_wrist_camera_action_graph()
             return {"status": "success", "message": "Wrist camera action graph created, topics: wrist_camera_rgb_sim, wrist_camera_info"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_add_cups(self) -> Dict[str, Any]:
+        """MCP handler for adding sorting cups."""
+        try:
+            self.add_cups()
+            cup_info = self._get_cup_positions()
+            positions_summary = {
+                k: [v["center_x"], v["center_y"], v["rim_z"]]
+                for k, v in cup_info.items()
+            }
+            return {
+                "status": "success",
+                "message": f"Added {len(cup_info)} cups in arc",
+                "cup_positions": positions_summary
+            }
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_delete_cups(self) -> Dict[str, Any]:
+        """MCP handler for deleting sorting cups."""
+        try:
+            self.delete_cups()
+            return {"status": "success", "message": "Cups deleted"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_sort_into_cups(self, color: str = None) -> Dict[str, Any]:
+        """MCP handler for sorting blocks into their matching color cups."""
+        try:
+            color = color or None
+            count = self.sort_into_cups(color=color)
+            return {
+                "status": "success",
+                "message": f"Sorted {count} blocks into cups (color={color or 'all'})"
+            }
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    async def _cmd_quick_start(self) -> Dict[str, Any]:
+        """MCP handler: full scene setup."""
+        try:
+            await self.quick_start()
+            return {"status": "success", "message": "Quick start complete: scene, robot, action graphs, cameras, objects, cups, publishers, simulation running."}
         except Exception as e:
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
