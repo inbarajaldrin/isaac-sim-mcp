@@ -75,4 +75,4 @@ local_cache/
 mcp_cache/
 
 # Resources (generated scene state files)
-resources/
+resources/.planning/

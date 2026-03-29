@@ -116,12 +116,34 @@ LEGO_USDS = {
 # =============================================================================
 ROBOT_FORWARD_AXIS = "X"
 
-def _to_world(forward, lateral):
-    """Convert (forward, lateral) robot-relative coords to (world_x, world_y)."""
+def _get_pan_axis_xy():
+    """Get the shoulder_pan axis world XY position from the robot USD.
+
+    Returns (x, y) of the shoulder_link prim, which is the pivot point
+    about which the arm rotates.  Falls back to (0, 0) if robot not loaded.
+    """
+    stage = omni.usd.get_context().get_stage()
+    for name in ["shoulder_link", "Shoulder_Link"]:
+        prim = stage.GetPrimAtPath(f"/World/SO_ARM101/{name}")
+        if prim and prim.IsValid():
+            from pxr import UsdGeom
+            tf = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(0)
+            pos = tf.ExtractTranslation()
+            return float(pos[0]), float(pos[1])
+    return 0.0, 0.0
+
+
+def _to_world(forward, lateral, anchor=None):
+    """Convert (forward, lateral) robot-relative coords to (world_x, world_y).
+
+    anchor: (x, y) world offset to add (e.g. pan axis position).
+             If None, uses world origin.
+    """
+    ax, ay = anchor if anchor else (0.0, 0.0)
     if ROBOT_FORWARD_AXIS == "X":
-        return forward, lateral
+        return forward + ax, lateral + ay
     else:  # "Y"
-        return -lateral, forward
+        return -lateral + ax, forward + ay
 
 # Block workspace (robot-relative)
 BLOCK_SPAWN_FORWARD = 0.3     # forward distance for initial row layout
@@ -149,7 +171,7 @@ CUP_USDS = {
 CUP_LAYOUT_DEFAULTS = {
     "mode": "line",
     "radius": 0.28,
-    "angle_deg": 0,
+    "angle_deg": -90,
     "angles_deg": [-35, 0, 35],
     "gap": 0.01,
     "face_origin": True,       # rotate cups to face the robot base (perpendicular to radial)
@@ -379,6 +401,10 @@ MCP_TOOL_REGISTRY = {
         "description": "Add sorting cups (red, green, blue) in an arc in front of the robot base. Cups serve as containers for color-sorted lego blocks.",
         "parameters": {}
     },
+    "publish_drop_poses": {
+        "description": "Create an action graph to publish ArUco marker poses for each cup to ROS2 topic '/drop_poses' (TFMessage). Each transform's child_frame_id is drop_0, drop_1, or drop_2. Requires cups to be present in the scene.",
+        "parameters": {}
+    },
     "delete_cups": {
         "description": "Delete all sorting cups from /World/Containers.",
         "parameters": {}
@@ -419,6 +445,7 @@ MCP_HANDLERS = {
     "setup_bbox_publisher": "_cmd_setup_bbox_publisher",
     "setup_wrist_camera_action_graph": "_cmd_setup_wrist_camera_action_graph",
     "add_cups": "_cmd_add_cups",
+    "publish_drop_poses": "_cmd_publish_drop_poses",
     "delete_cups": "_cmd_delete_cups",
     "sort_into_cups": "_cmd_sort_into_cups",
     "quick_start": "_cmd_quick_start",
@@ -742,6 +769,9 @@ class DigitalTwin(omni.ext.IExt):
                             with ui.HStack(spacing=5):
                                 ui.Button("Sort Into Cups", width=150, height=35, clicked_fn=self.sort_into_cups)
                                 ui.Button("Unsort", width=100, height=35, clicked_fn=self.disassemble_objects)
+                            with ui.HStack(spacing=5):
+                                ui.Button("Publish Drop Poses", width=220, height=35,
+                                          clicked_fn=lambda: self._cmd_publish_drop_poses())
 
                     with ui.CollapsableFrame(title="Scene State", name="subFrame", collapsed=True, height=0):
                         with ui.VStack(spacing=5, height=0):
@@ -1091,7 +1121,17 @@ class DigitalTwin(omni.ext.IExt):
         self.setup_bbox_publisher()
         await app.next_update_async()
 
-        # 6. Play the scene
+        # 8. Add cups with ArUco markers
+        print("--- Adding cups ---")
+        self.add_cups()
+        await app.next_update_async()
+
+        # 9. Publish drop poses (ArUco marker poses on cups)
+        print("--- Publishing drop poses ---")
+        self._cmd_publish_drop_poses()
+        await app.next_update_async()
+
+        # 10. Play the scene
         print("--- Playing scene ---")
         self._timeline.play()
 
@@ -2493,10 +2533,12 @@ class DigitalTwin(omni.ext.IExt):
         asyncio.ensure_future(_do_reset())
 
     def _add_cups_from_ui(self):
-        """Delete existing cups and re-add with current UI settings."""
+        """Reposition existing cups with current UI settings, preserving action graphs."""
         self._on_cup_layout_changed()  # sync UI → config
         self.delete_cups()
         self.add_cups()
+        # Re-create drop poses action graph (delete_cups removes it)
+        self._cmd_publish_drop_poses()
 
     def add_cups(self, container_path="/World/Containers"):
         """Add colored cups using CUP_LAYOUT config (arc or line mode).
@@ -2557,6 +2599,8 @@ class DigitalTwin(omni.ext.IExt):
             positions = _cup_positions_arc()
 
         # --- Second pass: apply transforms, collision, physics ---
+        # Anchor cups around the shoulder pan axis, not world origin
+        pan_xy = _get_pan_axis_xy()
         placed = 0
         for color_name in colors:
             prim_path = f"{container_path}/cup_{color_name}"
@@ -2565,19 +2609,19 @@ class DigitalTwin(omni.ext.IExt):
                 continue
 
             fwd, lat = positions.get(color_name, (0, 0))
-            x, y = _to_world(fwd, lat)
+            x, y = _to_world(fwd, lat, anchor=pan_xy)
             z = self._ground_plane_z
 
-            # Compute orientation: face_origin rotates cup to face the robot base
-            if CUP_LAYOUT.get("face_origin", False) and (x != 0 or y != 0):
+            # Compute orientation: face_origin rotates cup to face the pan axis
+            dx_pan, dy_pan = x - pan_xy[0], y - pan_xy[1]
+            if CUP_LAYOUT.get("face_origin", False) and (abs(dx_pan) > 1e-4 or abs(dy_pan) > 1e-4):
                 if mode == "arc":
-                    # Arc mode: each cup faces origin individually
-                    yaw_rad = math.atan2(-y, -x)
+                    # Arc mode: each cup faces pan axis individually
+                    yaw_rad = math.atan2(-dy_pan, -dx_pan)
                 else:
                     # Line mode: all cups face the same direction (along the line's radial)
-                    # Use the configured angle, not each cup's individual position
                     angle_rad = math.radians(CUP_LAYOUT["angle_deg"])
-                    yaw_rad = angle_rad + math.pi  # face back toward origin along the radial
+                    yaw_rad = angle_rad + math.pi
                 # Quaternion for Z-axis rotation: (cos(θ/2), 0, 0, sin(θ/2))
                 orient = Gf.Quatd(math.cos(yaw_rad / 2), 0, 0, math.sin(yaw_rad / 2))
             else:
@@ -2790,12 +2834,19 @@ class DigitalTwin(omni.ext.IExt):
             print(f"[aruco] Blender generation failed: {e}")
 
     def delete_cups(self, container_path="/World/Containers"):
-        """Delete all cups and their ArUco markers from the scene."""
+        """Delete all cups, ArUco markers, drop pose graph, and wrapper prims."""
         stage = omni.usd.get_context().get_stage()
+
+        # Remove drop poses action graph FIRST (references container prims)
+        drop_graph = stage.GetPrimAtPath("/Graph/ActionGraph_drop_poses")
+        if drop_graph and drop_graph.IsValid():
+            stage.RemovePrim("/Graph/ActionGraph_drop_poses")
+            print("[delete_cups] Removed /Graph/ActionGraph_drop_poses")
+
         prim = stage.GetPrimAtPath(container_path)
         if prim and prim.IsValid():
             stage.RemovePrim(container_path)
-            print(f"[delete_cups] Deleted {container_path} (including ArUco markers)")
+            print(f"[delete_cups] Deleted {container_path} (including ArUco markers and drop wrappers)")
         else:
             print(f"[delete_cups] {container_path} does not exist")
 
@@ -3885,14 +3936,14 @@ class DigitalTwin(omni.ext.IExt):
             print("Error: /World/Objects does not exist. Add objects first.")
             return
 
-        # Clean up previous
-        self._stop_bbox_publisher()
-
         graph_path = "/Graph/ActionGraph_objects_bbox"
         existing = stage.GetPrimAtPath(graph_path)
         if existing and existing.IsValid():
             print(f"BBox publisher already exists at {graph_path}")
             return
+
+        # Clean up previous
+        self._stop_bbox_publisher()
 
         keys = og.Controller.Keys
         (graph, nodes, _, _) = og.Controller.edit(
@@ -4752,6 +4803,130 @@ class DigitalTwin(omni.ext.IExt):
                 "message": f"Added {len(cup_info)} cups in arc",
                 "cup_positions": positions_summary
             }
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_publish_drop_poses(self) -> Dict[str, Any]:
+        """MCP handler: publish ArUco marker poses for each cup to /drop_poses.
+
+        Creates wrapper Xform prims (drop_0, drop_1, drop_2) at each
+        ArUco marker's world transform, then builds action graph
+        /Graph/ActionGraph_drop_poses with ROS2PublishTransformTree targeting
+        the wrapper prims. This ensures child_frame_ids are drop_0, drop_1, drop_2
+        rather than all being 'aruco_marker_mesh'.
+
+        Requires cups to be present in the scene (add_cups must be called first).
+        """
+        try:
+            import omni.usd
+            import omni.graph.core as og
+            from pxr import Sdf, UsdGeom, Gf
+
+            graph_path = "/Graph/ActionGraph_drop_poses"
+            topic_name = "drop_poses"
+            parent_prim = "/World"
+
+            stage = omni.usd.get_context().get_stage()
+            if not stage:
+                return {"status": "error", "message": "No stage found"}
+
+            # Guard: skip if already created
+            existing = stage.GetPrimAtPath(graph_path)
+            if existing and existing.IsValid():
+                return {"status": "success", "message": f"Action graph already exists at {graph_path}"}
+
+            # Build wrapper Xform prims at each ArUco marker's world transform
+            color_to_id = CUP_ARUCO_CONFIG["ids"]  # {red:0, green:1, blue:2}
+            target_prims = []
+            found_colors = []
+            for color, aruco_id in color_to_id.items():
+                mesh_path = f"/World/Containers/cup_{color}/aruco_{aruco_id:03d}/aruco_marker_mesh"
+                mesh_prim = stage.GetPrimAtPath(mesh_path)
+                if not (mesh_prim and mesh_prim.IsValid()):
+                    print(f"[drop_poses] Warning: ArUco mesh not found at {mesh_path} — skipping {color}")
+                    continue
+
+                # Get world transform of the ArUco marker mesh
+                xformable = UsdGeom.Xformable(mesh_prim)
+                world_xform = xformable.ComputeLocalToWorldTransform(0)
+
+                # Create wrapper Xform prim named drop_{aruco_id}
+                wrapper_path = f"/World/Containers/drop_{aruco_id}"
+                wrapper_prim = stage.GetPrimAtPath(wrapper_path)
+                if not (wrapper_prim and wrapper_prim.IsValid()):
+                    wrapper_prim = UsdGeom.Xform.Define(stage, wrapper_path).GetPrim()
+
+                # Apply the world transform to the wrapper
+                wrapper_xformable = UsdGeom.Xformable(wrapper_prim)
+                wrapper_xformable.ClearXformOpOrder()
+                xform_op = wrapper_xformable.AddTransformOp()
+                xform_op.Set(world_xform)
+
+                target_prims.append(wrapper_path)
+                found_colors.append(color)
+                print(f"[drop_poses] Created wrapper {wrapper_path} at ArUco marker transform")
+
+            if not target_prims:
+                return {
+                    "status": "error",
+                    "message": "No ArUco marker meshes found. Add cups first (add_cups / Add Cups button)."
+                }
+
+            # Create the action graph — same pattern as ActionGraph_objects_poses
+            keys = og.Controller.Keys
+            (graph, nodes, _, _) = og.Controller.edit(
+                {
+                    "graph_path": graph_path,
+                    "evaluator_name": "execution",
+                },
+                {
+                    keys.CREATE_NODES: [
+                        ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
+                        ("ros2_context", "isaacsim.ros2.bridge.ROS2Context"),
+                        ("isaac_read_simulation_time", "isaacsim.core.nodes.IsaacReadSimulationTime"),
+                        ("ros2_publish_transform_tree", "isaacsim.ros2.bridge.ROS2PublishTransformTree"),
+                    ],
+                    keys.CONNECT: [
+                        ("on_playback_tick.outputs:tick", "ros2_publish_transform_tree.inputs:execIn"),
+                        ("ros2_context.outputs:context", "ros2_publish_transform_tree.inputs:context"),
+                        ("isaac_read_simulation_time.outputs:simulationTime", "ros2_publish_transform_tree.inputs:timeStamp"),
+                    ],
+                    keys.SET_VALUES: [
+                        ("ros2_publish_transform_tree.inputs:topicName", topic_name),
+                        ("isaac_read_simulation_time.inputs:resetOnStop", False),
+                    ],
+                },
+            )
+
+            # Wire USD relationships (must be done after graph creation)
+            ros2_node_path = f"{graph_path}/ros2_publish_transform_tree"
+            ros2_prim = stage.GetPrimAtPath(ros2_node_path)
+
+            if not ros2_prim.IsValid():
+                return {"status": "error", "message": f"Could not find ROS2 node at {ros2_node_path}"}
+
+            parent_rel = ros2_prim.GetRelationship("inputs:parentPrim")
+            if not parent_rel:
+                parent_rel = ros2_prim.CreateRelationship("inputs:parentPrim", custom=True)
+            parent_rel.SetTargets([Sdf.Path(parent_prim)])
+
+            target_rel = ros2_prim.GetRelationship("inputs:targetPrims")
+            if not target_rel:
+                target_rel = ros2_prim.CreateRelationship("inputs:targetPrims", custom=True)
+            target_rel.SetTargets([Sdf.Path(p) for p in target_prims])
+
+            print(f"[drop_poses] Action graph created at {graph_path}")
+            print(f"[drop_poses] Publishing {len(target_prims)} drop poses to topic: /{topic_name}")
+            print(f"[drop_poses] Cups found: {found_colors}")
+
+            return {
+                "status": "success",
+                "message": f"Publishing /drop_poses for cups: {found_colors}",
+                "graph_path": graph_path,
+                "target_prims": target_prims,
+            }
+
         except Exception as e:
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
