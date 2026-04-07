@@ -246,6 +246,10 @@ MCP_TOOL_REGISTRY = {
         "description": "Stop the current real-time viewport recording and finalize the MP4 video file. Returns the output file path and frame count.",
         "parameters": {}
     },
+    "get_recording_status": {
+        "description": "Check if viewport video recording is currently active. Returns status, frame count, elapsed time, output path, and FPS.",
+        "parameters": {}
+    },
 }
 
 # Handler method names for each tool (maps to self._cmd_<name> methods)
@@ -266,6 +270,7 @@ MCP_HANDLERS = {
     "quick_start": "_cmd_quick_start",
     "start_recording": "_cmd_start_recording",
     "stop_recording": "_cmd_stop_recording",
+    "get_recording_status": "_cmd_get_recording_status",
 }
 
 from isaacsim.core.utils.stage import add_reference_to_stage
@@ -1417,6 +1422,32 @@ class DigitalTwin(omni.ext.IExt):
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
+    def _cmd_get_recording_status(self) -> Dict[str, Any]:
+        """MCP handler: get current recording status."""
+        mgr = _recording_mgr
+        if not mgr.is_recording():
+            return {"status": "success", "message": "Status: Not recording"}
+        import time as _time
+        elapsed = _time.time() - mgr.start_time if mgr.start_time else 0
+        video_dur = round(mgr.frame_count / mgr.fps, 2) if mgr.fps else 0
+        return {
+            "status": "success",
+            "message": (
+                f"Status: Recording in progress\n"
+                f"  Output: {mgr.output_path}\n"
+                f"  FPS: {mgr.fps}\n"
+                f"  Frames recorded: {mgr.frame_count}\n"
+                f"  Video duration: {video_dur}s\n"
+                f"  Wall-clock elapsed: {round(elapsed, 1)}s"
+            ),
+            "recording": True,
+            "file_path": mgr.output_path,
+            "frame_count": mgr.frame_count,
+            "fps": mgr.fps,
+            "video_duration": video_dur,
+            "elapsed": round(elapsed, 1),
+        }
+
     def _apply_ground_style(self):
         """Apply a ground plane visual style by creating an OmniPBR material and binding
         it at the Xform root of the ground plane (where the default binding lives)."""
@@ -1613,7 +1644,7 @@ class DigitalTwin(omni.ext.IExt):
 
         # Set minimum frame rate to 60
         settings = carb.settings.get_settings()
-        settings.set("/persistent/simulation/minFrameRate", self._min_frame_rate)
+        settings.set("/persistent/simulation/minFrameRate", getattr(self, '_min_frame_rate', 60))
         print(f"Set persistent/simulation/minFrameRate to {self._min_frame_rate}")
 
         # Configure physics scene
@@ -1621,9 +1652,9 @@ class DigitalTwin(omni.ext.IExt):
         if physics_scene_prim and physics_scene_prim.IsValid():
             physx_scene_api = PhysxSchema.PhysxSceneAPI.Apply(physics_scene_prim)
             physx_scene_api.CreateEnableGPUDynamicsAttr().Set(False)
-            physx_scene_api.CreateTimeStepsPerSecondAttr().Set(self._time_steps_per_second)
+            physx_scene_api.CreateTimeStepsPerSecondAttr().Set(getattr(self, '_time_steps_per_second', 120))
             physx_scene_api.CreateEnableCCDAttr().Set(False)
-            print(f"GPU dynamics disabled, timeStepsPerSecond={self._time_steps_per_second}, CCD disabled on /physicsScene")
+            print(f"GPU dynamics disabled, timeStepsPerSecond={getattr(self, '_time_steps_per_second', 120)}, CCD disabled on /physicsScene")
         else:
             print("Warning: /physicsScene not found")
 
@@ -1688,6 +1719,29 @@ class DigitalTwin(omni.ext.IExt):
         print("--- Creating Workspace Camera (1280x720) ---")
         stage = omni.usd.get_context().get_stage()
         ws_prim_path = "/World/workspace_camera_sim"
+
+        # Skip if workspace camera already exists
+        ws_existing = stage.GetPrimAtPath(ws_prim_path)
+        if ws_existing and ws_existing.IsValid():
+            print(f"Workspace camera already exists at {ws_prim_path}, skipping creation.")
+            ws_width, ws_height = 1280, 720
+            await app.next_update_async()
+
+            # Still ensure action graph exists
+            print("--- Setting up Workspace Camera Action Graph (1280x720) ---")
+            ag_path = f"/Graph/ActionGraph_WorkspaceCameraSim"
+            if not stage.GetPrimAtPath(ag_path):
+                self._create_camera_actiongraph(
+                    ws_prim_path, ws_width, ws_height,
+                    "workspace_camera_sim", "WorkspaceCameraSim"
+                )
+                await app.next_update_async()
+            else:
+                print(f"Action graph already exists at {ag_path}, skipping.")
+
+            print("=== Quick Start Complete ===")
+            return
+
         # Default centered pose
         ws_position = (0.6293466593898318, -1.2106887168521516, 0.8575915712414524)
         ws_quat_xyzw = (0.4842, 0.1458, 0.2488, 0.8261)  # xyzw → Quatd(w, x, y, z)
@@ -1752,6 +1806,13 @@ class DigitalTwin(omni.ext.IExt):
     async def load_ur5e(self):
         asset_path = _local_asset("robot/ur5e.usd")
         prim_path = "/World/UR5e"
+
+        # Skip if UR5e already loaded
+        stage = omni.usd.get_context().get_stage()
+        existing = stage.GetPrimAtPath(prim_path)
+        if existing and existing.IsValid():
+            print(f"UR5e already exists at {prim_path}, skipping import.")
+            return
 
         # 1. Ensure World exists - create and initialize if needed (won't clear existing stage)
         world = World.instance()
@@ -2135,6 +2196,11 @@ class DigitalTwin(omni.ext.IExt):
 
         print("Setting up UR5e Force Publisher (WrenchStamped)...")
 
+        # Skip if already active (physics callback running)
+        if getattr(self, '_force_publish_active', False) and getattr(self, '_force_physx_sub', None) is not None:
+            print("Force publisher already active, skipping setup.")
+            return
+
         # Clean up any previous physics callback
         self._stop_force_publish()
 
@@ -2240,6 +2306,14 @@ class DigitalTwin(omni.ext.IExt):
 
     def import_rg2_gripper(self):
         from isaacsim.core.utils.stage import add_reference_to_stage
+
+        # Skip if RG2 already loaded
+        stage = omni.usd.get_context().get_stage()
+        existing = stage.GetPrimAtPath("/World/RG2_Gripper")
+        if existing and existing.IsValid():
+            print("RG2 Gripper already exists at /World/RG2_Gripper, skipping import.")
+            return
+
         rg2_usd_path = _local_asset("gripper/RG2.usd")
         add_reference_to_stage(rg2_usd_path, "/World/RG2_Gripper")
         print("RG2 Gripper imported at /World/RG2_Gripper")
@@ -2300,6 +2374,14 @@ class DigitalTwin(omni.ext.IExt):
         rg2_path = "/World/RG2_Gripper"
         joint_path = "/World/UR5e/joints/robot_gripper_joint"
         rg2_base_link = "/World/RG2_Gripper/onrobot_rg2_base_link"
+
+        # Skip only if joint is fully connected (both body0 and body1 set)
+        joint_prim_check = stage.GetPrimAtPath(joint_path)
+        if joint_prim_check and joint_prim_check.IsValid():
+            _jnt = UsdPhysics.FixedJoint(joint_prim_check)
+            if _jnt.GetBody0Rel().GetTargets() and _jnt.GetBody1Rel().GetTargets():
+                print(f"Gripper already attached at {joint_path}, skipping.")
+                return
 
         ur5e_prim = stage.GetPrimAtPath(ur5e_gripper_path)
         rg2_prim = stage.GetPrimAtPath(rg2_path)
