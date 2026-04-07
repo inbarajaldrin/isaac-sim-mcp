@@ -1914,13 +1914,18 @@ class DigitalTwin(omni.ext.IExt):
             print(f"Workspace camera created at {ws_prim_path} with resolution {ws_width}x{ws_height}")
         await app.next_update_async()
 
-        # 9. Play the scene
+        # 9. Reset world to initialize all physics views (articulations need this)
+        world = World.instance()
+        if world:
+            await world.reset_async()
         await app.next_update_async()
+
+        # 10. Play the scene
         print("--- Playing scene ---")
         self._timeline.play()
         await app.next_update_async()
 
-        # 10. Start workspace camera publisher (viewport or action graph based on toggle)
+        # 11. Start workspace camera publisher (viewport or action graph based on toggle)
         print("--- Starting Workspace Camera Publisher ---")
         if self._viewport_pub_checkbox.model.get_value_as_bool():
             _viewport_pub.start(ws_prim_path, "workspace_camera_sim", frame_id="workspace_camera_sim")
