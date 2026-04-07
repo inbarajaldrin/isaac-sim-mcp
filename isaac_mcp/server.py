@@ -363,8 +363,8 @@ def _tool_implementation(name: str, params: Dict[str, Any]) -> str:
     """Shared implementation for all dynamic tools."""
     global _isaac_connection
 
-    # Add output_dir for scene state tools
-    if name in ["save_scene_state", "restore_scene_state"]:
+    # Add output_dir for tools that save files
+    if name in ["save_scene_state", "restore_scene_state", "start_recording"]:
         if BASE_OUTPUT_DIR:
             params["output_dir"] = BASE_OUTPUT_DIR
 
