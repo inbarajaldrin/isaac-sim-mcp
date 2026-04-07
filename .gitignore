@@ -76,3 +76,6 @@ mcp_cache/
 
 # Resources (generated scene state files)
 resources/
+
+# Video recordings
+**/videos/

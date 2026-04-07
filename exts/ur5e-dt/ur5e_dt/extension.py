@@ -27,12 +27,59 @@ BASE_OUTPUT_DIR = os.getenv("MCP_CLIENT_OUTPUT_DIR", "").strip()
 if BASE_OUTPUT_DIR:
     BASE_OUTPUT_DIR = os.path.abspath(BASE_OUTPUT_DIR)
     RESOURCES_DIR = os.path.join(BASE_OUTPUT_DIR, "resources")
+    VIDEOS_DIR = os.path.join(BASE_OUTPUT_DIR, "videos")
 else:
     RESOURCES_DIR = "resources"
+    VIDEOS_DIR = ""  # resolved below after _ext_dir
 
 # Local asset paths (no Nucleus dependency)
 _ext_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if not VIDEOS_DIR:
+    VIDEOS_DIR = os.path.join(_ext_dir, "videos")
 _assets_dir = os.path.join(_ext_dir, "assets")
+
+
+# Module-level recording manager — survives hot-reloads because we guard against re-init.
+# Hot-reload re-executes the module, but _recording_mgr persists if already set.
+class _RecordingState:
+    """Holds ffmpeg process and recording state outside the extension class."""
+    def __init__(self):
+        self.ffmpeg_proc = None
+        self.frame_sub = None
+        self.recording = False
+        self.output_path = None
+        self.frame_count = 0
+        self.start_time = 0
+        self.fps = 30
+        self.last_print = 0
+        self.state_dir = "/tmp/isaacsim_recording"
+        self.state_file = os.path.join(self.state_dir, "recorder_state.json")
+
+    def save_state(self):
+        os.makedirs(self.state_dir, exist_ok=True)
+        with open(self.state_file, "w") as f:
+            json.dump({"recording": True, "output_path": self.output_path, "fps": self.fps}, f)
+
+    def clear_state(self):
+        if os.path.exists(self.state_file):
+            os.remove(self.state_file)
+
+    def is_recording(self):
+        if self.recording and self.ffmpeg_proc is not None:
+            return True
+        # Check state file as fallback
+        if os.path.exists(self.state_file):
+            try:
+                with open(self.state_file, "r") as f:
+                    state = json.load(f)
+                return state.get("recording", False)
+            except (json.JSONDecodeError, FileNotFoundError):
+                pass
+        return False
+
+# Guard: don't re-create if already exists from previous hot-reload
+if '_recording_mgr' not in globals():
+    _recording_mgr = _RecordingState()
 
 
 def _local_asset(relpath):
@@ -178,6 +225,27 @@ MCP_TOOL_REGISTRY = {
         "description": "One-click scene setup: loads the table scene, imports UR5e robot with action graphs, attaches RG2 gripper with action graphs, creates workspace camera, and starts simulation. Use after new_stage to rebuild the scene from scratch.",
         "parameters": {}
     },
+    "start_recording": {
+        "description": "Start real-time viewport video recording using ffmpeg. Records frames from the viewport render buffer without blocking physics. Returns immediately — call stop_recording to finalize the video.",
+        "parameters": {
+            "file_name": {
+                "type": "string",
+                "description": "Output filename (e.g. 'my_recording.mp4'). Saved to the configured VIDEOS_DIR. Defaults to 'realtime_recording.mp4'."
+            },
+            "camera": {
+                "type": "string",
+                "description": "Camera prim path to record from (e.g. '/World/workspace_camera_sim'). If omitted, uses the active viewport camera."
+            },
+            "fps": {
+                "type": "integer",
+                "description": "Frames per second for the output video. Defaults to 30."
+            }
+        }
+    },
+    "stop_recording": {
+        "description": "Stop the current real-time viewport recording and finalize the MP4 video file. Returns the output file path and frame count.",
+        "parameters": {}
+    },
 }
 
 # Handler method names for each tool (maps to self._cmd_<name> methods)
@@ -196,6 +264,8 @@ MCP_HANDLERS = {
     "sync_real_poses": "_cmd_sync_real_poses",
     "new_stage": "_cmd_new_stage",
     "quick_start": "_cmd_quick_start",
+    "start_recording": "_cmd_start_recording",
+    "stop_recording": "_cmd_stop_recording",
 }
 
 from isaacsim.core.utils.stage import add_reference_to_stage
@@ -359,7 +429,8 @@ class DigitalTwin(omni.ext.IExt):
                         ui.Button("Load Scene", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_scene()))
                         self._viewport_toggle_btn = ui.Button("Disable Viewport", width=140, height=35, clicked_fn=self._toggle_viewport_rendering)
                         ui.Button("Quick Start", width=120, height=35, clicked_fn=lambda: asyncio.ensure_future(self.quick_start()))
-
+                    with ui.HStack(spacing=5):
+                        ui.Button("Dark Studio Ground", width=160, height=30, clicked_fn=self._apply_dark_studio_ground)
 
             with ui.CollapsableFrame(title="UR5e Control", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
@@ -382,44 +453,6 @@ class DigitalTwin(omni.ext.IExt):
                         ui.Button("Import RealSense Camera", width=170, height=35, clicked_fn=self.import_realsense_camera)
                         ui.Button("Attach Camera to UR5e", width=160, height=35, clicked_fn=self.attach_camera_to_ur5e)
                         ui.Button("Setup Camera Action Graph", width=200, height=35, clicked_fn=self.setup_camera_action_graph)
-
-            # NEW SECTION: Additional Camera
-            with ui.CollapsableFrame(title="Additional Camera", collapsed=True, height=0):
-                with ui.VStack(spacing=5, height=0):
-                    ui.Label("Camera Configuration", alignment=ui.Alignment.LEFT)
-                    
-                    # Camera type selection with checkboxes and labels
-                    with ui.VStack(spacing=5):
-                        with ui.HStack(spacing=5):
-                            self._workspace_checkbox = ui.CheckBox(width=20)
-                            self._workspace_checkbox.model.set_value(False)  # Default unchecked
-                            ui.Label("Workspace Camera", alignment=ui.Alignment.LEFT, width=120)
-
-                        with ui.HStack(spacing=5):
-                            self._custom_checkbox = ui.CheckBox(width=20)
-                            ui.Label("Custom Camera", alignment=ui.Alignment.LEFT, width=120)
-
-                    # Custom camera prim path input
-                    with ui.HStack(spacing=5):
-                        ui.Label("Camera Prim Path:", alignment=ui.Alignment.LEFT, width=120)
-                        self._custom_camera_prim_field = ui.StringField(width=200)
-                        self._custom_camera_prim_field.model.set_value("/World/custom_camera")
-                    
-                    # Custom camera ROS2 topic name input
-                    with ui.HStack(spacing=5):
-                        ui.Label("ROS2 Topic Name:", alignment=ui.Alignment.LEFT, width=120)
-                        self._custom_camera_topic_field = ui.StringField(width=200)
-                        self._custom_camera_topic_field.model.set_value("custom_camera")
-
-                    # Resolution selection
-                    with ui.HStack(spacing=5):
-                        ui.Label("Resolution:", alignment=ui.Alignment.LEFT, width=120)
-                        self._resolution_combo = ui.ComboBox(0, "640x480", "1280x720", "1920x1080", width=150)
-
-                    # Camera control buttons
-                    with ui.HStack(spacing=5):
-                        ui.Button("Create Camera", width=150, height=35, clicked_fn=self.create_additional_camera)
-                        ui.Button("Create Action Graph", width=180, height=35, clicked_fn=self.create_additional_camera_actiongraph)
 
             with ui.CollapsableFrame(title="Objects", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
@@ -453,6 +486,137 @@ class DigitalTwin(omni.ext.IExt):
                                     clicked_fn=lambda: self._cmd_restore_scene_state())
                             with ui.CollapsableFrame(title="Exclude / Include Objects", collapsed=True, height=0):
                                 self._visibility_frame = ui.Frame(build_fn=self._build_visibility_ui)
+
+            # Additional Camera
+            with ui.CollapsableFrame(title="Additional Camera", collapsed=True, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    ui.Label("Camera Configuration", alignment=ui.Alignment.LEFT)
+                    with ui.VStack(spacing=5):
+                        with ui.HStack(spacing=5):
+                            self._workspace_checkbox = ui.CheckBox(width=20)
+                            self._workspace_checkbox.model.set_value(False)
+                            ui.Label("Workspace Camera", alignment=ui.Alignment.LEFT, width=120)
+                        with ui.HStack(spacing=5):
+                            self._custom_checkbox = ui.CheckBox(width=20)
+                            ui.Label("Custom Camera", alignment=ui.Alignment.LEFT, width=120)
+                    with ui.HStack(spacing=5):
+                        ui.Label("Camera Prim Path:", alignment=ui.Alignment.LEFT, width=120)
+                        self._custom_camera_prim_field = ui.StringField(width=200)
+                        self._custom_camera_prim_field.model.set_value("/World/custom_camera")
+                    with ui.HStack(spacing=5):
+                        ui.Label("ROS2 Topic Name:", alignment=ui.Alignment.LEFT, width=120)
+                        self._custom_camera_topic_field = ui.StringField(width=200)
+                        self._custom_camera_topic_field.model.set_value("custom_camera")
+                    with ui.HStack(spacing=5):
+                        ui.Label("Resolution:", alignment=ui.Alignment.LEFT, width=120)
+                        self._resolution_combo = ui.ComboBox(0, "640x480", "1280x720", "1920x1080", width=150)
+                    with ui.HStack(spacing=5):
+                        ui.Button("Create Camera", width=150, height=35, clicked_fn=self.create_additional_camera)
+                        ui.Button("Create Action Graph", width=180, height=35, clicked_fn=self.create_additional_camera_actiongraph)
+
+            # Lighting & Environment
+            with ui.CollapsableFrame(title="Lighting & Environment", collapsed=True, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    with ui.CollapsableFrame(title="Lighting Preset", name="subFrame", collapsed=False, height=0):
+                        with ui.VStack(spacing=5, height=0):
+                            with ui.HStack(spacing=5):
+                                ui.Label("Preset:", alignment=ui.Alignment.LEFT, width=80)
+                                self._lighting_preset_combo = ui.ComboBox(
+                                    0, "Default Dome", "Studio (3-Point)", "Dramatic (Sun + Fill)",
+                                    "Soft Diffuse", "HDRI: Photo Studio", "HDRI: Stormy Sky",
+                                    width=200,
+                                )
+                            ui.Button("Apply Lighting Preset", height=35, clicked_fn=self._apply_lighting_preset)
+                    with ui.CollapsableFrame(title="Manual Light Controls", name="subFrame", collapsed=True, height=0):
+                        with ui.VStack(spacing=5, height=0):
+                            with ui.HStack(spacing=5):
+                                ui.Label("Dome Intensity:", alignment=ui.Alignment.LEFT, width=120)
+                                self._dome_intensity_slider = ui.FloatSlider(min=0, max=5000, step=50, width=200)
+                                self._dome_intensity_slider.model.set_value(1000.0)
+                            ui.Button("Set Dome Intensity", height=30, clicked_fn=self._set_dome_intensity)
+                            with ui.HStack(spacing=5):
+                                ui.Label("Color Temp (K):", alignment=ui.Alignment.LEFT, width=120)
+                                self._dome_temp_slider = ui.FloatSlider(min=2000, max=10000, step=100, width=200)
+                                self._dome_temp_slider.model.set_value(6500.0)
+                            with ui.HStack(spacing=5):
+                                self._dome_temp_enable = ui.CheckBox(width=20)
+                                self._dome_temp_enable.model.set_value(False)
+                                ui.Label("Enable Color Temperature", alignment=ui.Alignment.LEFT)
+                            ui.Button("Set Color Temperature", height=30, clicked_fn=self._set_dome_color_temp)
+                            ui.Separator(height=5)
+                            with ui.HStack(spacing=5):
+                                ui.Label("Add Light:", alignment=ui.Alignment.LEFT, width=80)
+                                self._add_light_combo = ui.ComboBox(0, "Rect Light", "Sphere Light", "Distant Light", width=150)
+                            with ui.HStack(spacing=5):
+                                ui.Label("Intensity:", alignment=ui.Alignment.LEFT, width=80)
+                                self._add_light_intensity = ui.FloatField(width=100)
+                                self._add_light_intensity.model.set_value(500.0)
+                            ui.Button("Add Light", height=30, clicked_fn=self._add_manual_light)
+                            ui.Button("Remove All Extra Lights", height=30, clicked_fn=self._remove_extra_lights)
+                    with ui.CollapsableFrame(title="Ground Appearance", name="subFrame", collapsed=False, height=0):
+                        with ui.VStack(spacing=5, height=0):
+                            with ui.HStack(spacing=5):
+                                ui.Label("Ground Style:", alignment=ui.Alignment.LEFT, width=100)
+                                self._ground_style_combo = ui.ComboBox(
+                                    0, "Default Grey", "White Studio", "Dark Studio",
+                                    "Concrete", "Invisible (Physics Only)",
+                                    width=200,
+                                )
+                            with ui.HStack(spacing=5):
+                                ui.Label("Roughness:", alignment=ui.Alignment.LEFT, width=100)
+                                self._ground_roughness_slider = ui.FloatSlider(min=0.0, max=1.0, step=0.05, width=200)
+                                self._ground_roughness_slider.model.set_value(0.5)
+                            ui.Button("Apply Ground Style", height=35, clicked_fn=self._apply_ground_style)
+                    with ui.CollapsableFrame(title="Background", name="subFrame", collapsed=True, height=0):
+                        with ui.VStack(spacing=5, height=0):
+                            with ui.HStack(spacing=5):
+                                ui.Label("Background:", alignment=ui.Alignment.LEFT, width=100)
+                                self._bg_combo = ui.ComboBox(
+                                    0, "From Dome Light (HDRI/Default)", "Solid White",
+                                    "Solid Black", "Solid Light Grey",
+                                    width=250,
+                                )
+                            ui.Button("Apply Background", height=35, clicked_fn=self._apply_background)
+                    ui.Separator(height=5)
+                    ui.Button("Reset to Defaults", height=30, clicked_fn=self._reset_lighting_defaults)
+
+            # Video Recording
+            self._rec_collapse = ui.CollapsableFrame(title="Video Recording", collapsed=True, height=0)
+            self._rec_collapse.set_collapsed_changed_fn(lambda collapsed: None if collapsed else self._refresh_camera_list())
+            with self._rec_collapse:
+                with ui.VStack(spacing=5, height=0):
+                    with ui.HStack(spacing=5):
+                        ui.Label("Camera:", alignment=ui.Alignment.LEFT, width=80)
+                        self._rec_camera_frame = ui.Frame(width=250)
+                        with self._rec_camera_frame:
+                            self._rec_camera_combo = ui.ComboBox(0, "Active Viewport", width=250)
+                    with ui.HStack(spacing=5):
+                        ui.Label("Filename:", alignment=ui.Alignment.LEFT, width=80)
+                        self._rec_filename_field = ui.StringField(width=250)
+                        self._rec_filename_field.model.set_value("")
+                    ui.Label("Leave empty for auto: isaacsim_YYYY-MM-DD_HH-MM-SS.mp4", style={"color": 0xFF888888, "font_size": 11}, height=0)
+                    with ui.HStack(spacing=5):
+                        ui.Label("Duration (s):", alignment=ui.Alignment.LEFT, width=80)
+                        self._rec_duration_field = ui.FloatField(width=80)
+                        self._rec_duration_field.model.set_value(0.0)
+                    ui.Label("0 = manual stop (ffmpeg only). Per-physics-step always uses this duration.", style={"color": 0xFF888888, "font_size": 11}, height=0)
+                    with ui.CollapsableFrame(title="Real-Time Recording (ffmpeg)", name="subFrame", collapsed=False, height=0):
+                        with ui.VStack(spacing=5, height=0):
+                            with ui.HStack(spacing=5):
+                                self._rt_record_btn = ui.Button("Start Recording", width=150, height=35, clicked_fn=self._start_rt_from_ui)
+                                self._rt_stop_btn = ui.Button("Stop Recording", width=150, height=35, clicked_fn=self._stop_realtime_recording, enabled=False)
+                    with ui.CollapsableFrame(title="Per-Physics-Step Recording (no dropped frames)", name="subFrame", collapsed=True, height=0):
+                        with ui.VStack(spacing=5, height=0):
+                            with ui.HStack(spacing=5):
+                                ui.Label("Resolution:", alignment=ui.Alignment.LEFT, width=100)
+                                self._offline_res_combo = ui.ComboBox(2, "640x480", "1280x720", "1920x1080", "2560x1440", "3840x2160", width=150)
+                            with ui.HStack(spacing=5):
+                                ui.Label("FPS:", alignment=ui.Alignment.LEFT, width=100)
+                                self._offline_fps_field = ui.IntField(width=80)
+                                self._offline_fps_field.model.set_value(30)
+                            ui.Button("Record", height=35, clicked_fn=lambda: asyncio.ensure_future(self._record_offline_from_ui()))
+                    self._last_video_label = ui.Label("", alignment=ui.Alignment.LEFT, word_wrap=True, height=0)
+                    ui.Button("Open Videos Folder", height=25, clicked_fn=self._open_videos_folder)
 
             with ui.CollapsableFrame(title="Logs", collapsed=True, height=0):
                 with ui.VStack(spacing=3, height=0):
@@ -673,6 +837,746 @@ class DigitalTwin(omni.ext.IExt):
     def _assembly_file_path(self):
         return ASSEMBLIES[self._selected_assembly]["assembly_file"]
 
+    # ==================== Lighting & Environment ====================
+
+    def _clear_all_lights(self):
+        """Remove all light prims under /World/Lights/."""
+        from pxr import UsdLux
+        stage = omni.usd.get_context().get_stage()
+        lights_prim = stage.GetPrimAtPath("/World/Lights")
+        if lights_prim and lights_prim.IsValid():
+            stage.RemovePrim("/World/Lights")
+        # Also remove the default dome light if it exists
+        default_dome = stage.GetPrimAtPath("/World/defaultDomeLight")
+        if default_dome and default_dome.IsValid():
+            stage.RemovePrim("/World/defaultDomeLight")
+
+    def _ensure_lights_scope(self):
+        """Ensure /World/Lights scope exists."""
+        from pxr import UsdGeom
+        stage = omni.usd.get_context().get_stage()
+        lights_prim = stage.GetPrimAtPath("/World/Lights")
+        if not lights_prim or not lights_prim.IsValid():
+            UsdGeom.Scope.Define(stage, "/World/Lights")
+
+    def _apply_lighting_preset(self):
+        """Apply the selected lighting preset, clearing previous lights first."""
+        from pxr import UsdLux, UsdGeom, Gf, Sdf
+        stage = omni.usd.get_context().get_stage()
+        idx = self._lighting_preset_combo.model.get_item_value_model().as_int
+        presets = [
+            "Default Dome", "Studio (3-Point)", "Dramatic (Sun + Fill)",
+            "Soft Diffuse", "HDRI: Photo Studio", "HDRI: Stormy Sky",
+        ]
+        preset = presets[idx]
+
+        self._clear_all_lights()
+        self._ensure_lights_scope()
+
+        if preset == "Default Dome":
+            dome = UsdLux.DomeLight.Define(stage, "/World/Lights/DomeLight")
+            dome.CreateIntensityAttr().Set(1000.0)
+            print("Applied preset: Default Dome (intensity=1000)")
+
+        elif preset == "Studio (3-Point)":
+            # Key light — strong, from upper-right-front
+            key = UsdLux.RectLight.Define(stage, "/World/Lights/KeyLight")
+            key.CreateIntensityAttr().Set(800.0)
+            key.CreateWidthAttr().Set(1.0)
+            key.CreateHeightAttr().Set(1.0)
+            xform = UsdGeom.Xform(key.GetPrim())
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(1.5, -1.0, 2.0))
+            xform.AddRotateXYZOp().Set(Gf.Vec3f(-45, 30, 0))
+
+            # Fill light — softer, from upper-left
+            fill = UsdLux.RectLight.Define(stage, "/World/Lights/FillLight")
+            fill.CreateIntensityAttr().Set(300.0)
+            fill.CreateWidthAttr().Set(1.5)
+            fill.CreateHeightAttr().Set(1.5)
+            xform = UsdGeom.Xform(fill.GetPrim())
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(-1.5, -0.5, 1.8))
+            xform.AddRotateXYZOp().Set(Gf.Vec3f(-40, -30, 0))
+
+            # Rim/back light — highlights edges from behind
+            rim = UsdLux.RectLight.Define(stage, "/World/Lights/RimLight")
+            rim.CreateIntensityAttr().Set(500.0)
+            rim.CreateWidthAttr().Set(0.8)
+            rim.CreateHeightAttr().Set(0.8)
+            xform = UsdGeom.Xform(rim.GetPrim())
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 1.5, 2.5))
+            xform.AddRotateXYZOp().Set(Gf.Vec3f(-60, 180, 0))
+
+            # Dim dome fill for ambient
+            dome = UsdLux.DomeLight.Define(stage, "/World/Lights/DomeFill")
+            dome.CreateIntensityAttr().Set(150.0)
+            print("Applied preset: Studio (3-Point) — key/fill/rim + dim dome fill")
+
+        elif preset == "Dramatic (Sun + Fill)":
+            sun = UsdLux.DistantLight.Define(stage, "/World/Lights/SunLight")
+            sun.CreateIntensityAttr().Set(3000.0)
+            sun.CreateAngleAttr().Set(0.53)  # sun-sized disc
+            xform = UsdGeom.Xform(sun.GetPrim())
+            xform.ClearXformOpOrder()
+            xform.AddRotateXYZOp().Set(Gf.Vec3f(-55, 35, 0))
+
+            dome = UsdLux.DomeLight.Define(stage, "/World/Lights/DomeFill")
+            dome.CreateIntensityAttr().Set(100.0)
+            print("Applied preset: Dramatic (Sun + Fill) — strong directional + dim dome")
+
+        elif preset == "Soft Diffuse":
+            dome = UsdLux.DomeLight.Define(stage, "/World/Lights/DomeLight")
+            dome.CreateIntensityAttr().Set(2500.0)
+            print("Applied preset: Soft Diffuse — high-intensity dome, no directional")
+
+        elif preset.startswith("HDRI:"):
+            hdri_map = {
+                "HDRI: Photo Studio": os.path.expanduser(
+                    "~/env_isaaclab/lib/python3.11/site-packages/isaacsim/extscache/"
+                    "omni.kit.widget.material_preview-1.0.16/data/photo_studio_01_4k.hdr"
+                ),
+                "HDRI: Stormy Sky": os.path.expanduser(
+                    "~/env_isaaclab/lib/python3.11/site-packages/isaacsim/extscache/"
+                    "omni.kit.tool.collect-2.2.18+8131b85d/data/test_stages/OM_55150/"
+                    "2/Assets/Skies/2022_1/Skies/Storm/approaching_storm.hdr"
+                ),
+            }
+            hdr_path = hdri_map.get(preset, "")
+            dome = UsdLux.DomeLight.Define(stage, "/World/Lights/DomeLight")
+            dome.CreateIntensityAttr().Set(1000.0)
+            if os.path.exists(hdr_path):
+                dome.CreateTextureFileAttr().Set(hdr_path)
+                print(f"Applied preset: {preset} — HDRI dome from {os.path.basename(hdr_path)}")
+            else:
+                print(f"Warning: HDRI file not found at {hdr_path}, using plain dome instead")
+
+        # Sync slider to match new dome intensity
+        self._sync_dome_slider_from_stage()
+
+    def _sync_dome_slider_from_stage(self):
+        """Update the dome intensity slider to reflect the current stage value."""
+        from pxr import UsdLux
+        stage = omni.usd.get_context().get_stage()
+        for prim in stage.Traverse():
+            if prim.IsA(UsdLux.DomeLight):
+                intensity = prim.GetAttribute("inputs:intensity").Get()
+                if intensity is not None:
+                    self._dome_intensity_slider.model.set_value(float(intensity))
+                break
+
+    def _set_dome_intensity(self):
+        """Set intensity on all dome lights in the scene."""
+        from pxr import UsdLux
+        stage = omni.usd.get_context().get_stage()
+        val = self._dome_intensity_slider.model.as_float
+        found = False
+        for prim in stage.Traverse():
+            if prim.IsA(UsdLux.DomeLight):
+                prim.GetAttribute("inputs:intensity").Set(val)
+                found = True
+        if found:
+            print(f"Dome light intensity set to {val}")
+        else:
+            print("No dome light found. Apply a lighting preset first.")
+
+    def _set_dome_color_temp(self):
+        """Set color temperature on all dome lights."""
+        from pxr import UsdLux
+        stage = omni.usd.get_context().get_stage()
+        temp = self._dome_temp_slider.model.as_float
+        enable = self._dome_temp_enable.model.get_value_as_bool()
+        found = False
+        for prim in stage.Traverse():
+            if prim.IsA(UsdLux.DomeLight):
+                prim.GetAttribute("inputs:enableColorTemperature").Set(enable)
+                if enable:
+                    prim.GetAttribute("inputs:colorTemperature").Set(temp)
+                found = True
+        if found:
+            if enable:
+                print(f"Dome color temperature set to {temp}K")
+            else:
+                print("Dome color temperature disabled (using default white)")
+        else:
+            print("No dome light found. Apply a lighting preset first.")
+
+    def _add_manual_light(self):
+        """Add a single light to /World/Lights/ with auto-incrementing name."""
+        from pxr import UsdLux, UsdGeom, Gf
+        stage = omni.usd.get_context().get_stage()
+        self._ensure_lights_scope()
+
+        idx = self._add_light_combo.model.get_item_value_model().as_int
+        light_types = ["Rect Light", "Sphere Light", "Distant Light"]
+        light_type = light_types[idx]
+        intensity = self._add_light_intensity.model.as_float
+
+        # Find next available index
+        i = 0
+        while stage.GetPrimAtPath(f"/World/Lights/Manual_{light_type.replace(' ', '')}_{i}"):
+            i += 1
+        path = f"/World/Lights/Manual_{light_type.replace(' ', '')}_{i}"
+
+        if light_type == "Rect Light":
+            light = UsdLux.RectLight.Define(stage, path)
+            light.CreateWidthAttr().Set(1.0)
+            light.CreateHeightAttr().Set(1.0)
+        elif light_type == "Sphere Light":
+            light = UsdLux.SphereLight.Define(stage, path)
+            light.CreateRadiusAttr().Set(0.2)
+        elif light_type == "Distant Light":
+            light = UsdLux.DistantLight.Define(stage, path)
+            light.CreateAngleAttr().Set(0.53)
+
+        light.CreateIntensityAttr().Set(intensity)
+
+        # Place it above the scene so it's immediately useful
+        xform = UsdGeom.Xform(light.GetPrim())
+        xform.ClearXformOpOrder()
+        xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 2.5))
+        xform.AddRotateXYZOp().Set(Gf.Vec3f(-90, 0, 0))
+
+        print(f"Added {light_type} at {path} (intensity={intensity}). Move it in the viewport to position.")
+
+    def _remove_extra_lights(self):
+        """Remove all manually added lights (under /World/Lights/Manual_*)."""
+        from pxr import Usd
+        stage = omni.usd.get_context().get_stage()
+        lights_prim = stage.GetPrimAtPath("/World/Lights")
+        if not lights_prim or not lights_prim.IsValid():
+            print("No extra lights to remove.")
+            return
+        removed = 0
+        for child in lights_prim.GetChildren():
+            if child.GetName().startswith("Manual_"):
+                stage.RemovePrim(child.GetPath())
+                removed += 1
+        print(f"Removed {removed} manual light(s).")
+
+    _ground_mat_path = None  # cached path for the OmniPBR ground material
+
+    def _apply_dark_studio_ground(self):
+        """Quick shortcut: apply Dark Studio ground style with default roughness."""
+        self._ground_style_combo.model.get_item_value_model().set_value(2)  # "Dark Studio"
+        self._ground_roughness_slider.model.set_value(0.5)
+        self._apply_ground_style()
+
+    # ==================== Video Recording ====================
+
+    def _open_videos_folder(self):
+        """Open the videos output folder in the system file manager."""
+        import subprocess
+        folder = VIDEOS_DIR
+        os.makedirs(folder, exist_ok=True)
+        # Use dbus to open folder — avoids Qt plugin conflicts inside Isaac Sim
+        env = os.environ.copy()
+        env["DISPLAY"] = ":0"
+        # Remove Isaac Sim's Qt plugin path that breaks external Qt apps
+        for key in list(env.keys()):
+            if "QT_PLUGIN" in key or "QT_QPA" in key:
+                del env[key]
+        subprocess.Popen(["xdg-open", folder], env=env)
+
+    def _get_recording_filename(self):
+        """Get filename from UI field, or generate auto name like ros2 recorder."""
+        from datetime import datetime
+        custom = self._rec_filename_field.model.as_string.strip()
+        if custom:
+            if not custom.endswith(".mp4"):
+                custom += ".mp4"
+            return custom
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        return f"isaacsim_{timestamp}.mp4"
+        print(f"Opening: {folder}")
+
+    def _refresh_camera_list(self):
+        """Scan the stage for all Camera prims and rebuild the camera combo box."""
+        from pxr import UsdGeom
+        stage = omni.usd.get_context().get_stage()
+        cameras = ["Active Viewport"]
+        for prim in stage.Traverse():
+            if prim.IsA(UsdGeom.Camera):
+                cameras.append(str(prim.GetPath()))
+        # Rebuild combo box inside its frame container
+        self._rec_camera_frame.clear()
+        with self._rec_camera_frame:
+            self._rec_camera_combo = ui.ComboBox(0, *cameras, width=250)
+        print(f"Found {len(cameras) - 1} camera(s): {cameras[1:]}")
+
+    def _get_selected_camera_path(self):
+        """Return the prim path of the selected camera, or None for active viewport."""
+        model = self._rec_camera_combo.model
+        idx = model.get_item_value_model().as_int
+        if idx == 0:
+            return None  # Active Viewport
+        items = model.get_item_children()
+        if idx < len(items):
+            return model.get_item_value_model(items[idx]).as_string
+        return None
+
+    # --- Offline Recording (frame capture, blocks physics) ---
+
+    async def _record_offline_from_ui(self):
+        """Record per-physics-step video using settings from the UI panel."""
+        duration = self._rec_duration_field.model.as_float
+        if duration <= 0:
+            print("Error: Set a duration > 0 for per-physics-step recording.")
+            return
+        fps = self._offline_fps_field.model.as_int
+        res_idx = self._offline_res_combo.model.get_item_value_model().as_int
+        res_options = ["640x480", "1280x720", "1920x1080", "2560x1440", "3840x2160"]
+        w, h = [int(x) for x in res_options[res_idx].split("x")]
+        camera_path = self._get_selected_camera_path()
+        file_name = self._get_recording_filename().replace(".mp4", "")  # _record_offline appends .mp4
+        await self._record_offline(duration_sec=duration, fps=fps, res_width=w, res_height=h,
+                                    camera_path=camera_path, file_name=file_name)
+
+    async def _record_offline(self, duration_sec=5, fps=30, res_width=1920, res_height=1080,
+                               camera_path=None, output_dir=None, file_name="offline_recording"):
+        """Record viewport to MP4 using per-physics-step frame capture."""
+        if output_dir is None:
+            output_dir = VIDEOS_DIR
+        import omni.kit.app
+        mgr = omni.kit.app.get_app().get_extension_manager()
+        if not mgr.is_extension_enabled("omni.kit.capture.viewport"):
+            mgr.set_extension_enabled_immediate("omni.kit.capture.viewport", True)
+            await omni.kit.app.get_app().next_update_async()
+
+        from omni.kit.capture.viewport import CaptureExtension, CaptureOptions
+        import omni.kit.viewport.utility as vp_utils
+
+        capture = CaptureExtension.get_instance()
+        viewport = vp_utils.get_active_viewport()
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        options = CaptureOptions()
+        options.camera = camera_path if camera_path else viewport.camera_path.pathString
+        options.output_folder = output_dir
+        options.file_name = file_name
+        options.file_type = ".mp4"
+        options.fps = fps
+        options.start_frame = 1
+        options.end_frame = int(duration_sec * fps)
+        options.res_width = res_width
+        options.res_height = res_height
+        options.overwrite_existing_frames = True
+        capture.options = options
+
+        print(f"Per-physics-step recording: {duration_sec}s ({options.end_frame} frames at {fps}fps, {res_width}x{res_height})...")
+        if not capture.start():
+            print("Error: Failed to start video capture")
+            return None
+
+        while not capture.done:
+            await omni.kit.app.get_app().next_update_async()
+
+        outputs = capture.get_outputs()
+        if outputs:
+            self._last_video_label.text = f"Saved: {outputs[0]}"
+        print(f"Per-physics-step recording complete: {outputs}")
+        return outputs
+
+    async def _record_assemble_disassemble_test(self):
+        """Offline test: assemble at 1s, disassemble at 3s, 5s total."""
+        import omni.kit.app
+        app = omni.kit.app.get_app()
+
+        mgr = app.get_extension_manager()
+        if not mgr.is_extension_enabled("omni.kit.capture.viewport"):
+            mgr.set_extension_enabled_immediate("omni.kit.capture.viewport", True)
+            await app.next_update_async()
+
+        from omni.kit.capture.viewport import CaptureExtension, CaptureOptions
+        import omni.kit.viewport.utility as vp_utils
+
+        capture = CaptureExtension.get_instance()
+        viewport = vp_utils.get_active_viewport()
+
+        # Use UI settings for resolution
+        res_idx = self._offline_res_combo.model.get_item_value_model().as_int
+        res_options = ["640x480", "1280x720", "1920x1080", "2560x1440", "3840x2160"]
+        w, h = [int(x) for x in res_options[res_idx].split("x")]
+        fps = self._offline_fps_field.model.as_int
+        camera_path = self._get_selected_camera_path()
+
+        output_dir = VIDEOS_DIR
+        os.makedirs(output_dir, exist_ok=True)
+
+        total_frames = 5 * fps
+
+        options = CaptureOptions()
+        options.camera = camera_path if camera_path else viewport.camera_path.pathString
+        options.output_folder = output_dir
+        options.file_name = "assemble_disassemble_test"
+        options.file_type = ".mp4"
+        options.fps = fps
+        options.start_frame = 1
+        options.end_frame = total_frames
+        options.res_width = w
+        options.res_height = h
+        options.overwrite_existing_frames = True
+        capture.options = options
+
+        print(f"Starting assemble/disassemble test ({w}x{h}, {fps}fps, 5s)...")
+        if not capture.start():
+            print("Error: Failed to start video capture")
+            return
+
+        frame = [0]
+        assemble_done = [False]
+        disassemble_done = [False]
+
+        while not capture.done:
+            await app.next_update_async()
+            frame[0] += 1
+            if frame[0] == 1 * fps and not assemble_done[0]:
+                print("Test: Assembling objects...")
+                self.assemble_objects()
+                assemble_done[0] = True
+            if frame[0] == 3 * fps and not disassemble_done[0]:
+                print("Test: Disassembling objects...")
+                self.disassemble_objects()
+                disassemble_done[0] = True
+
+        outputs = capture.get_outputs()
+        if outputs:
+            self._last_video_label.text = f"Saved: {outputs[0]}"
+        print(f"Test recording complete: {outputs}")
+
+    # --- Real-Time Recording (ffmpeg, non-blocking) ---
+    # State lives in module-level _recording_mgr to survive hot-reloads.
+
+    def _start_rt_from_ui(self):
+        """Start real-time recording from UI. Auto-stops after duration if set."""
+        if _recording_mgr.recording:
+            return
+        file_name = self._get_recording_filename()
+        camera_path = self._get_selected_camera_path()
+        duration = self._rec_duration_field.model.as_float
+        self._start_realtime_recording(file_name=file_name, camera_path=camera_path)
+        if duration > 0:
+            asyncio.ensure_future(self._rt_auto_stop(duration))
+
+    async def _rt_auto_stop(self, duration):
+        """Auto-stop real-time recording after duration seconds."""
+        await asyncio.sleep(duration)
+        if _recording_mgr.recording:
+            self._stop_realtime_recording()
+
+    def _start_realtime_recording(self, output_dir=None, file_name="realtime_recording.mp4",
+                                   fps=30, camera_path=None):
+        """Start piping viewport frames to ffmpeg in real-time."""
+        if output_dir is None:
+            output_dir = VIDEOS_DIR
+        import subprocess
+        import omni.kit.viewport.utility as vp_utils
+
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, file_name)
+
+        viewport = vp_utils.get_active_viewport()
+
+        if camera_path:
+            viewport.camera_path = camera_path
+
+        w, h = viewport.get_texture_resolution()
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "rawvideo",
+            "-pix_fmt", "rgba",
+            "-s", f"{w}x{h}",
+            "-r", str(fps),
+            "-i", "pipe:0",
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-preset", "ultrafast",
+            "-crf", "18",
+            output_path,
+        ]
+        import time as _time
+        mgr = _recording_mgr
+        mgr.ffmpeg_proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        mgr.recording = True
+        mgr.output_path = output_path
+        mgr.frame_count = 0
+        mgr.start_time = _time.time()
+        mgr.fps = fps
+        mgr.last_print = 0
+
+        def on_frame_change(event):
+            if not mgr.recording or mgr.ffmpeg_proc is None:
+                return
+            vp_utils.capture_viewport_to_buffer(viewport, self._rt_on_capture)
+
+        mgr.frame_sub = viewport.subscribe_to_frame_change(on_frame_change)
+        mgr.save_state()
+
+        self._rt_record_btn.enabled = False
+        self._rt_stop_btn.enabled = True
+        print(f"Real-time recording started: {w}x{h} @ {fps}fps → {output_path}")
+
+    def _rt_on_capture(self, buffer, buffer_size, width, height, fmt):
+        """Callback for each captured frame — write raw bytes to ffmpeg stdin."""
+        import ctypes
+        mgr = _recording_mgr
+        if not mgr.recording or mgr.ffmpeg_proc is None:
+            return
+        try:
+            ctypes.pythonapi.PyCapsule_GetPointer.restype = ctypes.c_void_p
+            ctypes.pythonapi.PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+            ptr = ctypes.pythonapi.PyCapsule_GetPointer(buffer, None)
+            raw = (ctypes.c_ubyte * buffer_size).from_address(ptr)
+            mgr.ffmpeg_proc.stdin.write(bytes(raw))
+            mgr.frame_count += 1
+            import time as _time
+            elapsed = _time.time() - mgr.start_time
+            video_dur = mgr.frame_count / mgr.fps
+            self._rt_stop_btn.text = f"Stop ({video_dur:.1f}s, {mgr.frame_count}f)"
+            sec = int(elapsed)
+            if sec > mgr.last_print:
+                mgr.last_print = sec
+                print(f"[RT Record] {elapsed:.1f}s elapsed | {mgr.frame_count} frames | video: {video_dur:.1f}s")
+        except (BrokenPipeError, OSError):
+            self._stop_realtime_recording()
+
+    def _stop_realtime_recording(self):
+        """Stop real-time recording and finalize the video."""
+        mgr = _recording_mgr
+        if mgr.frame_sub is not None:
+            mgr.frame_sub = None
+        if mgr.ffmpeg_proc is not None:
+            try:
+                mgr.ffmpeg_proc.stdin.close()
+                mgr.ffmpeg_proc.wait(timeout=10)
+            except Exception as e:
+                print(f"Warning closing ffmpeg: {e}")
+            mgr.ffmpeg_proc = None
+        mgr.recording = False
+        self._rt_record_btn.enabled = True
+        self._rt_stop_btn.enabled = False
+        self._rt_stop_btn.text = "Stop Recording"
+        video_dur = round(mgr.frame_count / mgr.fps, 1) if mgr.fps else 0
+        self._last_video_label.text = f"Saved: {mgr.output_path} ({video_dur}s, {mgr.frame_count} frames)"
+        mgr.clear_state()
+        print(f"Real-time recording stopped: {mgr.frame_count} frames → {mgr.output_path}")
+
+    # --- MCP Recording Handlers ---
+
+    def _cmd_start_recording(self, file_name: str = None, camera: str = None,
+                              fps: int = 30, output_dir: str = None) -> Dict[str, Any]:
+        """MCP handler: start real-time viewport recording."""
+        try:
+            print(f"[MCP start_recording] id(mgr)={id(_recording_mgr)} recording={_recording_mgr.recording}")
+            if _recording_mgr.is_recording():
+                return {"status": "error", "message": "Recording already in progress. Stop it first."}
+            if not file_name or file_name == "":
+                from datetime import datetime
+                timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+                file_name = f"isaacsim_{timestamp}.mp4"
+            elif not file_name.endswith(".mp4"):
+                file_name += ".mp4"
+            if not fps or fps <= 0:
+                fps = 30
+            if camera == "":
+                camera = None
+            vid_dir = os.path.join(output_dir, "videos") if output_dir else VIDEOS_DIR
+            self._start_realtime_recording(output_dir=vid_dir, file_name=file_name, fps=fps, camera_path=camera)
+            return {
+                "status": "success",
+                "message": f"Recording started → {vid_dir}/{file_name}",
+                "file_path": os.path.join(vid_dir, file_name),
+            }
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_stop_recording(self) -> Dict[str, Any]:
+        """MCP handler: stop real-time viewport recording."""
+        try:
+            mgr = _recording_mgr
+            print(f"[MCP stop_recording] mgr.recording={mgr.recording} ffmpeg={mgr.ffmpeg_proc is not None} "
+                  f"state_file_exists={os.path.exists(mgr.state_file)} id(mgr)={id(mgr)}")
+            if not mgr.is_recording():
+                return {"status": "error", "message": "No recording in progress."}
+            if mgr.ffmpeg_proc is None:
+                # State file says recording but process lost (e.g. after reload)
+                mgr.clear_state()
+                return {"status": "error", "message": "Recording process lost (extension reloaded?). State cleared."}
+            path = mgr.output_path
+            self._stop_realtime_recording()
+            return {
+                "status": "success",
+                "message": f"Recording stopped: {mgr.frame_count} frames",
+                "file_path": path,
+                "frame_count": mgr.frame_count,
+                "video_duration": round(mgr.frame_count / mgr.fps, 2) if mgr.fps else 0,
+            }
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def _apply_ground_style(self):
+        """Apply a ground plane visual style by creating an OmniPBR material and binding
+        it at the Xform root of the ground plane (where the default binding lives)."""
+        from pxr import UsdGeom, Gf, UsdShade
+        stage = omni.usd.get_context().get_stage()
+
+        idx = self._ground_style_combo.model.get_item_value_model().as_int
+        styles = ["Default Grey", "White Studio", "Dark Studio", "Concrete", "Invisible (Physics Only)"]
+        style = styles[idx]
+        roughness = self._ground_roughness_slider.model.as_float
+
+        ground_prim = stage.GetPrimAtPath("/World/defaultGroundPlane")
+        if not ground_prim or not ground_prim.IsValid():
+            print("No ground plane found. Load the scene first.")
+            return
+
+        if style == "Invisible (Physics Only)":
+            UsdGeom.Imageable(ground_prim).MakeInvisible()
+            print("Ground plane hidden (physics still active)")
+            return
+        else:
+            UsdGeom.Imageable(ground_prim).MakeVisible()
+
+        # Default Grey: restore the original UsdPreviewSurface material
+        if style == "Default Grey":
+            orig_mat = stage.GetPrimAtPath("/World/Looks/visual_material")
+            if orig_mat and orig_mat.IsValid():
+                UsdShade.MaterialBindingAPI.Apply(ground_prim)
+                UsdShade.MaterialBindingAPI(ground_prim).Bind(UsdShade.Material(orig_mat))
+                print("Applied ground style: Default Grey (restored original material)")
+            else:
+                print("Warning: Original visual_material not found")
+            return
+
+        color_map = {
+            "White Studio": (0.95, 0.95, 0.95),
+            "Dark Studio": (0.1, 0.1, 0.1),
+            "Concrete": (0.6, 0.58, 0.55),
+        }
+        color = color_map.get(style, (0.5, 0.5, 0.5))
+
+        # Reuse cached material if it still exists on stage
+        mat_path = DigitalTwin._ground_mat_path
+        mat_prim = stage.GetPrimAtPath(mat_path) if mat_path else None
+        if not mat_prim or not mat_prim.IsValid():
+            # CreateAndBindMdlMaterialFromLibrary creates at /Looks/ (root scope)
+            out = []
+            omni.kit.commands.execute(
+                "CreateAndBindMdlMaterialFromLibrary",
+                mdl_name="OmniPBR.mdl",
+                mtl_name="OmniPBR",
+                mtl_created_list=out,
+                prim_name="GroundMaterial",
+                select_new_prim=False,
+            )
+            if out:
+                mat_path = out[0]
+                DigitalTwin._ground_mat_path = mat_path
+                print(f"Created OmniPBR ground material at {mat_path}")
+            mat_prim = stage.GetPrimAtPath(mat_path) if mat_path else None
+
+        if not mat_prim or not mat_prim.IsValid():
+            print("Error: Failed to create ground material.")
+            return
+
+        # Set shader properties — MDL attributes must be created if they don't exist yet
+        from pxr import Sdf
+        shader_prim = stage.GetPrimAtPath(f"{mat_path}/Shader")
+        if shader_prim and shader_prim.IsValid():
+            color_attr = shader_prim.GetAttribute("inputs:diffuse_color_constant")
+            if not color_attr or not color_attr.IsValid():
+                color_attr = shader_prim.CreateAttribute("inputs:diffuse_color_constant", Sdf.ValueTypeNames.Color3f)
+            color_attr.Set(Gf.Vec3f(*color))
+
+            rough_attr = shader_prim.GetAttribute("inputs:reflection_roughness_constant")
+            if not rough_attr or not rough_attr.IsValid():
+                rough_attr = shader_prim.CreateAttribute("inputs:reflection_roughness_constant", Sdf.ValueTypeNames.Float)
+            rough_attr.Set(roughness)
+
+            tex_attr = shader_prim.GetAttribute("inputs:diffuse_texture")
+            if tex_attr and tex_attr.IsValid():
+                tex_attr.Clear()
+        else:
+            print(f"Warning: No shader found at {mat_path}/Shader")
+
+        # Bind at the Xform root (overrides the default visual_material binding)
+        UsdShade.MaterialBindingAPI.Apply(ground_prim)
+        UsdShade.MaterialBindingAPI(ground_prim).Bind(UsdShade.Material(mat_prim))
+
+        print(f"Applied ground style: {style} (color={color}, roughness={roughness:.2f})")
+
+    def _apply_background(self):
+        """Set the viewport background. Solid colors use RTX settings; HDRI comes from dome light."""
+        idx = self._bg_combo.model.get_item_value_model().as_int
+        options = ["From Dome Light (HDRI/Default)", "Solid White", "Solid Black", "Solid Light Grey"]
+        choice = options[idx]
+
+        settings = carb.settings.get_settings()
+
+        if choice == "From Dome Light (HDRI/Default)":
+            # Restore default — dome light controls the background
+            settings.set("/rtx/background/enabled", False)
+            print("Background: controlled by dome light / HDRI")
+        else:
+            color_map = {
+                "Solid White": (1.0, 1.0, 1.0),
+                "Solid Black": (0.0, 0.0, 0.0),
+                "Solid Light Grey": (0.85, 0.85, 0.85),
+            }
+            r, g, b = color_map[choice]
+            # Use the dome light approach: set a flat-color dome
+            from pxr import UsdLux
+            stage = omni.usd.get_context().get_stage()
+            # Find existing dome light
+            dome_prim = None
+            for prim in stage.Traverse():
+                if prim.IsA(UsdLux.DomeLight):
+                    dome_prim = prim
+                    break
+            if dome_prim:
+                # Clear HDRI texture so the color attribute controls appearance
+                tex_attr = dome_prim.GetAttribute("inputs:texture:file")
+                if tex_attr and tex_attr.IsValid():
+                    tex_attr.Clear()
+                from pxr import Gf
+                dome_prim.GetAttribute("inputs:color").Set(Gf.Vec3f(r, g, b))
+                print(f"Background: {choice} (dome light color set, HDRI cleared)")
+            else:
+                print("No dome light found. Apply a lighting preset first, then set background.")
+
+    def _reset_lighting_defaults(self):
+        """Reset to default: single dome light at 1000, default ground, default background."""
+        self._clear_all_lights()
+        from pxr import UsdLux, UsdGeom
+        stage = omni.usd.get_context().get_stage()
+
+        # Restore default dome light
+        dome = UsdLux.DomeLight.Define(stage, "/World/defaultDomeLight")
+        dome.CreateIntensityAttr().Set(1000.0)
+
+        # Make ground visible again
+        ground_prim = stage.GetPrimAtPath("/World/defaultGroundPlane")
+        if ground_prim and ground_prim.IsValid():
+            UsdGeom.Imageable(ground_prim).MakeVisible()
+
+        # Reset background
+        settings = carb.settings.get_settings()
+        settings.set("/rtx/background/enabled", False)
+
+        # Sync UI
+        self._dome_intensity_slider.model.set_value(1000.0)
+        self._dome_temp_slider.model.set_value(6500.0)
+        self._dome_temp_enable.model.set_value(False)
+        self._lighting_preset_combo.model.get_item_value_model().set_value(0)
+        self._ground_style_combo.model.get_item_value_model().set_value(0)
+        self._ground_roughness_slider.model.set_value(0.5)
+        self._bg_combo.model.get_item_value_model().set_value(0)
+
+        print("Reset lighting, ground, and background to defaults.")
+
     async def load_scene(self):
         stage = omni.usd.get_context().get_stage()
 
@@ -780,13 +1684,17 @@ class DigitalTwin(omni.ext.IExt):
         self.setup_gripper_action_graph()
         await app.next_update_async()
 
-        # 8. Create workspace camera at 640x480
-        print("--- Creating Workspace Camera (640x480) ---")
+        # 8. Create workspace camera at 1280x720
+        print("--- Creating Workspace Camera (1280x720) ---")
         stage = omni.usd.get_context().get_stage()
         ws_prim_path = "/World/workspace_camera_sim"
-        ws_position = (0.8572405778988392, -1.3321141046870788, 0.9906567613694909)
-        ws_quat_xyzw = (0.4714, 0.1994, 0.3347, 0.7912)
-        ws_width, ws_height = 640, 480
+        # Default centered pose
+        ws_position = (0.6293466593898318, -1.2106887168521516, 0.8575915712414524)
+        ws_quat_xyzw = (0.4842, 0.1458, 0.2488, 0.8261)  # xyzw → Quatd(w, x, y, z)
+        # Chat log pose (half-split view — render + chat side-by-side):
+        # ws_position = (0.8572405778988392, -1.3321141046870788, 0.9906567613694909)
+        # ws_quat_xyzw = (0.4714, 0.1994, 0.3347, 0.7912)
+        ws_width, ws_height = 1280, 720
 
         camera_prim = UsdGeom.Camera.Define(stage, ws_prim_path)
         if not camera_prim:
@@ -828,7 +1736,7 @@ class DigitalTwin(omni.ext.IExt):
         await app.next_update_async()
 
         # 9. Setup workspace camera action graph
-        print("--- Setting up Workspace Camera Action Graph (640x480) ---")
+        print("--- Setting up Workspace Camera Action Graph (1280x720) ---")
         self._create_camera_actiongraph(
             ws_prim_path, ws_width, ws_height,
             "workspace_camera_sim", "WorkspaceCameraSim"
