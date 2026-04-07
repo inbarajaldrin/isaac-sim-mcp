@@ -38,6 +38,11 @@ if not VIDEOS_DIR:
     VIDEOS_DIR = os.path.join(_ext_dir, "videos")
 _assets_dir = os.path.join(_ext_dir, "assets")
 
+# Ensure Python 3.11 rclpy build is on sys.path (Isaac Sim uses Python 3.11,
+# but ROS2 Humble ships Python 3.10 packages — need the custom 3.11 build)
+_rclpy_311_path = "/home/aaugus11/IsaacSim-ros_workspaces/build_ws/humble/humble_ws/install/local/lib/python3.11/dist-packages"
+if os.path.isdir(_rclpy_311_path) and _rclpy_311_path not in sys.path:
+    sys.path.insert(0, _rclpy_311_path)
 
 # Module-level recording manager — survives hot-reloads because we guard against re-init.
 # Hot-reload re-executes the module, but _recording_mgr persists if already set.
@@ -80,6 +85,129 @@ class _RecordingState:
 # Guard: don't re-create if already exists from previous hot-reload
 if '_recording_mgr' not in globals():
     _recording_mgr = _RecordingState()
+
+
+class _ViewportCameraPublisher:
+    """Publishes viewport frames to ROS2 topics using capture_viewport_to_buffer.
+    Zero extra GPU render cost — reuses the already-rendered viewport frame.
+    Survives hot-reloads via module-level singleton."""
+
+    def __init__(self):
+        self._publishers = {}  # {topic_name: {node, pub, sub, camera_path, active}}
+        self._rclpy_initialized = False
+
+    def _ensure_rclpy(self):
+        if not self._rclpy_initialized:
+            import rclpy
+            try:
+                if not rclpy.utilities.get_default_context().ok():
+                    rclpy.init()
+            except Exception:
+                rclpy.init()
+            self._rclpy_initialized = True
+
+    def is_rclpy_available(self):
+        try:
+            import rclpy
+            return True
+        except ImportError:
+            return False
+
+    def start(self, camera_prim_path, topic_name, frame_id="camera_link"):
+        """Start publishing viewport frames for a camera to a ROS2 topic."""
+        import rclpy
+        import omni.kit.viewport.utility as vp_utils
+        from sensor_msgs.msg import Image
+
+        # Stop existing publisher for this topic first (prevents stale handles)
+        if topic_name in self._publishers:
+            if self._publishers[topic_name]["active"]:
+                print(f"[ViewportPub] Already publishing on /{topic_name}")
+            self.stop(topic_name)
+
+        self._ensure_rclpy()
+
+        node_name = f"viewport_pub_{topic_name.replace('/', '_').strip('_')}"
+        node = rclpy.create_node(node_name)
+        pub = node.create_publisher(Image, f"/{topic_name}", 10)
+        viewport = vp_utils.get_active_viewport()
+
+        entry = {
+            "node": node,
+            "pub": pub,
+            "sub": None,
+            "camera_path": camera_prim_path,
+            "frame_id": frame_id,
+            "active": True,
+        }
+
+        def on_capture(buffer, buffer_size, width, height, fmt):
+            import ctypes, array
+            if not entry["active"]:
+                return
+            try:
+                ctypes.pythonapi.PyCapsule_GetPointer.restype = ctypes.c_void_p
+                ctypes.pythonapi.PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+                ptr = ctypes.pythonapi.PyCapsule_GetPointer(buffer, None)
+
+                # Single copy from C buffer → array.array (0.3ms for 3.6MB)
+                # array.array('B') hits the fast path in Image.data setter (O(1), no element validation)
+                c_arr = (ctypes.c_ubyte * buffer_size).from_address(ptr)
+                a = array.array('B')
+                a.frombytes(c_arr)
+
+                # Publish RGBA directly — no RGB conversion needed (saves ~12ms/frame)
+                msg = Image()
+                msg.header.frame_id = entry["frame_id"]
+                msg.height = height
+                msg.width = width
+                msg.encoding = "rgba8"
+                msg.is_bigendian = False
+                msg.step = width * 4
+                msg.data = a  # O(1) fast path, no isinstance() per byte
+                entry["pub"].publish(msg)
+            except Exception:
+                pass
+
+        def on_frame(event):
+            if not entry["active"]:
+                return
+            vp_utils.capture_viewport_to_buffer(viewport, on_capture)
+
+        entry["sub"] = viewport.subscribe_to_frame_change(on_frame)
+        self._publishers[topic_name] = entry
+        print(f"[ViewportPub] Started publishing /{topic_name} from {camera_prim_path}")
+
+    def stop(self, topic_name):
+        """Stop publishing a specific topic."""
+        if topic_name not in self._publishers:
+            return
+        entry = self._publishers[topic_name]
+        entry["active"] = False
+        entry["sub"] = None
+        try:
+            entry["node"].destroy_node()
+        except Exception:
+            pass
+        del self._publishers[topic_name]
+        print(f"[ViewportPub] Stopped publishing /{topic_name}")
+
+    def stop_all(self):
+        """Stop all viewport publishers."""
+        for topic in list(self._publishers.keys()):
+            self.stop(topic)
+
+    def is_active(self, topic_name=None):
+        if topic_name:
+            return topic_name in self._publishers and self._publishers[topic_name]["active"]
+        return any(e["active"] for e in self._publishers.values())
+
+    def get_status(self):
+        return {t: {"camera": e["camera_path"], "active": e["active"]} for t, e in self._publishers.items()}
+
+
+if '_viewport_pub' not in globals():
+    _viewport_pub = _ViewportCameraPublisher()
 
 
 def _local_asset(relpath):
@@ -436,6 +564,10 @@ class DigitalTwin(omni.ext.IExt):
                         ui.Button("Quick Start", width=120, height=35, clicked_fn=lambda: asyncio.ensure_future(self.quick_start()))
                     with ui.HStack(spacing=5):
                         ui.Button("Dark Studio Ground", width=160, height=30, clicked_fn=self._apply_dark_studio_ground)
+                    with ui.HStack(spacing=5):
+                        self._viewport_pub_checkbox = ui.CheckBox(width=20)
+                        self._viewport_pub_checkbox.model.set_value(True)
+                        ui.Label("Viewport Publisher (default, zero GPU cost)", alignment=ui.Alignment.LEFT)
 
             with ui.CollapsableFrame(title="UR5e Control", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
@@ -1727,17 +1859,10 @@ class DigitalTwin(omni.ext.IExt):
             ws_width, ws_height = 1280, 720
             await app.next_update_async()
 
-            # Still ensure action graph exists
-            print("--- Setting up Workspace Camera Action Graph (1280x720) ---")
-            ag_path = f"/Graph/ActionGraph_WorkspaceCameraSim"
-            if not stage.GetPrimAtPath(ag_path):
-                self._create_camera_actiongraph(
-                    ws_prim_path, ws_width, ws_height,
-                    "workspace_camera_sim", "WorkspaceCameraSim"
-                )
-                await app.next_update_async()
-            else:
-                print(f"Action graph already exists at {ag_path}, skipping.")
+            # Ensure publisher is running
+            if self._viewport_pub_checkbox.model.get_value_as_bool():
+                if not _viewport_pub.is_active("workspace_camera_sim"):
+                    _viewport_pub.start(ws_prim_path, "workspace_camera_sim", frame_id="workspace_camera_sim")
 
             print("=== Quick Start Complete ===")
             return
@@ -1789,17 +1914,21 @@ class DigitalTwin(omni.ext.IExt):
             print(f"Workspace camera created at {ws_prim_path} with resolution {ws_width}x{ws_height}")
         await app.next_update_async()
 
-        # 9. Setup workspace camera action graph
-        print("--- Setting up Workspace Camera Action Graph (1280x720) ---")
-        self._create_camera_actiongraph(
-            ws_prim_path, ws_width, ws_height,
-            "workspace_camera_sim", "WorkspaceCameraSim"
-        )
+        # 9. Play the scene
         await app.next_update_async()
-
-        # 10. Play the scene
         print("--- Playing scene ---")
         self._timeline.play()
+        await app.next_update_async()
+
+        # 10. Start workspace camera publisher (viewport or action graph based on toggle)
+        print("--- Starting Workspace Camera Publisher ---")
+        if self._viewport_pub_checkbox.model.get_value_as_bool():
+            _viewport_pub.start(ws_prim_path, "workspace_camera_sim", frame_id="workspace_camera_sim")
+        else:
+            self._create_camera_actiongraph(
+                ws_prim_path, ws_width, ws_height,
+                "workspace_camera_sim", "WorkspaceCameraSim"
+            )
 
         print("=== Quick Start Complete ===")
 
@@ -2830,6 +2959,15 @@ class DigitalTwin(omni.ext.IExt):
                     topic_name,
                     graph_suffix
                 )
+
+    def _setup_camera_publisher(self, camera_prim, width, height, topic, graph_suffix):
+        """Route camera publishing to viewport publisher or action graph based on toggle."""
+        use_viewport = self._viewport_pub_checkbox.model.get_value_as_bool()
+        if use_viewport:
+            # Viewport publisher starts after play — just skip action graph creation
+            print(f"Using viewport publisher for /{topic} (action graph skipped)")
+        else:
+            self._create_camera_actiongraph(camera_prim, width, height, topic, graph_suffix)
 
     def _create_camera_actiongraph(self, camera_prim, width, height, topic, graph_suffix):
         """Helper method to create camera ActionGraph using og.Controller.edit().
@@ -4862,6 +5000,9 @@ class DigitalTwin(omni.ext.IExt):
                 for line in f:
                     if line.startswith("VmRSS"):
                         rss_before = int(line.split()[1]) // 1024  # MB
+
+            # Stop viewport publishers before stage teardown
+            _viewport_pub.stop_all()
 
             # Stop physics callbacks to avoid crashes during teardown
             self._stop_physics_callback(
