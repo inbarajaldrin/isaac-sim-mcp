@@ -19,6 +19,195 @@ from typing import Dict, Any
 from isaacsim.core.api.world import World
 from isaacsim.gui.components.element_wrappers import ScrollingWindow
 
+# Reference: ported from exts/ur5e-dt/ur5e_dt/extension.py (Phase 13)
+# Ensure Python 3.11 rclpy build is on sys.path (Isaac Sim uses Python 3.11,
+# but ROS2 Humble ships Python 3.10 packages — need the custom 3.11 build)
+_rclpy_311_path = "/home/aaugus11/IsaacSim-ros_workspaces/build_ws/humble/humble_ws/install/local/lib/python3.11/dist-packages"
+if os.path.isdir(_rclpy_311_path) and _rclpy_311_path not in sys.path:
+    sys.path.insert(0, _rclpy_311_path)
+
+
+# Reference: ported from exts/ur5e-dt/ur5e_dt/extension.py (Phase 13)
+# Video recording output directory — goes next to the extension unless overridden
+_VIDEOS_DIR_ENV = os.getenv("MCP_CLIENT_OUTPUT_DIR", "").strip()
+if _VIDEOS_DIR_ENV:
+    VIDEOS_DIR = os.path.abspath(os.path.join(_VIDEOS_DIR_ENV, "videos"))
+else:
+    _ext_dir_vid = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    VIDEOS_DIR = os.path.join(_ext_dir_vid, "videos")
+
+
+class _RecordingState:
+    """Holds ffmpeg process and recording state outside the extension class.
+    Module-level singleton so recording survives hot-reloads."""
+    def __init__(self):
+        self.ffmpeg_proc = None
+        self.frame_sub = None
+        self.recording = False
+        self.output_path = None
+        self.frame_count = 0
+        self.start_time = 0
+        self.fps = 30
+        self.last_print = 0
+        self.state_dir = "/tmp/isaacsim_recording"
+        self.state_file = os.path.join(self.state_dir, "recorder_state.json")
+
+    def save_state(self):
+        os.makedirs(self.state_dir, exist_ok=True)
+        with open(self.state_file, "w") as f:
+            json.dump({"recording": True, "output_path": self.output_path, "fps": self.fps}, f)
+
+    def clear_state(self):
+        if os.path.exists(self.state_file):
+            os.remove(self.state_file)
+
+    def is_recording(self):
+        if self.recording and self.ffmpeg_proc is not None:
+            return True
+        if os.path.exists(self.state_file):
+            try:
+                with open(self.state_file, "r") as f:
+                    state = json.load(f)
+                return state.get("recording", False)
+            except (json.JSONDecodeError, FileNotFoundError):
+                pass
+        return False
+
+
+if "_recording_mgr" not in globals():
+    _recording_mgr = _RecordingState()
+
+
+class _ViewportCameraPublisher:
+    """Publishes viewport frames to ROS2 topics using capture_viewport_to_buffer.
+    Each topic owns its own (optionally hidden) viewport + camera so multiple
+    cameras can publish simultaneously without the "all publishers share the
+    active viewport" pitfall. Uses a single persistent rclpy node to avoid
+    stale DDS participants on hot-reload.
+    """
+
+    def __init__(self):
+        self._publishers = {}  # {topic_name: entry}
+        self._rclpy_initialized = False
+        self._node = None
+
+    def _ensure_rclpy(self):
+        if not self._rclpy_initialized:
+            import rclpy
+            try:
+                if not rclpy.utilities.get_default_context().ok():
+                    rclpy.init()
+            except Exception:
+                rclpy.init()
+            self._rclpy_initialized = True
+
+    def _ensure_node(self):
+        import rclpy
+        if self._node is None:
+            self._ensure_rclpy()
+            self._node = rclpy.create_node("soarm101_viewport_publisher")
+            print(f"[ViewportPub] Created shared node: {self._node.get_name()}")
+
+    def is_rclpy_available(self):
+        try:
+            import rclpy  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    def start(self, camera_prim_path, topic_name, frame_id=None):
+        """Publish the ACTIVE viewport (pointed at camera_prim_path) to a ROS2 Image topic.
+
+        Reuses the already-rendered viewport frame — zero extra GPU render cost,
+        physics-friendly. Sets the active viewport's camera to camera_prim_path so the
+        topic truly reflects that camera's POV. Dedicated-viewport mode was removed
+        after empirical measurement showed it costs ~0.3 RTF per extra viewport, which
+        defeats the purpose of this class.
+        """
+        import rclpy  # noqa: F401
+        import omni.kit.viewport.utility as vp_utils
+        from sensor_msgs.msg import Image
+        import ctypes, array
+
+        if frame_id is None:
+            frame_id = topic_name
+
+        if topic_name in self._publishers:
+            self.stop(topic_name)
+
+        self._ensure_node()
+        pub = self._node.create_publisher(Image, f"/{topic_name}", 10)
+
+        viewport = vp_utils.get_active_viewport()
+        viewport.camera_path = camera_prim_path
+
+        entry = {
+            "pub": pub, "sub": None, "viewport": viewport,
+            "camera_path": camera_prim_path, "frame_id": frame_id,
+            "active": True, "count": 0,
+        }
+
+        def on_capture(buffer, buffer_size, width, height, fmt):
+            if not entry["active"]:
+                return
+            try:
+                ctypes.pythonapi.PyCapsule_GetPointer.restype = ctypes.c_void_p
+                ctypes.pythonapi.PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+                ptr = ctypes.pythonapi.PyCapsule_GetPointer(buffer, None)
+                c_arr = (ctypes.c_ubyte * buffer_size).from_address(ptr)
+                a = array.array('B'); a.frombytes(c_arr)
+                msg = Image()
+                msg.header.frame_id = entry["frame_id"]
+                msg.height = height; msg.width = width
+                msg.encoding = "rgba8"; msg.is_bigendian = False
+                msg.step = width * 4
+                msg.data = a
+                entry["pub"].publish(msg)
+                entry["count"] += 1
+            except Exception:
+                pass
+
+        def on_frame(event):
+            if not entry["active"]:
+                return
+            vp_utils.capture_viewport_to_buffer(entry["viewport"], on_capture)
+
+        entry["sub"] = viewport.subscribe_to_frame_change(on_frame)
+        self._publishers[topic_name] = entry
+        print(f"[ViewportPub] Started /{topic_name} from {camera_prim_path} (active viewport reuse)")
+
+    def stop(self, topic_name):
+        if topic_name not in self._publishers:
+            return
+        entry = self._publishers[topic_name]
+        entry["active"] = False
+        entry["sub"] = None
+        if self._node is not None:
+            try:
+                self._node.destroy_publisher(entry["pub"])
+            except Exception as e:
+                print(f"[ViewportPub] destroy_publisher warning: {e}")
+        del self._publishers[topic_name]
+        print(f"[ViewportPub] Stopped /{topic_name}")
+
+    def stop_all(self):
+        for topic in list(self._publishers.keys()):
+            self.stop(topic)
+
+    def is_active(self, topic_name=None):
+        if topic_name:
+            return topic_name in self._publishers and self._publishers[topic_name]["active"]
+        return any(e["active"] for e in self._publishers.values())
+
+    def get_status(self):
+        return {t: {"camera": e["camera_path"], "active": e["active"], "count": e["count"]}
+                for t, e in self._publishers.items()}
+
+
+# Module-level singleton — survives hot-reloads via globals() guard
+if "_viewport_pub" not in globals():
+    _viewport_pub = _ViewportCameraPublisher()
+
 # MCP socket server port - change this for different extensions
 MCP_SERVER_PORT = 8767
 
@@ -422,6 +611,65 @@ MCP_TOOL_REGISTRY = {
         "description": "One-click setup: loads scene, robot, action graph, force publisher, wrist camera, objects, cups, publishers, and starts simulation.",
         "parameters": {}
     },
+    "new_stage": {
+        "description": "Clear the entire USD stage and free accumulated memory. Tears down all USD prims, Hydra render state, and PhysX allocations. Scene will be empty afterwards — call quick_start to rebuild.",
+        "parameters": {}
+    },
+    "start_viewport_publisher": {
+        "description": "Point the ACTIVE Isaac Sim viewport at the given camera prim and publish its frames to a ROS2 Image topic. Reuses the already-rendered viewport frame — zero extra render cost. Only one camera can be published this way at a time (switches active viewport camera). For multi-camera simultaneous publishing keep the action-graph-based setup instead.",
+        "parameters": {
+            "camera_prim_path": {
+                "type": "string",
+                "description": "USD path of the camera prim, e.g. /World/workspace_camera_sim"
+            },
+            "topic_name": {
+                "type": "string",
+                "description": "ROS2 topic name (no leading slash), e.g. workspace_camera_rgb_sim"
+            },
+            "frame_id": {
+                "type": "string",
+                "description": "Optional ROS frame_id for the Image message header. Defaults to topic_name."
+            }
+        }
+    },
+    "stop_viewport_publisher": {
+        "description": "Stop a viewport-publisher-based camera publisher by topic name.",
+        "parameters": {
+            "topic_name": {
+                "type": "string",
+                "description": "Topic name previously passed to start_viewport_publisher"
+            }
+        }
+    },
+    "list_viewport_publishers": {
+        "description": "List active viewport-publisher camera topics with frame counts.",
+        "parameters": {}
+    },
+    "start_recording": {
+        "description": "Start real-time viewport video recording using ffmpeg. Records frames from the viewport render buffer without blocking physics. Returns immediately — call stop_recording to finalize the MP4.",
+        "parameters": {
+            "file_name": {
+                "type": "string",
+                "description": "Output filename (e.g. 'my_recording.mp4'). Saved under VIDEOS_DIR. Defaults to 'realtime_recording.mp4'."
+            },
+            "camera": {
+                "type": "string",
+                "description": "Camera prim path to record (switches active viewport to this camera). If omitted, uses whatever camera is already active."
+            },
+            "fps": {
+                "type": "integer",
+                "description": "Frames per second for the output video. Defaults to 30."
+            }
+        }
+    },
+    "stop_recording": {
+        "description": "Stop the current real-time recording and finalize the MP4 video file. Returns the output file path and frame count.",
+        "parameters": {}
+    },
+    "get_recording_status": {
+        "description": "Check if viewport video recording is active. Returns status, frame count, elapsed time, output path, and FPS.",
+        "parameters": {}
+    },
 }
 
 # Handler method names for each tool (maps to self._cmd_<name> methods)
@@ -449,6 +697,13 @@ MCP_HANDLERS = {
     "delete_cups": "_cmd_delete_cups",
     "sort_into_cups": "_cmd_sort_into_cups",
     "quick_start": "_cmd_quick_start",
+    "new_stage": "_cmd_new_stage",
+    "start_viewport_publisher": "_cmd_start_viewport_publisher",
+    "stop_viewport_publisher": "_cmd_stop_viewport_publisher",
+    "list_viewport_publishers": "_cmd_list_viewport_publishers",
+    "start_recording": "_cmd_start_recording",
+    "stop_recording": "_cmd_stop_recording",
+    "get_recording_status": "_cmd_get_recording_status",
 }
 
 from isaacsim.core.utils.stage import add_reference_to_stage
@@ -4962,6 +5217,162 @@ class DigitalTwin(omni.ext.IExt):
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
 
+    # --- Phase 13: ports from ur5e-dt ---
+
+    def _cmd_new_stage(self) -> Dict[str, Any]:
+        """Clear the USD stage and pump a few app updates so Hydra/PhysX tear down cleanly."""
+        try:
+            # Stop our viewport publishers before tearing down the stage they reference
+            try:
+                _viewport_pub.stop_all()
+            except Exception:
+                pass
+            # Stop recording if active
+            try:
+                if _recording_mgr.is_recording():
+                    self._cmd_stop_recording()
+            except Exception:
+                pass
+            import omni.usd, omni.kit.app
+            omni.usd.get_context().new_stage()
+            app = omni.kit.app.get_app()
+            for _ in range(30):
+                app.update()
+            # Clear World singleton so next quick_start re-initializes fresh
+            try:
+                World.clear_instance()
+            except Exception:
+                pass
+            return {"status": "success", "message": "Stage cleared. Call quick_start to rebuild."}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_start_viewport_publisher(self, camera_prim_path: str = None, topic_name: str = None,
+                                       frame_id: str = None) -> Dict[str, Any]:
+        if not camera_prim_path or not topic_name:
+            return {"status": "error", "message": "camera_prim_path and topic_name are required"}
+        try:
+            _viewport_pub.start(camera_prim_path, topic_name, frame_id=frame_id or None)
+            return {"status": "success", "message": f"Publishing {camera_prim_path} → /{topic_name}",
+                    "status_snapshot": _viewport_pub.get_status()}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_stop_viewport_publisher(self, topic_name: str = None) -> Dict[str, Any]:
+        if not topic_name:
+            return {"status": "error", "message": "topic_name is required"}
+        try:
+            _viewport_pub.stop(topic_name)
+            return {"status": "success", "message": f"Stopped /{topic_name}"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_list_viewport_publishers(self) -> Dict[str, Any]:
+        return {"status": "success", "publishers": _viewport_pub.get_status()}
+
+    def _cmd_start_recording(self, file_name: str = None, camera: str = None,
+                              fps: int = 30) -> Dict[str, Any]:
+        """Start real-time viewport recording to an MP4 via ffmpeg."""
+        try:
+            if _recording_mgr.is_recording():
+                return {"status": "error", "message": "Recording already active. Call stop_recording first."}
+            if not file_name:
+                file_name = "realtime_recording.mp4"
+            if not file_name.endswith(".mp4"):
+                file_name += ".mp4"
+            import subprocess
+            import omni.kit.viewport.utility as vp_utils
+
+            os.makedirs(VIDEOS_DIR, exist_ok=True)
+            output_path = os.path.join(VIDEOS_DIR, file_name)
+
+            viewport = vp_utils.get_active_viewport()
+            if camera:
+                viewport.camera_path = camera
+            w, h = viewport.get_texture_resolution()
+
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "rawvideo",
+                "-pix_fmt", "rgba",
+                "-s", f"{w}x{h}",
+                "-r", str(fps),
+                "-i", "pipe:0",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-preset", "ultrafast",
+                "-crf", "18",
+                output_path,
+            ]
+            mgr = _recording_mgr
+            mgr.ffmpeg_proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+            mgr.recording = True
+            mgr.output_path = output_path
+            mgr.frame_count = 0
+            mgr.start_time = time.time()
+            mgr.fps = fps
+            mgr.last_print = 0
+
+            def on_capture(buffer, buffer_size, width, height, fmt):
+                import ctypes
+                if not mgr.recording or mgr.ffmpeg_proc is None:
+                    return
+                try:
+                    ctypes.pythonapi.PyCapsule_GetPointer.restype = ctypes.c_void_p
+                    ctypes.pythonapi.PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+                    ptr = ctypes.pythonapi.PyCapsule_GetPointer(buffer, None)
+                    raw = (ctypes.c_ubyte * buffer_size).from_address(ptr)
+                    mgr.ffmpeg_proc.stdin.write(bytes(raw))
+                    mgr.frame_count += 1
+                except (BrokenPipeError, OSError):
+                    self._cmd_stop_recording()
+
+            def on_frame_change(event):
+                if not mgr.recording or mgr.ffmpeg_proc is None:
+                    return
+                vp_utils.capture_viewport_to_buffer(viewport, on_capture)
+
+            mgr.frame_sub = viewport.subscribe_to_frame_change(on_frame_change)
+            mgr.save_state()
+            return {"status": "success", "message": f"Recording → {output_path} ({w}x{h} @ {fps}fps)",
+                    "output_path": output_path, "resolution": [w, h], "fps": fps}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_stop_recording(self) -> Dict[str, Any]:
+        try:
+            mgr = _recording_mgr
+            if not mgr.is_recording():
+                return {"status": "error", "message": "No recording is active"}
+            if mgr.frame_sub is not None:
+                mgr.frame_sub = None
+            if mgr.ffmpeg_proc is not None:
+                try:
+                    mgr.ffmpeg_proc.stdin.close()
+                    mgr.ffmpeg_proc.wait(timeout=10)
+                except Exception as e:
+                    print(f"[Recording] ffmpeg close warning: {e}")
+                mgr.ffmpeg_proc = None
+            mgr.recording = False
+            mgr.clear_state()
+            result = {"status": "success", "output_path": mgr.output_path,
+                      "frame_count": mgr.frame_count, "duration_s": mgr.frame_count / max(mgr.fps, 1)}
+            return result
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_get_recording_status(self) -> Dict[str, Any]:
+        mgr = _recording_mgr
+        if not mgr.is_recording():
+            return {"status": "success", "recording": False}
+        elapsed = time.time() - mgr.start_time if mgr.start_time else 0
+        return {"status": "success", "recording": True, "frame_count": mgr.frame_count,
+                "elapsed_s": elapsed, "output_path": mgr.output_path, "fps": mgr.fps}
+
     def on_shutdown(self):
         """Clean shutdown"""
         self._teardown_log_redirect()
@@ -4973,6 +5384,19 @@ class DigitalTwin(omni.ext.IExt):
         # Stop physics-rate callbacks
         self._stop_force_publish()
         self._stop_bbox_publisher()
+
+        # Stop viewport publishers (they hold references to viewport/camera prims)
+        try:
+            _viewport_pub.stop_all()
+        except Exception:
+            pass
+
+        # Finalize any in-flight video recording
+        try:
+            if _recording_mgr.is_recording():
+                self._cmd_stop_recording()
+        except Exception:
+            pass
 
         # Isaac Sim handles ROS2 shutdown automatically
         print("ROS2 bridge shutdown handled by Isaac Sim")
