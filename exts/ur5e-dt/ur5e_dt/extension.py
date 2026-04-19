@@ -38,6 +38,45 @@ if not VIDEOS_DIR:
     VIDEOS_DIR = os.path.join(_ext_dir, "videos")
 _assets_dir = os.path.join(_ext_dir, "assets")
 
+# Environment scene USDs (relative to Isaac assets root). Verified against Isaac 5.0.
+ENVIRONMENTS = {
+    "None (flat plane only)": None,
+    "Gridroom Black": "Isaac/Environments/Grid/gridroom_black.usd",
+    "Gridroom Curved": "Isaac/Environments/Grid/gridroom_curved.usd",
+    "Simple Room": "Isaac/Environments/Simple_Room/simple_room.usd",
+    "Simple Warehouse": "Isaac/Environments/Simple_Warehouse/warehouse.usd",
+    "Full Warehouse": "Isaac/Environments/Simple_Warehouse/full_warehouse.usd",
+    "Warehouse w/ Forklifts": "Isaac/Environments/Simple_Warehouse/warehouse_with_forklifts.usd",
+    "Warehouse w/ Shelves": "Isaac/Environments/Simple_Warehouse/warehouse_multiple_shelves.usd",
+    "Hospital": "Isaac/Environments/Hospital/hospital.usd",
+    "Office": "Isaac/Environments/Office/office.usd",
+}
+ENVIRONMENT_PRIM_PATH = "/World/Environment"
+
+# Robot base mount height above the ground plane (meters).
+# Convention: world z=0 is the floor surface; robot base is lifted by ROBOT_BASE_Z.
+# This matches Isaac Sim's standard env convention so all environments compose cleanly.
+ROBOT_BASE_Z = 0.0
+
+# Per-environment Z offset to align each env's floor surface to z=0.
+# Most envs already author their floor at z=0 — only the legacy gridroom assets need correction.
+ENVIRONMENT_Z_OFFSETS = {
+    "Gridroom Black":  0.141,   # staticPlaneActor at z=-0.141
+    "Gridroom Curved": 0.007,   # staticPlaneActor at z=-0.007
+    # All others default to 0.0 (floor already at z=0, or table-workspace scenes like Simple Room)
+}
+
+# Ground plane grid tint presets — tints the procedural grid lines of default_environment.usd.
+GRID_TINT_PRESETS = {
+    "White":      (1.00, 1.00, 1.00),
+    "Blue":       (0.20, 0.45, 0.90),
+    "Green":      (0.25, 0.75, 0.35),
+    "Amber":      (1.00, 0.70, 0.10),
+    "Red":        (0.85, 0.20, 0.20),
+    "Cyan":       (0.20, 0.80, 0.85),
+    "Custom Hex": None,  # special: read from hex field
+}
+
 # Ensure Python 3.11 rclpy build is on sys.path (Isaac Sim uses Python 3.11,
 # but ROS2 Humble ships Python 3.10 packages — need the custom 3.11 build)
 _rclpy_311_path = "/home/aaugus11/IsaacSim-ros_workspaces/build_ws/humble/humble_ws/install/local/lib/python3.11/dist-packages"
@@ -90,11 +129,17 @@ if '_recording_mgr' not in globals():
 class _ViewportCameraPublisher:
     """Publishes viewport frames to ROS2 topics using capture_viewport_to_buffer.
     Zero extra GPU render cost — reuses the already-rendered viewport frame.
-    Survives hot-reloads via module-level singleton."""
+    Survives hot-reloads via module-level singleton.
+
+    Uses a single persistent rclpy node to avoid stale DDS participants
+    (destroy_node doesn't immediately release the DDS participant, so
+    recreating nodes causes ghost publishers to linger in `ros2 topic info`).
+    """
 
     def __init__(self):
-        self._publishers = {}  # {topic_name: {node, pub, sub, camera_path, active}}
+        self._publishers = {}  # {topic_name: {pub, sub, camera_path, active}}
         self._rclpy_initialized = False
+        self._node = None  # single persistent node shared across all topics
 
     def _ensure_rclpy(self):
         if not self._rclpy_initialized:
@@ -105,6 +150,14 @@ class _ViewportCameraPublisher:
             except Exception:
                 rclpy.init()
             self._rclpy_initialized = True
+
+    def _ensure_node(self):
+        """Create the shared rclpy node on first use."""
+        import rclpy
+        if self._node is None:
+            self._ensure_rclpy()
+            self._node = rclpy.create_node("isaacsim_viewport_publisher")
+            print(f"[ViewportPub] Created shared node: {self._node.get_name()}")
 
     def is_rclpy_available(self):
         try:
@@ -125,15 +178,12 @@ class _ViewportCameraPublisher:
                 print(f"[ViewportPub] Already publishing on /{topic_name}")
             self.stop(topic_name)
 
-        self._ensure_rclpy()
+        self._ensure_node()
 
-        node_name = f"viewport_pub_{topic_name.replace('/', '_').strip('_')}"
-        node = rclpy.create_node(node_name)
-        pub = node.create_publisher(Image, f"/{topic_name}", 10)
+        pub = self._node.create_publisher(Image, f"/{topic_name}", 10)
         viewport = vp_utils.get_active_viewport()
 
         entry = {
-            "node": node,
             "pub": pub,
             "sub": None,
             "camera_path": camera_prim_path,
@@ -179,16 +229,20 @@ class _ViewportCameraPublisher:
         print(f"[ViewportPub] Started publishing /{topic_name} from {camera_prim_path}")
 
     def stop(self, topic_name):
-        """Stop publishing a specific topic."""
+        """Stop publishing a specific topic.
+        Destroys only the publisher (not the node), so DDS participants are
+        properly released when the publisher goes out of scope."""
         if topic_name not in self._publishers:
             return
         entry = self._publishers[topic_name]
         entry["active"] = False
         entry["sub"] = None
-        try:
-            entry["node"].destroy_node()
-        except Exception:
-            pass
+        # Destroy the publisher through the node — this releases its DDS writer
+        if self._node is not None:
+            try:
+                self._node.destroy_publisher(entry["pub"])
+            except Exception as e:
+                print(f"[ViewportPub] destroy_publisher warning: {e}")
         del self._publishers[topic_name]
         print(f"[ViewportPub] Stopped publishing /{topic_name}")
 
@@ -556,7 +610,11 @@ class DigitalTwin(omni.ext.IExt):
 
     def create_ui(self):
         with ui.VStack(spacing=5):
-            with ui.CollapsableFrame(title="Simulation Setup", collapsed=False, height=0):
+            self._sim_setup_collapse = ui.CollapsableFrame(title="Simulation Setup", collapsed=False, height=0)
+            self._sim_setup_collapse.set_collapsed_changed_fn(
+                lambda collapsed: None if collapsed else self._refresh_viewport_camera_list()
+            )
+            with self._sim_setup_collapse:
                 with ui.VStack(spacing=5, height=0):
                     with ui.HStack(spacing=5):
                         ui.Button("Load Scene", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_scene()))
@@ -568,6 +626,14 @@ class DigitalTwin(omni.ext.IExt):
                         self._viewport_pub_checkbox = ui.CheckBox(width=20)
                         self._viewport_pub_checkbox.model.set_value(True)
                         ui.Label("Viewport Publisher (default, zero GPU cost)", alignment=ui.Alignment.LEFT)
+                    with ui.HStack(spacing=5):
+                        ui.Label("Active Viewport:", alignment=ui.Alignment.LEFT, width=110)
+                        self._viewport_cam_frame = ui.Frame(width=220)
+                        with self._viewport_cam_frame:
+                            self._viewport_cam_combo = ui.ComboBox(0, "/World/workspace_camera_sim", width=220)
+                        ui.Button("Undo", width=55, height=22, clicked_fn=self._undo_viewport_camera, tooltip="Switch back to the previously active viewport camera")
+                    # Auto-populate the dropdown with current stage cameras at build time
+                    self._refresh_viewport_camera_list()
 
             with ui.CollapsableFrame(title="UR5e Control", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
@@ -690,7 +756,33 @@ class DigitalTwin(omni.ext.IExt):
                                 self._add_light_intensity.model.set_value(500.0)
                             ui.Button("Add Light", height=30, clicked_fn=self._add_manual_light)
                             ui.Button("Remove All Extra Lights", height=30, clicked_fn=self._remove_extra_lights)
-                    with ui.CollapsableFrame(title="Ground Appearance", name="subFrame", collapsed=False, height=0):
+                    with ui.CollapsableFrame(title="Environment", name="subFrame", collapsed=False, height=0):
+                        with ui.VStack(spacing=5, height=0):
+                            with ui.HStack(spacing=5):
+                                ui.Label("Preset:", alignment=ui.Alignment.LEFT, width=100)
+                                self._env_combo = ui.ComboBox(
+                                    0, *list(ENVIRONMENTS.keys()), width=250,
+                                )
+                            with ui.HStack(spacing=5):
+                                ui.Spacer(width=100)
+                                self._env_hide_ground = ui.CheckBox(width=20)
+                                self._env_hide_ground.model.set_value(True)
+                                ui.Label("Hide flat ground plane when loading", alignment=ui.Alignment.LEFT)
+                            ui.Button("Load Environment", height=35, clicked_fn=self._load_environment)
+                    with ui.CollapsableFrame(title="Ground Plane", name="subFrame", collapsed=False, height=0):
+                        with ui.VStack(spacing=5, height=0):
+                            with ui.HStack(spacing=5):
+                                ui.Label("Grid Tint:", alignment=ui.Alignment.LEFT, width=100)
+                                self._grid_tint_combo = ui.ComboBox(
+                                    0, *list(GRID_TINT_PRESETS.keys()), width=150,
+                                )
+                            with ui.HStack(spacing=5):
+                                ui.Label("Custom Hex:", alignment=ui.Alignment.LEFT, width=100)
+                                self._grid_tint_hex = ui.StringField(width=150)
+                                self._grid_tint_hex.model.set_value("#FFFFFF")
+                            ui.Label("Hex used only when 'Custom Hex' is selected", style={"color": 0xFF888888, "font_size": 11}, height=0)
+                            ui.Button("Swap Ground Plane", height=35, clicked_fn=self._swap_ground_plane)
+                    with ui.CollapsableFrame(title="Ground Appearance", name="subFrame", collapsed=True, height=0):
                         with ui.VStack(spacing=5, height=0):
                             with ui.HStack(spacing=5):
                                 ui.Label("Ground Style:", alignment=ui.Alignment.LEFT, width=100)
@@ -802,6 +894,51 @@ class DigitalTwin(omni.ext.IExt):
 
         # Re-subscribe physics callbacks if action graphs already exist (e.g. after hot-reload)
         self._resubscribe_physics_callbacks()
+
+        # Subscribe to stage lifecycle events to clean up World singleton on any new stage
+        # (Ctrl+N, File > New, or programmatic new_stage calls)
+        self._subscribe_stage_events()
+
+    def _subscribe_stage_events(self):
+        """Listen for stage OPENED events to clean up stale World singleton.
+        Fires whenever the user opens a new stage from the UI or programmatically."""
+        import omni.usd
+        try:
+            stage_events = omni.usd.get_context().get_stage_event_stream()
+            self._stage_event_sub = stage_events.create_subscription_to_pop(
+                self._on_stage_event, name="ur5e_dt_stage_watcher"
+            )
+            print("[ur5e-dt] Subscribed to stage lifecycle events")
+        except Exception as e:
+            print(f"[ur5e-dt] Failed to subscribe to stage events: {e}")
+
+    def _on_stage_event(self, event):
+        """Handle stage lifecycle events. On OPENED (new/load), clean up World singleton."""
+        import omni.usd
+        if event.type == int(omni.usd.StageEventType.OPENED):
+            # Clear extension instance references to old stage objects
+            for attr in ['_ur5e_view', '_articulation', '_gripper_articulation',
+                         '_force_articulation', '_gripper_pub_node', '_force_pub_node']:
+                if hasattr(self, attr):
+                    setattr(self, attr, None)
+
+            # Stop viewport publishers (they hold references to old viewport/camera)
+            try:
+                _viewport_pub.stop_all()
+            except Exception:
+                pass
+
+            # Clear the World singleton
+            try:
+                from isaacsim.core.api.world import World
+                world = World.instance()
+                if world is not None:
+                    world.clear_all_callbacks()
+                    world.clear()
+                World.clear_instance()
+                print("[ur5e-dt] Stage OPENED — World singleton cleared")
+            except Exception as e:
+                print(f"[ur5e-dt] World cleanup on stage event: {e}")
 
     def _setup_log_redirect(self):
         # Unwrap any leftover redirector from a previous failed startup
@@ -1580,6 +1717,235 @@ class DigitalTwin(omni.ext.IExt):
             "elapsed": round(elapsed, 1),
         }
 
+    def _rebuild_ui(self):
+        """Tear down and recreate the panel UI from the current (hot-reloaded) code.
+        Use after editing extension.py to pick up new widgets without closing the window.
+        Loses transient UI state (collapsed/expanded frames, unsaved field text)."""
+        try:
+            if not getattr(self, "_window", None):
+                print("No window to rebuild")
+                return
+            self._window.frame.clear()
+            with self._window.frame:
+                with ui.VStack(spacing=5):
+                    self.create_ui()
+            print("UI rebuilt from current code")
+        except Exception as ex:
+            import traceback
+            print(f"Error rebuilding UI: {ex}\n{traceback.format_exc()}")
+
+    def _list_stage_cameras(self):
+        """Return all UsdGeom.Camera prim paths on the current stage (deduplicated).
+        Always includes /OmniverseKit_Persp as a fallback even if the stage is empty."""
+        from pxr import UsdGeom
+        stage = omni.usd.get_context().get_stage()
+        seen = set()
+        cams = []
+        if stage:
+            for prim in stage.Traverse():
+                if prim.IsA(UsdGeom.Camera):
+                    p = str(prim.GetPath())
+                    if p not in seen:
+                        seen.add(p)
+                        cams.append(p)
+        if "/OmniverseKit_Persp" not in seen:
+            cams.insert(0, "/OmniverseKit_Persp")
+        return cams
+
+    def _refresh_viewport_camera_list(self):
+        """Rebuild the active-viewport ComboBox with all cameras currently on the stage.
+        Default selection prefers /World/workspace_camera_sim if present.
+        Selecting an item auto-switches the viewport (no Apply needed)."""
+        cams = self._list_stage_cameras()
+        default_pick = "/World/workspace_camera_sim"
+        try:
+            default_idx = cams.index(default_pick)
+        except ValueError:
+            default_idx = 0
+        self._viewport_cam_frame.clear()
+        with self._viewport_cam_frame:
+            self._viewport_cam_combo = ui.ComboBox(default_idx, *cams, width=220)
+        # Auto-apply on selection change
+        self._viewport_cam_combo.model.add_item_changed_fn(
+            lambda model, item: self._apply_active_viewport_camera()
+        )
+        print(f"Viewport camera list refreshed ({len(cams)} cameras)")
+
+    def _set_active_viewport_camera(self, camera_path: str):
+        """Switch the active viewport to render through the given camera prim path.
+        Records the previous camera so _undo_viewport_camera can swap back."""
+        try:
+            import omni.kit.viewport.utility as vp_utils
+            from pxr import Sdf
+            viewport = vp_utils.get_active_viewport()
+            if viewport is None:
+                print("No active viewport")
+                return False
+            prev = str(viewport.camera_path)
+            if prev != camera_path:
+                self._prev_viewport_cam = prev
+            viewport.camera_path = Sdf.Path(camera_path)
+            print(f"Active viewport → {camera_path}")
+            return True
+        except Exception as ex:
+            print(f"Error setting active viewport camera: {ex}")
+            return False
+
+    def _undo_viewport_camera(self):
+        """Swap the active viewport back to the previously selected camera."""
+        prev = getattr(self, "_prev_viewport_cam", None)
+        if not prev:
+            print("No previous viewport camera to undo to")
+            return
+        # Swapping makes the current camera the new "previous" — handled by _set_active_viewport_camera
+        self._set_active_viewport_camera(prev)
+        # Also reflect the change in the dropdown selection if the camera is in the list
+        try:
+            items = self._viewport_cam_combo.model.get_item_children()
+            labels = [self._viewport_cam_combo.model.get_item_value_model(i).as_string for i in items]
+            if prev in labels:
+                self._viewport_cam_combo.model.get_item_value_model().set_value(labels.index(prev))
+        except Exception:
+            pass
+
+    def _apply_active_viewport_camera(self):
+        """Read the current ComboBox selection and apply it to the active viewport."""
+        cams = self._list_stage_cameras()  # rebuild in same order as last refresh
+        idx = self._viewport_cam_combo.model.get_item_value_model().as_int
+        # Use the items from the combo's actual model rather than re-listing, to be safe
+        item_models = self._viewport_cam_combo.model.get_item_children()
+        if 0 <= idx < len(item_models):
+            label = self._viewport_cam_combo.model.get_item_value_model(item_models[idx]).as_string
+            self._set_active_viewport_camera(label)
+        else:
+            print(f"Invalid combo index {idx}")
+
+    def _load_environment(self):
+        """Load a full-scene environment USD (walls, floor, ceiling) as a reference at
+        /World/Environment. Pauses timeline during swap to avoid PhysX tensor invalidation,
+        optionally hides the flat /World/defaultGroundPlane to prevent Z-fighting."""
+        from pxr import UsdGeom, Sdf
+        import omni.timeline
+        from isaacsim.storage.native import get_assets_root_path
+        from isaacsim.core.utils.stage import add_reference_to_stage
+
+        stage = omni.usd.get_context().get_stage()
+        idx = self._env_combo.model.get_item_value_model().as_int
+        names = list(ENVIRONMENTS.keys())
+        name = names[idx]
+        rel_path = ENVIRONMENTS[name]
+
+        timeline = omni.timeline.get_timeline_interface()
+        was_playing = timeline.is_playing()
+        if was_playing:
+            timeline.pause()
+
+        # Remove existing environment reference if present
+        existing = stage.GetPrimAtPath(ENVIRONMENT_PRIM_PATH)
+        if existing and existing.IsValid():
+            stage.RemovePrim(ENVIRONMENT_PRIM_PATH)
+            print(f"Removed existing environment at {ENVIRONMENT_PRIM_PATH}")
+
+        if rel_path is None:
+            # "None" option: also un-hide flat ground
+            gp = stage.GetPrimAtPath("/World/defaultGroundPlane")
+            if gp and gp.IsValid():
+                UsdGeom.Imageable(gp).MakeVisible()
+            print("Environment cleared (flat ground plane restored)")
+            if was_playing:
+                timeline.play()
+            return
+
+        root = get_assets_root_path()
+        if not root:
+            print("Error: Isaac assets root not found")
+            return
+        full_path = root + "/" + rel_path
+
+        try:
+            add_reference_to_stage(usd_path=full_path, prim_path=ENVIRONMENT_PRIM_PATH)
+            print(f"Loaded environment: {name} ({full_path})")
+        except Exception as e:
+            print(f"Error loading environment {name}: {e}")
+            if was_playing:
+                timeline.play()
+            return
+
+        # Apply per-env Z offset to align floor surface with z=0
+        z_off = ENVIRONMENT_Z_OFFSETS.get(name, 0.0)
+        if z_off != 0.0:
+            env_prim = stage.GetPrimAtPath(ENVIRONMENT_PRIM_PATH)
+            xform = UsdGeom.Xformable(env_prim)
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, z_off))
+            print(f"Applied env z-offset: {z_off:+.3f} m")
+
+        # Hide flat ground plane if checkbox set
+        if self._env_hide_ground.model.get_value_as_bool():
+            gp = stage.GetPrimAtPath("/World/defaultGroundPlane")
+            if gp and gp.IsValid():
+                UsdGeom.Imageable(gp).MakeInvisible()
+                print("Flat ground plane hidden")
+
+        if was_playing:
+            timeline.play()
+
+    def _swap_ground_plane(self):
+        """Delete and recreate /World/defaultGroundPlane with a new grid tint color.
+        Pauses timeline during swap so PhysX can release the old rigid body cleanly."""
+        from pxr import Gf
+        import omni.timeline
+        from isaacsim.core.api.objects import GroundPlane
+
+        stage = omni.usd.get_context().get_stage()
+
+        # Resolve tint color
+        idx = self._grid_tint_combo.model.get_item_value_model().as_int
+        names = list(GRID_TINT_PRESETS.keys())
+        name = names[idx]
+        if name == "Custom Hex":
+            hex_str = self._grid_tint_hex.model.get_value_as_string().strip().lstrip("#")
+            try:
+                if len(hex_str) != 6:
+                    raise ValueError("expected 6 hex digits")
+                r = int(hex_str[0:2], 16) / 255.0
+                g = int(hex_str[2:4], 16) / 255.0
+                b = int(hex_str[4:6], 16) / 255.0
+                color = (r, g, b)
+            except Exception as e:
+                print(f"Invalid hex '{hex_str}': {e}. Falling back to white.")
+                color = (1.0, 1.0, 1.0)
+        else:
+            color = GRID_TINT_PRESETS[name]
+
+        timeline = omni.timeline.get_timeline_interface()
+        was_playing = timeline.is_playing()
+        if was_playing:
+            timeline.pause()
+
+        # Delete existing ground plane
+        gp_prim = stage.GetPrimAtPath("/World/defaultGroundPlane")
+        if gp_prim and gp_prim.IsValid():
+            stage.RemovePrim("/World/defaultGroundPlane")
+            print("Removed existing ground plane")
+
+        # Clear cached material path — old material prim is gone with the ground
+        DigitalTwin._ground_mat_path = None
+
+        try:
+            GroundPlane(
+                prim_path="/World/defaultGroundPlane",
+                z_position=0.0,
+                size=5000,
+                color=Gf.Vec3f(*color),
+            )
+            print(f"Recreated ground plane with tint {name} (rgb={color})")
+        except Exception as e:
+            print(f"Error recreating ground plane: {e}")
+
+        if was_playing:
+            timeline.play()
+
     def _apply_ground_style(self):
         """Apply a ground plane visual style by creating an OmniPBR material and binding
         it at the Xform root of the ground plane (where the default binding lives)."""
@@ -1759,25 +2125,36 @@ class DigitalTwin(omni.ext.IExt):
             print("Ground plane already exists, skipping")
         else:
             from isaacsim.core.api.objects import GroundPlane
-            GroundPlane(prim_path="/World/defaultGroundPlane", z_position=-0.08, size=5000)
+            GroundPlane(prim_path="/World/defaultGroundPlane", z_position=0.0, size=5000)
             print("Added ground plane")
 
-        # Add default dome light if no lights exist
-        from pxr import UsdLux
-        has_light = False
-        for prim in stage.Traverse():
-            if prim.IsA(UsdLux.DomeLight) or prim.IsA(UsdLux.DistantLight):
-                has_light = True
-                break
-        if not has_light:
-            dome = UsdLux.DomeLight.Define(stage, "/World/defaultDomeLight")
-            dome.CreateIntensityAttr().Set(1000.0)
-            print("Added default dome light")
+        # Ensure Isaac Sim's standard default lighting exists deterministically.
+        # This matches what Isaac Sim creates on a fresh app startup so the scene looks
+        # identical regardless of caller (UI button, MCP, or socket after new_stage).
+        from pxr import UsdLux, UsdGeom, Gf
+        default_light_path = "/Environment/defaultLight"
+        existing = stage.GetPrimAtPath(default_light_path)
+        if existing and existing.IsValid():
+            print("Default distant light already exists, skipping")
+        else:
+            light = UsdLux.DistantLight.Define(stage, default_light_path)
+            light.CreateIntensityAttr().Set(3000.0)
+            light.CreateAngleAttr().Set(1.0)
+            light.CreateColorAttr().Set(Gf.Vec3f(1.0, 1.0, 1.0))
+            xf = UsdGeom.Xformable(light.GetPrim())
+            xf.ClearXformOpOrder()
+            xf.AddTranslateOp().Set(Gf.Vec3d(0, 0, 0))
+            # Isaac Sim's default orientation (sun-angle distant light)
+            xf.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(
+                Gf.Quatd(0.6532814824381883, 0.2705980500730985, 0.27059805007309845, 0.6532814824381882)
+            )
+            print("Added default distant light (Isaac Sim canonical default)")
 
         # Set minimum frame rate to 60
         settings = carb.settings.get_settings()
-        settings.set("/persistent/simulation/minFrameRate", getattr(self, '_min_frame_rate', 60))
-        print(f"Set persistent/simulation/minFrameRate to {self._min_frame_rate}")
+        mfr = getattr(self, '_min_frame_rate', 60)
+        settings.set("/persistent/simulation/minFrameRate", mfr)
+        print(f"Set persistent/simulation/minFrameRate to {mfr}")
 
         # Configure physics scene
         physics_scene_prim = stage.GetPrimAtPath("/physicsScene")
@@ -1864,6 +2241,10 @@ class DigitalTwin(omni.ext.IExt):
                 if not _viewport_pub.is_active("workspace_camera_sim"):
                     _viewport_pub.start(ws_prim_path, "workspace_camera_sim", frame_id="workspace_camera_sim")
 
+            # Refresh + apply selected viewport camera
+            self._refresh_viewport_camera_list()
+            self._apply_active_viewport_camera()
+
             print("=== Quick Start Complete ===")
             return
 
@@ -1935,6 +2316,10 @@ class DigitalTwin(omni.ext.IExt):
                 "workspace_camera_sim", "WorkspaceCameraSim"
             )
 
+        # Refresh + apply selected viewport camera (defaults to workspace_camera_sim)
+        self._refresh_viewport_camera_list()
+        self._apply_active_viewport_camera()
+
         print("=== Quick Start Complete ===")
 
     async def load_ur5e(self):
@@ -1976,7 +2361,8 @@ class DigitalTwin(omni.ext.IExt):
         xform.ClearXformOpOrder()
 
         # Custom position and orientation
-        position = Gf.Vec3d(0.0, 0.0, 0.0)  # UR5e at origin; table workspace at z=-0.08
+        # Convention: ground plane at z=0, robot base lifted by ROBOT_BASE_Z
+        position = Gf.Vec3d(0.0, 0.0, ROBOT_BASE_Z)
         rpy_deg = np.array([0.0, 0.0, 180.0])  # Replace with your desired RPY
         rpy_rad = np.deg2rad(rpy_deg)
         quat_xyzw = euler_angles_to_quats(rpy_rad)
@@ -5027,6 +5413,28 @@ class DigitalTwin(omni.ext.IExt):
             # Clear Python-side caches
             self._python_sessions.clear()
             self._hidden_objects.clear()
+
+            # Clear extension instance references to old stage objects
+            for attr in ['_ur5e_view', '_articulation', '_gripper_articulation',
+                         '_force_articulation', '_gripper_pub_node', '_force_pub_node']:
+                if hasattr(self, attr):
+                    setattr(self, attr, None)
+
+            # Clear the World singleton — releases physics context, articulation views,
+            # and render callbacks tied to the old stage. Without this, World.instance()
+            # returns a stale World after new_stage, causing FPS degradation.
+            from isaacsim.core.api.world import World
+            world = World.instance()
+            if world is not None:
+                try:
+                    world.clear_all_callbacks()
+                    world.clear()
+                except Exception as e:
+                    print(f"[new_stage] World.clear warning: {e}")
+                try:
+                    World.clear_instance()
+                except Exception as e:
+                    print(f"[new_stage] clear_instance warning: {e}")
 
             # Open a fresh stage
             omni.usd.get_context().new_stage()
