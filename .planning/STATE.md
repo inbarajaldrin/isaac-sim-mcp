@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 13 implemented inline
-stopped_at: Phase 13 complete. Active-viewport publisher + new_stage + recording backend ported. Dedicated-viewport path dropped after empirical RTF measurement.
-last_updated: "2026-04-18T00:00:00.000Z"
+status: Phase 7 + 07.1 complete and committed
+stopped_at: Phase 7 (button audit + drop_refresh + IK cleanup) and Phase 07.1 (widget registry expansion) landed. Full CLI-level agent control over the control GUI. Commits da1e026 (vla_SO-ARM101) + 36cafb3 (isaac-sim-mcp).
+last_updated: "2026-04-19T00:00:00.000Z"
 progress:
-  total_phases: 13
-  completed_phases: 7
-  total_plans: 5
-  completed_plans: 5
+  total_phases: 14
+  completed_phases: 9
+  total_plans: 14
+  completed_plans: 14
 ---
 
 # Project State
@@ -19,12 +19,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-27)
 
 **Core value:** SO-ARM101 can sort lego blocks by color into matching cups — pick from table, drop into the correct cup — driven by poses from Isaac Sim and ArUco camera detection
-**Current focus:** Phase 7 — control-gui-service-audit-ik-cleanup (next)
+**Current focus:** Phase 8 — Isaac Sim Extension Cleanup (next)
 
 ## Current Position
 
-Phase: 7 (control-gui-service-audit-ik-cleanup) — NOT STARTED
-Phases 1-6 and 05.1 complete. Six new phases (7-12) added to roadmap.
+Phase: 8 (isaac-sim-extension-cleanup) — NOT STARTED
+Phases 1-6, 05.1, 7, 07.1, 13 complete (9 of 14 phases done).
+Remaining: Phase 8 → 9 → 10 → 11 → 12.
 
 ## Performance Metrics
 
