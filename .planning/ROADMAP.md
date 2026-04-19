@@ -18,8 +18,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 5: MoveIt Cup Collision and Planned Drop Motion** - Cup collision objects + MoveIt-planned collision-free drop sweep (completed)
 - [x] **Phase 05.1: CAD Cup Mesh Collision** - Replace cylinder collision with convex hull mesh, add colored visual markers and RViz settings tab (completed 2026-03-30)
 - [x] **Phase 6: Collision-free Drop Motion Verification Loop** - 3/3 consecutive clean passes for all cups (completed)
-- [ ] **Phase 7: Control GUI Service Audit & IK Cleanup** - Map every button to service, clean IK control into single execution path
-- [ ] **Phase 07.1: Widget Registry Expansion — Full CLI-Level Control** (INSERTED) - Extend `_button_registry` to cover Spinboxes, Checkbuttons, Entries, Listboxes, Scales. Add `_srv_list_widgets` / `_srv_get_widget_value` / `_srv_set_widget_value` so agents can read/write every interactive widget by name, not just click buttons.
+- [x] **Phase 7: Control GUI Service Audit & IK Cleanup** - Map every button to service, clean IK control into single execution path (completed 2026-04-18)
+- [x] **Phase 07.1: Widget Registry Expansion — Full CLI-Level Control** (INSERTED) - Extend `_button_registry` to cover Spinboxes, Checkbuttons, Entries, Listboxes, Scales. Add `_srv_list_widgets` / `_srv_get_widget_value` / `_srv_set_widget_value` so agents can read/write every interactive widget by name, not just click buttons. (completed 2026-04-18)
+- [x] **Phase 07.2: Motion Planning Problem Analysis & Inline Fix** (INSERTED) - FC-1 yaw-fallback + FC-2 OMPL goal-perturb retry + FixStartStateCollision adapters landed. FC-3 (out-of-reach spawns) handled by FC-1's pick-time detection. Residual cycle-8+ cup-tipping root-caused to lego blocks not tracked in MoveIt planning scene — deferred to Phase 9 by design. Verified cross-axis N=10 run: 5/5 reached-spawn cycles clean, 0 cups tipped. (completed 2026-04-19)
 - [ ] **Phase 8: Isaac Sim Extension Cleanup** - Button/socket parity, fix cup position update, scene state management, update ArUco marker positions to match real world
 - [ ] **Phase 9: Collision Scene Completeness** - Add lego block collision objects to MoveIt planning scene
 - [ ] **Phase 10: Motion Quality & Real Deployment Drop** - Fix drop point orientation, trajectory-based grasp, reduce jerk, camera-guided drop sequence
@@ -74,7 +75,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 5 → 05.1 → 6 → 7 → 07.1 → 8 → 9 → 10 → 11 → 12
+Phases execute in numeric order: 1 → 2 → 3 → 5 → 05.1 → 6 → 7 → 07.1 → 07.2 → 8 → 9 → 10 → 11 → 12
 
 | Phase | Status | Completed |
 |-------|--------|-----------|
@@ -86,6 +87,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 5 → 05.1 → 6 → 7 → 07
 | 6. Collision-free Drop Motion Verification | Complete | 2026-03-30 |
 | 7. Control GUI Service Audit & IK Cleanup | In progress | - |
 | 07.1. Widget Registry Expansion — Full CLI-Level Control | Not started | - |
+| 07.2. Motion Planning Problem Analysis & Inline Fix | Context gathered | - |
 | 8. Isaac Sim Extension Cleanup | Not started | - |
 | 9. Collision Scene Completeness | Not started | - |
 | 10. Motion Quality & Real Deployment Drop | Not started | - |
@@ -118,6 +120,20 @@ Phases execute in numeric order: 1 → 2 → 3 → 5 → 05.1 → 6 → 7 → 07
   4. AST unit test extends `test_button_service_mapping.py` (or a sibling file) to enforce: every `tk.Spinbox`/`tk.Entry`/`tk.Checkbutton`/etc. construction must go through the registration factories, no direct constructions outside the helpers.
   5. `AGENT_DEBUG_GUIDE.md` regenerated to include a "Widgets" table alongside the "Buttons" table.
   6. End-to-end agent-driven IK flow demonstrated: agent sets X/Y/Z/quaternion via `set_widget_value`, reads back via `get_widget_value`, calls `~/plan_execute` Trigger, all without user interaction.
+**Plans**: 0 plans
+
+### Phase 07.2: Motion Planning Problem Analysis & Inline Fix (INSERTED)
+**Goal**: Root-cause and fix — inline, within this phase — the three motion-planning flakiness items from 07-PHASE6-REGRESSION.md: FC-1 (no geometric IK at workspace edge), FC-2 (OMPL error −2 on grasp_home post-release), FC-3 (out-of-reach block spawns in randomize_object_poses). Diagnosis grounded in reachable-workspace + configuration-space analysis, backed by N=10 instrumented trials per class, in Isaac Sim only. Phase 10 no longer inherits these items.
+**Depends on**: Phase 7, Phase 07.1 (widget/button registries enable cheap N=10 scripted trials)
+**Requirements**: TBD
+**Success Criteria** (what must be TRUE):
+  1. FINDINGS.md published with root-cause statement per class (FC-1, FC-2, FC-3), grounded in analytical evidence (reachable set R for FC-1/FC-3; C-space cluster map + planning-scene audit for FC-2).
+  2. N=10 random-seed trial rates captured pre-fix and post-fix for each class, in Isaac Sim.
+  3. Reachability filter landed in the `randomize_object_poses` MCP tool; FC-3 post-fix rate → 0.
+  4. FC-1 residual rate (post-FC-3 fix) measured and documented; non-zero residuals explained.
+  5. FC-2 fix landed (warmup move / budget bump / planning-scene fix — selection data-driven from the C-space + scene audit) with N=10 post-fix verification.
+  6. Phase 6 canonical pick-drop regression: 5/5 consecutive clean passes post-fix under random-spawn conditions.
+  7. ONE IK path discipline preserved — no reintroduction of a second IK solver; fixes live in the geometric_ik path.
 **Plans**: 0 plans
 
 ### Phase 8: Isaac Sim Extension Cleanup

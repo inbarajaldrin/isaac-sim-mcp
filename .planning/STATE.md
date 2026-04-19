@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 7 + 07.1 complete and committed
-stopped_at: Phase 7 (button audit + drop_refresh + IK cleanup) and Phase 07.1 (widget registry expansion) landed. Full CLI-level agent control over the control GUI. Commits da1e026 (vla_SO-ARM101) + 36cafb3 (isaac-sim-mcp).
-last_updated: "2026-04-19T00:00:00.000Z"
+status: Phase 07.2 complete — FC-1 + FC-2 motion planning fixes landed
+stopped_at: Phase 07.2 closed. FC-1 yaw-fallback + FC-2 OMPL goal-perturb retry + FixStartStateCollision adapters landed in vla_SO-ARM101 (control_gui.py + ompl_planning.yaml). Verified cross-axis N=10 run on 2026-04-19: 5/5 reached-spawn cycles clean with zero cup tilt; cycle 6 correctly rejected by FC-1 as unreachable spawn. Residual cycle-8+ cup-tipping scoped to Phase 9 (lego AttachedCollisionObject).
+last_updated: "2026-04-19T11:45:00.000Z"
 progress:
-  total_phases: 14
-  completed_phases: 9
+  total_phases: 15
+  completed_phases: 10
   total_plans: 14
   completed_plans: 14
 ---
@@ -19,13 +19,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-27)
 
 **Core value:** SO-ARM101 can sort lego blocks by color into matching cups — pick from table, drop into the correct cup — driven by poses from Isaac Sim and ArUco camera detection
-**Current focus:** Phase 8 — Isaac Sim Extension Cleanup (next)
+**Current focus:** Phase 9 next — Collision Scene Completeness (add lego `AttachedCollisionObject`s so MoveIt avoids carried-block-vs-cup-rim contact, structurally fixing the residual cycle-8+ cascade observed during 07.2 debugging)
 
 ## Current Position
 
-Phase: 8 (isaac-sim-extension-cleanup) — NOT STARTED
-Phases 1-6, 05.1, 7, 07.1, 13 complete (9 of 14 phases done).
-Remaining: Phase 8 → 9 → 10 → 11 → 12.
+Phase: 9 (collision-scene-completeness) — NOT STARTED (next up per user direction 2026-04-19)
+Phases 1-6, 05.1, 7, 07.1, 07.2, 13 complete (10 of 15 phases done).
+Remaining: Phase 9 → 8 → 10 → 11 → 12. (User elected Phase 9 ahead of Phase 8 because 9 is the structural fix for the cascade diagnosed in 07.2.)
 
 ## Performance Metrics
 
@@ -77,6 +77,12 @@ Recent decisions affecting current work:
 - [Phase 13]: Empirical RTF test: wrist action graph costs ~0 RTF; dedicated hidden viewport costs −0.32 RTF per extra viewport; active-viewport-reuse publishing is genuinely free.
 - [Phase 13]: Ported `_ViewportCameraPublisher` (active-reuse only), `new_stage` MCP tool, `_RecordingState` + ffmpeg recording MCP tools, rclpy 3.11 path fix into soarm101-dt.
 - [Phase 13]: Dropped migration of wrist camera — existing action graph is cheaper than dedicated viewport would be.
+- [Phase 07.2]: FC-1 yaw-fallback sweeps a 10-candidate offset set via `find_reachable_grasp_yaw`; correctly rejects unreachable spawns before any motion.
+- [Phase 07.2]: FC-2 replaces raw OMPL with joint-space-direct-first + goal-perturb-retry wrapper (`_joint_space_collision_free_execute` → `_ompl_plan_with_retry_execute`). Goal-side perturbation (not start-side) within ±0.02 rad keeps execution safe.
+- [Phase 07.2]: FixStartStateCollision + FixStartStatePathConstraints request adapters added to `ompl_planning.yaml` — were MoveIt Setup Assistant defaults missing from our config.
+- [Phase 07.2]: FC-3 (spawn filter in extension.py) reverted per 1:1 digital-twin principle; FC-1's pick-time detection covers the same ground without breaking sim/real symmetry.
+- [Phase 07.2]: N=10 cross-axis verification run (2026-04-19): 5/5 reached-spawn cycles PASSED with zero cup tilt or drift; cycle 6 correctly rejected by FC-1 as unreachable spawn @(0.095,-0.105,0.008). Cascade did not reproduce — consistent with the hypothesis that tipping required carried-block-vs-cup-rim contact, which cross-axis grip minimizes.
+- [Phase 07.2]: Residual cycle-8+ cascade root cause: lego blocks are **not** published as `AttachedCollisionObject` on the gripper, so MoveIt plans transit paths blind to the carried block. Deferred to Phase 9 by design (Phase 9's success criterion #3 is the structural fix).
 
 ### Pending Todos
 
@@ -93,6 +99,7 @@ None yet.
 - Merged main into so-arm101 (commit 0f07949): brings 10 commits of ur5e-dt work onto the so-arm101 branch so both extensions coexist
 - Phase 13 added: Port UR5e-dt backend features to soarm101-dt — `_ViewportCameraPublisher` as camera publishing REPLACEMENT, stage lifecycle cleanup, `new_stage`, `execute_python_code` sessions, video recording backend (MCP-only, no UI)
 - Phase 07.1 inserted after Phase 7 (URGENT, 2026-04-18): Widget Registry Expansion — Full CLI-Level Control. Extends button-only registry to Spinboxes/Checkbuttons/Entries/Listboxes/Scales with generic list/get/set widget services. Inserted mid-Phase-7 (after 07-01 landed) because Plan 07-03/07-04 UAT benefits from agent-driven widget control. Inspired by element-registry skill pattern.
+- Phase 07.2 inserted after Phase 07.1 (URGENT, 2026-04-19): Motion Planning Problem Analysis & Inline Fix. Scope expanded during discuss-phase from analysis-only to analysis + inline fix — 07.2 now owns the three Phase-6 flakiness items (no-IK at edge, OMPL error −2 post-release, out-of-reach spawns) instead of routing them to Phase 10. Method: reachable-workspace + config-space analysis + N=10 random-seed trials per class in Isaac Sim only. See `.planning/phases/07.2-motion-planning-problem-analysis/07.2-CONTEXT.md`.
 
 ### Blockers/Concerns
 
@@ -100,6 +107,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-18T00:00:00Z
-Stopped at: Session resumed, awaiting user selection for Phase 7 (discuss vs plan)
+Last session: 2026-04-19T11:45Z (Phase 07.2 closed)
+Stopped at: Phase 07.2 complete. Fixes committed to both repos. Next phase: Phase 9 (Collision Scene Completeness — AttachedCollisionObject for legos).
 Resume file: none
+Handoff: none (HANDOFF.json deleted after successful resumption per GSD convention)
