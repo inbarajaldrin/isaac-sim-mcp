@@ -336,8 +336,24 @@ def _to_world(forward, lateral, anchor=None):
 
 # Block workspace (robot-relative)
 BLOCK_SPAWN_FORWARD = 0.3     # forward distance for initial row layout
-BLOCK_RANDOM_FORWARD = (0.10, 0.25)   # randomization range along forward
-BLOCK_RANDOM_LATERAL = (-0.10, 0.10)  # randomization range along lateral
+# Phase 9: bounds tightened from (0.10, 0.25) → (0.135, 0.285) after the
+# self-collision-aware reachability sweep (`compute_workspace --with-gate-c`)
+# showed that the original Gate-B-only sweep over-reports reachability by
+# including configurations inside the self-collision envelope (camera_mount
+# ↔ shoulder, shoulder ↔ gripper, usb_camera ↔ upper_arm) at low r.
+# Authoritative workspace bounds live in
+# src/so_arm101_control/so_arm101_control/workspace_bounds.yaml →
+# grasp_workspace_bounds: r_min=0.1205 r_max=0.3095 z_min=0.014 z_max=0.086
+# Spawn range accounts for the jaw-offset that _compute_jaw_offset applies
+# (shifts grasp target ~10 mm from block center toward the fixed jaw tip).
+# So block r must stay at least 10 mm INSIDE the workspace r bounds:
+#   r_min = workspace_r_min (0.1205) + 10 mm jaw + 4.5 mm safety = 0.135
+#   r_max = workspace_r_max (0.3095) − 10 mm jaw − 14.5 mm safety = 0.285
+# Verified via cycle 1 trace: block at r=0.126 → grasp target at r=0.116
+# → 'too close: r=0.116 < 0.120'. Moving r_min from 0.125 to 0.135 fixes
+# this by construction.
+BLOCK_RANDOM_FORWARD = (0.135, 0.285)
+BLOCK_RANDOM_LATERAL = (-0.10, 0.10)
 
 # Cup container assets (one per block color)
 CUP_USDS = {
@@ -607,6 +623,10 @@ MCP_TOOL_REGISTRY = {
             }
         }
     },
+    "update_cups": {
+        "description": "Reposition existing cups to match current CUP_LAYOUT settings WITHOUT rebuilding the /drop_poses action graph. Cup prims remain in place; only their xform + velocity are reset. If cups don't yet exist, falls back to delete+add (first-time creation path). Safe to call mid-simulation — /drop_poses keeps publishing throughout.",
+        "parameters": {}
+    },
     "quick_start": {
         "description": "One-click setup: loads scene, robot, action graph, force publisher, wrist camera, objects, cups, publishers, and starts simulation.",
         "parameters": {}
@@ -696,6 +716,7 @@ MCP_HANDLERS = {
     "publish_drop_poses": "_cmd_publish_drop_poses",
     "delete_cups": "_cmd_delete_cups",
     "sort_into_cups": "_cmd_sort_into_cups",
+    "update_cups": "_cmd_update_cups",
     "quick_start": "_cmd_quick_start",
     "new_stage": "_cmd_new_stage",
     "start_viewport_publisher": "_cmd_start_viewport_publisher",
@@ -2604,7 +2625,34 @@ class DigitalTwin(omni.ext.IExt):
                     result_poses[indices[order_pos]] = pose
                 return result_poses
 
-        raise RuntimeError("Could not place all objects without violating min_sep; reduce density.")
+        # Density-tolerant fallback: after max_retries exhausted, return
+        # whatever was placed plus stacked extras just above the placed
+        # region. The grasp pipeline is robust to close-packed blocks (it
+        # removes the target lego from the world scene at grasp_move start),
+        # so this is safer than raising — the caller always gets num_objects
+        # back.
+        print(f"[_sample_non_overlapping_objects] density-tolerant fallback: "
+              f"placed {len(placed)}/{num_objects} before exhausting "
+              f"{max_retries} retries; stacking the remaining {num_objects - len(placed)} "
+              f"offstage")
+        offstage_y = (y_range[1] + 0.05) if y_range else 0.45
+        offstage_z_base = (z_values[0] if z_values else self._ground_plane_z) + 0.05
+        while len(placed) < num_objects:
+            orig_idx = indices[len(placed)]
+            # Stack extras in a tight column offstage at y > y_range[1]
+            placed.append({
+                "position": np.array([
+                    (x_range[0] + x_range[1]) / 2.0 if x_range else 0.18,
+                    offstage_y,
+                    offstage_z_base + 0.02 * (len(placed) - len(placed)),
+                ]),
+                "yaw_deg": 0.0,
+            })
+        # Reorder results back to original indices
+        result_poses = [None] * num_objects
+        for order_pos, pose in enumerate(placed):
+            result_poses[indices[order_pos]] = pose
+        return result_poses
 
     def _set_obj_prim_pose(self, prim_path, position, rotation_xyz_deg=None):
         """Set object position and orientation on its body prim.
@@ -2788,12 +2836,105 @@ class DigitalTwin(omni.ext.IExt):
         asyncio.ensure_future(_do_reset())
 
     def _add_cups_from_ui(self):
-        """Reposition existing cups with current UI settings, preserving action graphs."""
-        self._on_cup_layout_changed()  # sync UI → config
-        self.delete_cups()
-        self.add_cups()
-        # Re-create drop poses action graph (delete_cups removes it)
-        self._cmd_publish_drop_poses()
+        """Reposition existing cups with current UI settings.
+
+        Phase 8: action-graph-preserving path. Cups are teleported in place
+        via RigidPrim.set_world_pose() — the /Graph/ActionGraph_drop_poses
+        publisher keeps running throughout and /drop_poses never blips.
+
+        If any cup prim is missing (first-time creation, or user hit Delete
+        earlier), falls back to the heavyweight delete+add+republish path.
+        """
+        self._on_cup_layout_changed()  # sync UI sliders → CUP_LAYOUT
+
+        stage = omni.usd.get_context().get_stage()
+        container_path = "/World/Containers"
+        colors = CUP_LAYOUT["color_order"]
+
+        # First-time / recovery path: any cup prim missing → rebuild.
+        missing = [c for c in colors
+                   if not stage.GetPrimAtPath(
+                       f"{container_path}/cup_{c}").IsValid()]
+        if missing:
+            print(f"[update_cups] {missing} missing — rebuilding via delete+add")
+            self.delete_cups()
+            self.add_cups()
+            self._cmd_publish_drop_poses()
+            return
+
+        # Compute target positions using the same logic as add_cups.
+        mode = CUP_LAYOUT["mode"]
+        if mode == "line":
+            bbox_cache = UsdGeom.BBoxCache(
+                Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+            cup_widths = {}
+            for c in colors:
+                cup_prim = stage.GetPrimAtPath(f"{container_path}/cup_{c}")
+                # ComputeUntransformedBound: intrinsic extent of the cup
+                # geometry WITHOUT the prim's own xform applied. Critical
+                # when cups are currently tilted (a fallen cup's AABB is
+                # much wider than the cup's actual diameter) — using
+                # ComputeWorldBound here leaves stale spacing that only
+                # corrects on a second click once cups are upright.
+                bbox = bbox_cache.ComputeUntransformedBound(cup_prim)
+                r = bbox.ComputeAlignedRange()
+                mn, mx = r.GetMin(), r.GetMax()
+                cup_widths[c] = (mx[1] - mn[1] if ROBOT_FORWARD_AXIS == "X"
+                                 else mx[0] - mn[0])
+            positions = _cup_positions_line(cup_widths)
+        else:
+            positions = _cup_positions_arc()
+
+        pan_xy = _get_pan_axis_xy()
+        ground_z = getattr(self, "_ground_plane_z", 0.0)
+        n = 0
+        for c in colors:
+            cup_path = f"{container_path}/cup_{c}"
+            fwd, lat = positions.get(c, (0, 0))
+            x, y = _to_world(fwd, lat, anchor=pan_xy)
+            # ArUco-preserving orient (same math as add_cups).
+            dx_pan, dy_pan = x - pan_xy[0], y - pan_xy[1]
+            if (CUP_LAYOUT.get("face_origin", False)
+                    and (abs(dx_pan) > 1e-4 or abs(dy_pan) > 1e-4)):
+                if mode == "arc":
+                    yaw_rad = math.atan2(-dy_pan, -dx_pan)
+                else:
+                    yaw_rad = math.radians(CUP_LAYOUT["angle_deg"]) + math.pi
+                quat_wxyz = (math.cos(yaw_rad / 2), 0.0, 0.0,
+                             math.sin(yaw_rad / 2))
+            else:
+                quat_wxyz = (1.0, 0.0, 0.0, 0.0)
+
+            # Teleport via RigidPrim (physics-aware, works while playing).
+            # Fall back to USD xformOp writes on failure.
+            try:
+                from omni.isaac.core.prims import RigidPrim
+                import numpy as np
+                rp = RigidPrim(prim_path=cup_path)
+                rp.set_world_pose(
+                    position=np.array((x, y, ground_z), dtype=np.float32),
+                    orientation=np.array(quat_wxyz, dtype=np.float32),
+                )
+                try:
+                    rp.set_linear_velocity(np.zeros(3, dtype=np.float32))
+                    rp.set_angular_velocity(np.zeros(3, dtype=np.float32))
+                except Exception:
+                    pass
+            except Exception:
+                cup_prim = stage.GetPrimAtPath(cup_path)
+                ta = cup_prim.GetAttribute("xformOp:translate")
+                if ta:
+                    ta.Set(Gf.Vec3d(x, y, ground_z))
+                oa = cup_prim.GetAttribute("xformOp:orient")
+                if oa:
+                    qw, qx, qy, qz = quat_wxyz
+                    if "quatd" in str(oa.GetTypeName()).lower():
+                        oa.Set(Gf.Quatd(qw, qx, qy, qz))
+                    else:
+                        oa.Set(Gf.Quatf(qw, qx, qy, qz))
+            n += 1
+        print(f"[update_cups] Teleported {n} cups in place "
+              f"(action graph preserved)")
 
     def add_cups(self, container_path="/World/Containers"):
         """Add colored cups using CUP_LAYOUT config (arc or line mode).
@@ -5204,6 +5345,21 @@ class DigitalTwin(omni.ext.IExt):
                 "status": "success",
                 "message": f"Sorted {count} blocks into cups (color={color or 'all'})"
             }
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_update_cups(self) -> Dict[str, Any]:
+        """MCP handler: reposition cups to current CUP_LAYOUT settings.
+
+        Delegates to _add_cups_from_ui, which now teleports existing cups
+        via RigidPrim rather than delete/add (action graph preserved).
+        Falls back to delete+add on first-time creation.
+        """
+        try:
+            self._add_cups_from_ui()
+            return {"status": "success",
+                    "message": "Cups updated from CUP_LAYOUT"}
         except Exception as e:
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
