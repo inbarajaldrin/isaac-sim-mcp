@@ -5231,14 +5231,73 @@ class DigitalTwin(omni.ext.IExt):
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
 
-    def _cmd_publish_drop_poses(self) -> Dict[str, Any]:
-        """MCP handler: publish ArUco marker poses for each cup to /drop_poses.
+    def _get_cup_body_center_offset(self, cup_prim):
+        """Half of the cup's z-extent in its own local frame.
 
-        Creates wrapper Xform prims (drop_0, drop_1, drop_2) at each
-        ArUco marker's world transform, then builds action graph
+        Used to lift each ``drop_{id}`` wrapper prim from the cup's
+        base-center (cup prim's own origin) to the cup's body center.
+        This matches the lego convention where ``/objects_poses_sim``
+        publishes each block's CENTER pose (not its base) — so downstream
+        consumers can treat lego and cup poses the same way.
+
+        Returns the half-extent in meters. Falls back to 0.0965/2 (known
+        cup STL height ≈ 97 mm) if the bbox query fails.
+        """
+        try:
+            from pxr import UsdGeom, Usd
+            cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(),
+                                      [UsdGeom.Tokens.default_])
+            bbox = cache.ComputeUntransformedBound(cup_prim)
+            r = bbox.ComputeAlignedRange()
+            z_extent = r.GetMax()[2] - r.GetMin()[2]
+            if z_extent > 1e-6:
+                return z_extent / 2.0
+        except Exception:
+            pass
+        return 0.0965 / 2.0
+
+    def _compute_drop_wrapper_xform(self, cup_prim, half_height=None):
+        """Compose cup's L2W with a local (0,0,+half_height) translation.
+
+        The result is a 4x4 transform whose translation is the cup body
+        center in world, and whose rotation equals the cup's world
+        orientation. This is what the ``drop_{id}`` wrapper prim should
+        hold so /drop_poses publishes cup-body-center pose (matching the
+        lego convention).
+        """
+        from pxr import UsdGeom, Gf
+        cup_L2W = UsdGeom.Xformable(cup_prim).ComputeLocalToWorldTransform(0)
+        if half_height is None:
+            half_height = self._get_cup_body_center_offset(cup_prim)
+        offset_local = Gf.Matrix4d().SetTranslate(
+            Gf.Vec3d(0.0, 0.0, float(half_height)))
+        # Row-vector convention: p_world = p_local * offset_local * cup_L2W
+        return offset_local * cup_L2W
+
+    def _cmd_publish_drop_poses(self) -> Dict[str, Any]:
+        """MCP handler: publish each cup's BODY-CENTER pose to /drop_poses.
+
+        Creates wrapper Xform prims (drop_0, drop_1, drop_2), each whose
+        world transform = cup_prim.L2W composed with a local +Z offset of
+        half the cup's height. Then builds action graph
         /Graph/ActionGraph_drop_poses with ROS2PublishTransformTree targeting
-        the wrapper prims. This ensures child_frame_ids are drop_0, drop_1, drop_2
-        rather than all being 'aruco_marker_mesh'.
+        the wrapper prims so child_frame_ids become drop_0/1/2.
+
+        Semantic contract: /drop_poses transforms encode cup BODY CENTER
+        in world (same convention as /objects_poses_sim for legos — the
+        published pose is the object's center, not its base or any marker
+        surface). Downstream consumers in the VLA package are responsible
+        for applying any rim/hover offsets they need.
+
+        Historical note: prior to 2026-04-21 this published the ArUco
+        marker mesh's world transform. That equaled cup-base-center only
+        because the Blender-baked marker USDs happened to have identity
+        local xforms — a latent coupling that would silently break if the
+        marker USDs were ever regenerated with a non-zero mesh origin.
+        Reading the cup prim directly removes that coupling and aligns the
+        sim-side contract with what aruco_camera_localizer publishes on
+        the real-world side (also cup-body-center, after it applies its
+        marker→cup transform).
 
         Requires cups to be present in the scene (add_cups must be called first).
         """
@@ -5255,61 +5314,70 @@ class DigitalTwin(omni.ext.IExt):
             if not stage:
                 return {"status": "error", "message": "No stage found"}
 
+            # Color → aruco_id mapping is kept only for frame-id naming
+            # (drop_{aruco_id}) and for aruco_camera_localizer symmetry on
+            # the real-world side — the sim reads cup prims directly now.
+            color_to_id = CUP_ARUCO_CONFIG["ids"]  # {red:0, green:1, blue:2}
+
+            def _write_wrapper(color, aruco_id, require_wrapper_exists):
+                """Compute cup-body-center world xform and write it onto
+                the drop_{aruco_id} wrapper. Returns wrapper_path or None."""
+                cup_path = f"/World/Containers/cup_{color}"
+                cup_prim = stage.GetPrimAtPath(cup_path)
+                if not (cup_prim and cup_prim.IsValid()):
+                    return None
+                wrapper_path = f"/World/Containers/drop_{aruco_id}"
+                wrapper_prim = stage.GetPrimAtPath(wrapper_path)
+                if require_wrapper_exists and not (
+                        wrapper_prim and wrapper_prim.IsValid()):
+                    return None
+                if not (wrapper_prim and wrapper_prim.IsValid()):
+                    wrapper_prim = UsdGeom.Xform.Define(
+                        stage, wrapper_path).GetPrim()
+                half_h = self._get_cup_body_center_offset(cup_prim)
+                # Cache for the live-sync callback — avoids recomputing the
+                # bbox every frame.
+                self._cup_half_heights.setdefault(color, float(half_h))
+                world_xform = self._compute_drop_wrapper_xform(
+                    cup_prim, half_height=half_h)
+                wx = UsdGeom.Xformable(wrapper_prim)
+                wx.ClearXformOpOrder()
+                wx.AddTransformOp().Set(world_xform)
+                return wrapper_path
+
+            # Initialize / reset per-cup half-height cache (populated by
+            # _write_wrapper below and consumed by the live-sync callback).
+            self._cup_half_heights = {}
+
             # If graph already exists, just refresh wrapper transforms + ensure
             # the live-sync callback is installed. This lets callers re-trigger
             # the publisher to pick up moved cups without rebuilding the graph.
             existing = stage.GetPrimAtPath(graph_path)
             if existing and existing.IsValid():
-                color_to_id = CUP_ARUCO_CONFIG["ids"]
-                refreshed = []
-                for color, aruco_id in color_to_id.items():
-                    mesh_path = f"/World/Containers/cup_{color}/aruco_{aruco_id:03d}/aruco_marker_mesh"
-                    mesh_prim = stage.GetPrimAtPath(mesh_path)
-                    wrapper_path = f"/World/Containers/drop_{aruco_id}"
-                    wrapper_prim = stage.GetPrimAtPath(wrapper_path)
-                    if not (mesh_prim and mesh_prim.IsValid()
-                            and wrapper_prim and wrapper_prim.IsValid()):
-                        continue
-                    from pxr import UsdGeom
-                    world_xform = UsdGeom.Xformable(mesh_prim).ComputeLocalToWorldTransform(0)
-                    wx = UsdGeom.Xformable(wrapper_prim)
-                    wx.ClearXformOpOrder()
-                    wx.AddTransformOp().Set(world_xform)
-                    refreshed.append(wrapper_path)
+                refreshed = [wp for wp in
+                             (_write_wrapper(c, i, require_wrapper_exists=True)
+                              for c, i in color_to_id.items())
+                             if wp is not None]
                 self._install_drop_pose_live_sync()
                 return {"status": "success",
-                        "message": f"Graph exists — refreshed {len(refreshed)} wrappers + live-sync active"}
+                        "message": (f"Graph exists — refreshed "
+                                    f"{len(refreshed)} wrappers + live-sync "
+                                    f"active (cup body-center semantics)")}
 
-            # Build wrapper Xform prims at each ArUco marker's world transform
-            color_to_id = CUP_ARUCO_CONFIG["ids"]  # {red:0, green:1, blue:2}
+            # Build wrapper Xform prims at each cup's body-center world pose
             target_prims = []
             found_colors = []
             for color, aruco_id in color_to_id.items():
-                mesh_path = f"/World/Containers/cup_{color}/aruco_{aruco_id:03d}/aruco_marker_mesh"
-                mesh_prim = stage.GetPrimAtPath(mesh_path)
-                if not (mesh_prim and mesh_prim.IsValid()):
-                    print(f"[drop_poses] Warning: ArUco mesh not found at {mesh_path} — skipping {color}")
+                wrapper_path = _write_wrapper(
+                    color, aruco_id, require_wrapper_exists=False)
+                if wrapper_path is None:
+                    print(f"[drop_poses] Warning: cup_{color} not found — "
+                          f"skipping {color}")
                     continue
-
-                # Get world transform of the ArUco marker mesh
-                xformable = UsdGeom.Xformable(mesh_prim)
-                world_xform = xformable.ComputeLocalToWorldTransform(0)
-
-                # Create wrapper Xform prim named drop_{aruco_id}
-                wrapper_path = f"/World/Containers/drop_{aruco_id}"
-                wrapper_prim = stage.GetPrimAtPath(wrapper_path)
-                if not (wrapper_prim and wrapper_prim.IsValid()):
-                    wrapper_prim = UsdGeom.Xform.Define(stage, wrapper_path).GetPrim()
-
-                # Apply the world transform to the wrapper
-                wrapper_xformable = UsdGeom.Xformable(wrapper_prim)
-                wrapper_xformable.ClearXformOpOrder()
-                xform_op = wrapper_xformable.AddTransformOp()
-                xform_op.Set(world_xform)
-
                 target_prims.append(wrapper_path)
                 found_colors.append(color)
-                print(f"[drop_poses] Created wrapper {wrapper_path} at ArUco marker transform")
+                print(f"[drop_poses] Created wrapper {wrapper_path} at "
+                      f"cup_{color} body-center")
 
             if not target_prims:
                 return {
@@ -5383,7 +5451,7 @@ class DigitalTwin(omni.ext.IExt):
 
     def _install_drop_pose_live_sync(self):
         """Register a per-frame update callback that syncs each drop_{id}
-        wrapper prim's transform from its source ArUco marker.
+        wrapper prim's transform from its source CUP prim.
 
         The ROS2PublishTransformTree node in /Graph/ActionGraph_drop_poses
         publishes the wrappers' world poses on every playback tick. Without
@@ -5392,6 +5460,10 @@ class DigitalTwin(omni.ext.IExt):
         one frame later — matching the live behavior of /objects_poses_sim
         for legos.
 
+        Per-cup half-heights are cached in self._cup_half_heights (populated
+        at setup time in _cmd_publish_drop_poses) so the callback doesn't
+        pay a BBoxCache query on every frame.
+
         Idempotent: second+ calls are no-ops (subscription already held).
         """
         if getattr(self, "_drop_pose_live_sync_sub", None) is not None:
@@ -5399,7 +5471,6 @@ class DigitalTwin(omni.ext.IExt):
         try:
             import omni.kit.app
             import omni.usd
-            from pxr import UsdGeom
 
             def _on_update(e):
                 stage = omni.usd.get_context().get_stage()
@@ -5407,15 +5478,22 @@ class DigitalTwin(omni.ext.IExt):
                     return
                 color_to_id = CUP_ARUCO_CONFIG["ids"]
                 for color, aruco_id in color_to_id.items():
-                    mesh_path = f"/World/Containers/cup_{color}/aruco_{aruco_id:03d}/aruco_marker_mesh"
+                    cup_path = f"/World/Containers/cup_{color}"
                     wrapper_path = f"/World/Containers/drop_{aruco_id}"
-                    mp = stage.GetPrimAtPath(mesh_path)
-                    wp = stage.GetPrimAtPath(wrapper_path)
-                    if not (mp and mp.IsValid() and wp and wp.IsValid()):
+                    cup_prim = stage.GetPrimAtPath(cup_path)
+                    wrap_prim = stage.GetPrimAtPath(wrapper_path)
+                    if not (cup_prim and cup_prim.IsValid()
+                            and wrap_prim and wrap_prim.IsValid()):
                         continue
                     try:
-                        wx_src = UsdGeom.Xformable(mp).ComputeLocalToWorldTransform(0)
-                        wx_dst = UsdGeom.Xformable(wp)
+                        half_h = self._cup_half_heights.get(color)
+                        if half_h is None:
+                            half_h = self._get_cup_body_center_offset(cup_prim)
+                            self._cup_half_heights[color] = float(half_h)
+                        wx_src = self._compute_drop_wrapper_xform(
+                            cup_prim, half_height=half_h)
+                        from pxr import UsdGeom
+                        wx_dst = UsdGeom.Xformable(wrap_prim)
                         wx_dst.ClearXformOpOrder()
                         wx_dst.AddTransformOp().Set(wx_src)
                     except Exception:
@@ -5425,7 +5503,8 @@ class DigitalTwin(omni.ext.IExt):
             self._drop_pose_live_sync_sub = (
                 app.get_update_event_stream().create_subscription_to_pop(
                     _on_update, name="soarm101_drop_pose_live_sync"))
-            print("[drop_poses] Live-sync callback installed (per-frame)")
+            print("[drop_poses] Live-sync callback installed (per-frame, "
+                  "cup body-center)")
         except Exception as e:
             print(f"[drop_poses] Failed to install live sync: {e}")
 
