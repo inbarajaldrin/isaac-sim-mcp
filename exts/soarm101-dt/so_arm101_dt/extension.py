@@ -2657,33 +2657,69 @@ class DigitalTwin(omni.ext.IExt):
     def _set_obj_prim_pose(self, prim_path, position, rotation_xyz_deg=None):
         """Set object position and orientation on its body prim.
 
+        Precision-aware: introspects the existing xformOp:orient and
+        xformOp:translate attribute types and builds matching Gf values.
+        This lets the helper serve both legos (Quatf/Vec3d created by the
+        block-spawn path) and cups (Quatd/Vec3d created with
+        ``AddOrientOp(PrecisionDouble)`` at add_cups:3029). Passing a
+        Quatf to a Quatd-typed property raises
+        ``<pxr.Tf.ErrorException> Type mismatch`` and the ChangeProperty
+        command fails silently inside Kit's undo stack.
+
         Args:
             prim_path: USD prim path (body prim with RigidBodyAPI).
-            position: Gf.Vec3d or (x, y, z) tuple.
+            position: Gf.Vec3d/Gf.Vec3f or (x, y, z) tuple.
             rotation_xyz_deg: (rx, ry, rz) euler angles in degrees, or None for identity.
         """
         import omni.kit.commands
         import math
-        if isinstance(position, Gf.Vec3d):
-            pos_value = position
-        else:
-            pos_value = Gf.Vec3d(*position)
 
-        # Convert euler XYZ degrees to quaternion (w, x, y, z)
+        # Convert euler XYZ degrees to quaternion (w, x, y, z) in f64 math
         rot = rotation_xyz_deg if rotation_xyz_deg is not None else (0.0, 0.0, 0.0)
         rx, ry, rz = [math.radians(a) for a in rot]
         cx, sx = math.cos(rx / 2), math.sin(rx / 2)
         cy, sy = math.cos(ry / 2), math.sin(ry / 2)
         cz, sz = math.cos(rz / 2), math.sin(rz / 2)
-        w = cx * cy * cz + sx * sy * sz
-        x = sx * cy * cz - cx * sy * sz
-        y = cx * sy * cz + sx * cy * sz
-        z = cx * cy * sz - sx * sy * cz
+        qw = cx * cy * cz + sx * sy * sz
+        qx = sx * cy * cz - cx * sy * sz
+        qy = cx * sy * cz + sx * cy * sz
+        qz = cx * cy * sz - sx * sy * cz
+
+        # Introspect existing attribute types (fall back to Gf.Vec3d / Gf.Quatf
+        # if attributes don't exist yet — matches prior lego behavior).
+        stage = omni.usd.get_context().get_stage()
+        prim = stage.GetPrimAtPath(prim_path)
+        orient_attr = prim.GetAttribute("xformOp:orient") if prim else None
+        translate_attr = prim.GetAttribute("xformOp:translate") if prim else None
+
+        # Orient: match precision of existing attribute.
+        if orient_attr and orient_attr.IsValid():
+            type_name = str(orient_attr.GetTypeName()).lower()
+            if "quatd" in type_name:
+                orient_value = Gf.Quatd(qw, qx, qy, qz)
+            else:
+                orient_value = Gf.Quatf(qw, qx, qy, qz)
+        else:
+            orient_value = Gf.Quatf(qw, qx, qy, qz)
+
+        # Position: convert to matching vector precision if possible.
+        if isinstance(position, (Gf.Vec3d, Gf.Vec3f)):
+            pos_tuple = (position[0], position[1], position[2])
+        else:
+            pos_tuple = tuple(position)
+        if translate_attr and translate_attr.IsValid():
+            type_name = str(translate_attr.GetTypeName()).lower()
+            if "vector3f" in type_name or "float3" in type_name:
+                pos_value = Gf.Vec3f(*pos_tuple)
+            else:
+                pos_value = Gf.Vec3d(*pos_tuple)
+        else:
+            pos_value = Gf.Vec3d(*pos_tuple)
 
         omni.kit.commands.execute(
             "ChangeProperty",
             prop_path=f"{prim_path}.xformOp:orient",
-            value=Gf.Quatf(w, x, y, z),
+            value=orient_value,
             prev=None,
         )
         omni.kit.commands.execute(
@@ -2905,33 +2941,25 @@ class DigitalTwin(omni.ext.IExt):
             else:
                 quat_wxyz = (1.0, 0.0, 0.0, 0.0)
 
-            # Teleport via RigidPrim (physics-aware, works while playing).
-            # Fall back to USD xformOp writes on failure.
-            try:
-                from omni.isaac.core.prims import RigidPrim
-                import numpy as np
-                rp = RigidPrim(prim_path=cup_path)
-                rp.set_world_pose(
-                    position=np.array((x, y, ground_z), dtype=np.float32),
-                    orientation=np.array(quat_wxyz, dtype=np.float32),
-                )
-                try:
-                    rp.set_linear_velocity(np.zeros(3, dtype=np.float32))
-                    rp.set_angular_velocity(np.zeros(3, dtype=np.float32))
-                except Exception:
-                    pass
-            except Exception:
-                cup_prim = stage.GetPrimAtPath(cup_path)
-                ta = cup_prim.GetAttribute("xformOp:translate")
-                if ta:
-                    ta.Set(Gf.Vec3d(x, y, ground_z))
-                oa = cup_prim.GetAttribute("xformOp:orient")
-                if oa:
-                    qw, qx, qy, qz = quat_wxyz
-                    if "quatd" in str(oa.GetTypeName()).lower():
-                        oa.Set(Gf.Quatd(qw, qx, qy, qz))
-                    else:
-                        oa.Set(Gf.Quatf(qw, qx, qy, qz))
+            # Teleport via the same Kit-command path lego randomize uses
+            # (_set_obj_prim_pose) so ChangeProperty propagates through Kit's
+            # event system — PhysX, RTX/Hydra, and USD listeners all receive
+            # authoritative teleport notifications regardless of simulation
+            # state. Replaces the prior RigidPrim-with-direct-.Set()-fallback
+            # pattern, whose fallback branch was silently overridden by PhysX
+            # when the primary branch failed at runtime.
+            #
+            # quat_wxyz is yaw-only (z-axis rotation), so extract yaw by
+            # qw + qz components: yaw = 2·atan2(qz, qw). Works for both
+            # face_origin=True (yaw from pan direction) and identity quat
+            # (yaw=0).
+            qw, _qx, _qy, qz = quat_wxyz
+            yaw_deg = math.degrees(2.0 * math.atan2(qz, qw))
+            self._set_obj_prim_pose(
+                cup_path,
+                position=Gf.Vec3d(x, y, ground_z),
+                rotation_xyz_deg=(0.0, 0.0, yaw_deg),
+            )
             n += 1
         print(f"[update_cups] Teleported {n} cups in place "
               f"(action graph preserved)")
@@ -5227,10 +5255,30 @@ class DigitalTwin(omni.ext.IExt):
             if not stage:
                 return {"status": "error", "message": "No stage found"}
 
-            # Guard: skip if already created
+            # If graph already exists, just refresh wrapper transforms + ensure
+            # the live-sync callback is installed. This lets callers re-trigger
+            # the publisher to pick up moved cups without rebuilding the graph.
             existing = stage.GetPrimAtPath(graph_path)
             if existing and existing.IsValid():
-                return {"status": "success", "message": f"Action graph already exists at {graph_path}"}
+                color_to_id = CUP_ARUCO_CONFIG["ids"]
+                refreshed = []
+                for color, aruco_id in color_to_id.items():
+                    mesh_path = f"/World/Containers/cup_{color}/aruco_{aruco_id:03d}/aruco_marker_mesh"
+                    mesh_prim = stage.GetPrimAtPath(mesh_path)
+                    wrapper_path = f"/World/Containers/drop_{aruco_id}"
+                    wrapper_prim = stage.GetPrimAtPath(wrapper_path)
+                    if not (mesh_prim and mesh_prim.IsValid()
+                            and wrapper_prim and wrapper_prim.IsValid()):
+                        continue
+                    from pxr import UsdGeom
+                    world_xform = UsdGeom.Xformable(mesh_prim).ComputeLocalToWorldTransform(0)
+                    wx = UsdGeom.Xformable(wrapper_prim)
+                    wx.ClearXformOpOrder()
+                    wx.AddTransformOp().Set(world_xform)
+                    refreshed.append(wrapper_path)
+                self._install_drop_pose_live_sync()
+                return {"status": "success",
+                        "message": f"Graph exists — refreshed {len(refreshed)} wrappers + live-sync active"}
 
             # Build wrapper Xform prims at each ArUco marker's world transform
             color_to_id = CUP_ARUCO_CONFIG["ids"]  # {red:0, green:1, blue:2}
@@ -5316,9 +5364,15 @@ class DigitalTwin(omni.ext.IExt):
             print(f"[drop_poses] Publishing {len(target_prims)} drop poses to topic: /{topic_name}")
             print(f"[drop_poses] Cups found: {found_colors}")
 
+            # Install a per-frame callback that copies each ArUco marker's
+            # live world transform into its wrapper prim. Without this, cups
+            # moved after setup would not be reflected in /drop_poses (the
+            # wrappers above are snapshotted at setup time only).
+            self._install_drop_pose_live_sync()
+
             return {
                 "status": "success",
-                "message": f"Publishing /drop_poses for cups: {found_colors}",
+                "message": f"Publishing /drop_poses for cups: {found_colors} (live sync active)",
                 "graph_path": graph_path,
                 "target_prims": target_prims,
             }
@@ -5326,6 +5380,54 @@ class DigitalTwin(omni.ext.IExt):
         except Exception as e:
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
+
+    def _install_drop_pose_live_sync(self):
+        """Register a per-frame update callback that syncs each drop_{id}
+        wrapper prim's transform from its source ArUco marker.
+
+        The ROS2PublishTransformTree node in /Graph/ActionGraph_drop_poses
+        publishes the wrappers' world poses on every playback tick. Without
+        this sync, those poses are frozen at publish_drop_poses setup time.
+        With this sync, cup movement in Isaac is reflected in /drop_poses
+        one frame later — matching the live behavior of /objects_poses_sim
+        for legos.
+
+        Idempotent: second+ calls are no-ops (subscription already held).
+        """
+        if getattr(self, "_drop_pose_live_sync_sub", None) is not None:
+            return
+        try:
+            import omni.kit.app
+            import omni.usd
+            from pxr import UsdGeom
+
+            def _on_update(e):
+                stage = omni.usd.get_context().get_stage()
+                if not stage:
+                    return
+                color_to_id = CUP_ARUCO_CONFIG["ids"]
+                for color, aruco_id in color_to_id.items():
+                    mesh_path = f"/World/Containers/cup_{color}/aruco_{aruco_id:03d}/aruco_marker_mesh"
+                    wrapper_path = f"/World/Containers/drop_{aruco_id}"
+                    mp = stage.GetPrimAtPath(mesh_path)
+                    wp = stage.GetPrimAtPath(wrapper_path)
+                    if not (mp and mp.IsValid() and wp and wp.IsValid()):
+                        continue
+                    try:
+                        wx_src = UsdGeom.Xformable(mp).ComputeLocalToWorldTransform(0)
+                        wx_dst = UsdGeom.Xformable(wp)
+                        wx_dst.ClearXformOpOrder()
+                        wx_dst.AddTransformOp().Set(wx_src)
+                    except Exception:
+                        pass
+
+            app = omni.kit.app.get_app()
+            self._drop_pose_live_sync_sub = (
+                app.get_update_event_stream().create_subscription_to_pop(
+                    _on_update, name="soarm101_drop_pose_live_sync"))
+            print("[drop_poses] Live-sync callback installed (per-frame)")
+        except Exception as e:
+            print(f"[drop_poses] Failed to install live sync: {e}")
 
     def _cmd_delete_cups(self) -> Dict[str, Any]:
         """MCP handler for deleting sorting cups."""
