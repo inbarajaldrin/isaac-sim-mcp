@@ -2716,18 +2716,10 @@ class DigitalTwin(omni.ext.IExt):
         else:
             pos_value = Gf.Vec3d(*pos_tuple)
 
-        omni.kit.commands.execute(
-            "ChangeProperty",
-            prop_path=f"{prim_path}.xformOp:orient",
-            value=orient_value,
-            prev=None,
-        )
-        omni.kit.commands.execute(
-            "ChangeProperty",
-            prop_path=f"{prim_path}.xformOp:translate",
-            value=pos_value,
-            prev=None,
-        )
+        if translate_attr and translate_attr.IsValid():
+            translate_attr.Set(pos_value)
+        if orient_attr and orient_attr.IsValid():
+            orient_attr.Set(orient_value)
 
     def sort_objects(self, color=None, folder_path="/World/Objects"):
         """Sort blocks by placing same-color blocks in tight clusters at X=0.3, spread along Y.
@@ -2901,17 +2893,32 @@ class DigitalTwin(omni.ext.IExt):
         # Compute target positions using the same logic as add_cups.
         mode = CUP_LAYOUT["mode"]
         if mode == "line":
+            # Rotation-invariant width measurement: force every cup to identity
+            # orient BEFORE reading its bounding box, then let the final pose
+            # write below overwrite the orient to the target yaw. The
+            # intermediate identity state exists only within this Python tick
+            # and never renders.
+            #
+            # Why: ComputeUntransformedBound's AABB reflects the cup's current
+            # authored xformOp:orient in practice, even though the docs claim
+            # it shouldn't. Measuring while cups still carry their prior
+            # (e.g. arc-mode) yaws produces over-wide widths, which then feed
+            # _cup_positions_line and space the row too wide on the first
+            # click; a second identical click tightens it because cups are
+            # now at the line-mode yaw. Forcing identity before measuring
+            # breaks that dependency.
+            identity_q = Gf.Quatd(1.0, 0.0, 0.0, 0.0)
+            for c in colors:
+                o_attr = stage.GetPrimAtPath(
+                    f"{container_path}/cup_{c}").GetAttribute("xformOp:orient")
+                if o_attr and o_attr.IsValid():
+                    o_attr.Set(identity_q)
+
             bbox_cache = UsdGeom.BBoxCache(
                 Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
             cup_widths = {}
             for c in colors:
                 cup_prim = stage.GetPrimAtPath(f"{container_path}/cup_{c}")
-                # ComputeUntransformedBound: intrinsic extent of the cup
-                # geometry WITHOUT the prim's own xform applied. Critical
-                # when cups are currently tilted (a fallen cup's AABB is
-                # much wider than the cup's actual diameter) — using
-                # ComputeWorldBound here leaves stale spacing that only
-                # corrects on a second click once cups are upright.
                 bbox = bbox_cache.ComputeUntransformedBound(cup_prim)
                 r = bbox.ComputeAlignedRange()
                 mn, mx = r.GetMin(), r.GetMax()
