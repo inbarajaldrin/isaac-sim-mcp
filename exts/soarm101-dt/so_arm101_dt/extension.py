@@ -2893,34 +2893,29 @@ class DigitalTwin(omni.ext.IExt):
         # Compute target positions using the same logic as add_cups.
         mode = CUP_LAYOUT["mode"]
         if mode == "line":
-            # Rotation-invariant width measurement: force every cup to identity
-            # orient BEFORE reading its bounding box, then let the final pose
-            # write below overwrite the orient to the target yaw. The
-            # intermediate identity state exists only within this Python tick
-            # and never renders.
-            #
-            # Why: ComputeUntransformedBound's AABB reflects the cup's current
-            # authored xformOp:orient in practice, even though the docs claim
-            # it shouldn't. Measuring while cups still carry their prior
-            # (e.g. arc-mode) yaws produces over-wide widths, which then feed
-            # _cup_positions_line and space the row too wide on the first
-            # click; a second identical click tightens it because cups are
-            # now at the line-mode yaw. Forcing identity before measuring
-            # breaks that dependency.
-            identity_q = Gf.Quatd(1.0, 0.0, 0.0, 0.0)
-            for c in colors:
-                o_attr = stage.GetPrimAtPath(
-                    f"{container_path}/cup_{c}").GetAttribute("xformOp:orient")
-                if o_attr and o_attr.IsValid():
-                    o_attr.Set(identity_q)
-
+            # Rotation-invariant width: measure the Mesh descendant, not the
+            # cup root. Bounding the root leaks the root's authored
+            # xformOp:orient into the AABB (verified empirically: a 74° yaw
+            # inflates the root's X/Y extent from 0.078 → 0.120). The mesh
+            # child has no xformOps of its own, so its untransformed bound
+            # is the raw vertex extent — truly orientation-invariant and
+            # independent of prior arc/line state. Same canonical pattern
+            # _on_physics_step_bbox already uses for the lego bbox topic.
             bbox_cache = UsdGeom.BBoxCache(
                 Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
             cup_widths = {}
             for c in colors:
-                cup_prim = stage.GetPrimAtPath(f"{container_path}/cup_{c}")
-                bbox = bbox_cache.ComputeUntransformedBound(cup_prim)
-                r = bbox.ComputeAlignedRange()
+                cup_root = stage.GetPrimAtPath(f"{container_path}/cup_{c}")
+                mesh_prim = None
+                for p in Usd.PrimRange(cup_root):
+                    if p.GetTypeName() == "Mesh" and "aruco" not in p.GetName():
+                        mesh_prim = p
+                        break
+                if mesh_prim is None:
+                    cup_widths[c] = 0.08  # fallback — matches _cup_positions_line default
+                    continue
+                r = bbox_cache.ComputeUntransformedBound(
+                    mesh_prim).ComputeAlignedRange()
                 mn, mx = r.GetMin(), r.GetMax()
                 cup_widths[c] = (mx[1] - mn[1] if ROBOT_FORWARD_AXIS == "X"
                                  else mx[0] - mn[0])
