@@ -79,3 +79,28 @@ resources/
 
 # Video recordings
 **/videos/
+
+# Session-local tooling state
+.claude/
+.codex
+
+# GSD workflow ephemera
+.planning/debug/
+.planning/phases/*/.continue-here.md
+.planning/phases/*/traces/
+
+# Working-copy ephemera
+ompl_src/
+tmp/
+drop_2
+frames_*.gv
+frames_*.pdf
+
+# Session handoff notes (per-session, not tracked)
+handoff.md
+
+# Drive tuner runtime outputs (Phase 10+)
+reports/tuning_*/
+config/drive_tuning.yaml.bak.*
+config/drive_tuning.tuned.yaml
+
