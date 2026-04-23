@@ -1,0 +1,11 @@
+SO-ARM101 grasp reachability summary
+========================================
+25mm: 1268/1271 pass (99.8%) | Gate A fail: 0, Gate B fail: 3
+30mm: 1262/1271 pass (99.3%) | Gate A fail: 0, Gate B fail: 9
+35mm: 1249/1271 pass (98.3%) | Gate A fail: 0, Gate B fail: 22
+40mm: 1232/1271 pass (96.9%) | Gate A fail: 0, Gate B fail: 39
+45mm: 1209/1271 pass (95.1%) | Gate A fail: 0, Gate B fail: 62
+50mm: 1182/1271 pass (93.0%) | Gate A fail: 0, Gate B fail: 89
+
+grid: {'x_range_m': (0.1, 0.25), 'y_range_m': (-0.1, 0.1), 'nx': 31, 'ny': 41, 'resolution_m': 0.005}
+runtime: 11.25s
