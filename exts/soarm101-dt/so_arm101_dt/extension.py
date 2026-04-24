@@ -499,6 +499,28 @@ def _get_cups_folder():
 #   3. That's it! The server will automatically discover and expose it.
 # =============================================================================
 
+# Module-level state for direct PhysX contact-event subscription.
+# Populated by DigitalTwin._setup_contact_sensors(). Exposed at module
+# scope so motion_logger's snapshot script (which runs inline via
+# execute_python_code) can drain events in the same tick as DOF state.
+#
+# We bypass isaacsim.sensors.physics.ContactSensor entirely — that
+# wrapper depends on `omni.physx.contact`, which is absent in Isaac Sim
+# 5.0 under that name, so every sensor came back is_valid=False. The
+# core PhysX simulation interface (`omni.physx.get_physx_simulation_interface()`)
+# exposes subscribe_contact_report_events natively and fires for any
+# prim that has PhysxContactReportAPI applied. That's what we use here.
+#
+# _CONTACT_EVENTS is a bounded deque of dict events appended by the
+# physics-thread callback; the MCP tool / motion_logger drain it.
+from collections import deque as _deque
+_CONTACT_EVENTS = _deque(maxlen=2048)
+_CONTACT_SUB = None               # carb.Subscription (keep alive)
+_CONTACT_WATCHED_PATHS = set()    # path prefixes we care about (cups + robot links)
+# Back-compat alias — older snapshot scripts check this for "sensors installed".
+_CONTACT_SENSORS = {}
+
+
 MCP_TOOL_REGISTRY = {
     "execute_python_code": {
         "description": "Execute Python code directly in Isaac Sim's environment with access to Omniverse APIs.",
@@ -690,6 +712,13 @@ MCP_TOOL_REGISTRY = {
         "description": "Check if viewport video recording is active. Returns status, frame count, elapsed time, output path, and FPS.",
         "parameters": {}
     },
+    "get_contact_events": {
+        "description": "Drain buffered PhysX contact events (subscribed via omni.physx contact-report subscription on cups + gripper/jaw/wrist). Returns a list of events: {t, type (CONTACT_FOUND/PERSIST/LOST), a0/a1 (actor paths), c0/c1 (collider paths), impulse [x,y,z], impulse_mag, position, n_contacts}. Events involving at least one watched prim are kept; ground-plane-only contacts are filtered. Used by motion_logger at 50 Hz to attribute cup displacement to specific robot-link pairs. Requires quick_start.",
+        "parameters": {
+            "drain": {"type": "boolean", "description": "If true (default), empty the buffer after reading. If false, return a snapshot of the tail and keep events."},
+            "max_events": {"type": "integer", "description": "Max events to return in one call. Defaults to 256."}
+        }
+    },
 }
 
 # Handler method names for each tool (maps to self._cmd_<name> methods)
@@ -725,6 +754,7 @@ MCP_HANDLERS = {
     "start_recording": "_cmd_start_recording",
     "stop_recording": "_cmd_stop_recording",
     "get_recording_status": "_cmd_get_recording_status",
+    "get_contact_events": "_cmd_get_contact_events",
 }
 
 from isaacsim.core.utils.stage import add_reference_to_stage
@@ -1411,6 +1441,14 @@ class DigitalTwin(omni.ext.IExt):
         print("--- Playing scene ---")
         self._timeline.play()
 
+        # 11. Create contact sensors on cups (for motion_logger at 50 Hz).
+        # Must be AFTER play — sensor backend initializes on Play per
+        # isaacsim.sensors.physics ContactSensor docs. One physics tick is
+        # needed before the sensor is queryable.
+        await app.next_update_async()
+        await app.next_update_async()
+        self._setup_contact_sensors()
+
         print("=== Quick Start Complete ===")
 
     async def load_robot(self):
@@ -1551,7 +1589,7 @@ class DigitalTwin(omni.ext.IExt):
 
         print("SO-ARM101 robot loaded successfully (arm + integrated gripper)!")
 
-        
+
     async def setup_action_graph(self):
         import omni.graph.core as og
         import isaacsim.core.utils.stage as stage_utils
@@ -1584,6 +1622,14 @@ class DigitalTwin(omni.ext.IExt):
             },
             {
                 og.Controller.Keys.CREATE_NODES: [
+                    # Use OnPlaybackTick (render rate, ~60 Hz) for the ROS2 bridge
+                    # nodes. OnPhysicsStep was evaluated and rejected: ROS2 callbacks
+                    # run on the main thread and don't process new messages from a
+                    # physics-step tick, so the entire command path stopped delivering
+                    # joint targets to the articulation (verified empirically on
+                    # 2026-04-23 — wrist_flex held at 0 throughout a commanded sweep).
+                    # Latency from this render-rate tick is ~240 ms but correctness-
+                    # preserving; higher-rate alternatives are out of scope here.
                     ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
                     ("ros2_context", "isaacsim.ros2.bridge.ROS2Context"),
                     ("isaac_read_simulation_time", "isaacsim.core.nodes.IsaacReadSimulationTime"),
@@ -3065,6 +3111,17 @@ class DigitalTwin(omni.ext.IExt):
                     UsdPhysics.CollisionAPI.Apply(child)
                     mesh_col = UsdPhysics.MeshCollisionAPI.Apply(child)
                     mesh_col.CreateApproximationAttr().Set("convexDecomposition")
+                    # Tighten contactOffset to match robot side. PhysX sums
+                    # the two shapes' contactOffsets when computing contact-
+                    # generation zone, so leaving the cup at the 20 mm
+                    # default (unauthored) swamps our 0.1 mm on the robot —
+                    # effective zone becomes 20.1 mm and cups still get
+                    # soft-contact pushes. 0.1 mm on both sides → 0.2 mm
+                    # total zone → only real geometric contact. See
+                    # DEBUG-GUIDE § 4.3.
+                    px = PhysxSchema.PhysxCollisionAPI.Apply(child)
+                    px.CreateContactOffsetAttr().Set(0.0001)  # 0.1 mm
+                    px.CreateRestOffsetAttr().Set(0.0)
 
             placed += 1
             print(f"  Added cup_{color_name} at ({x:.3f}, {y:.3f}, {z:.3f})")
@@ -5711,6 +5768,196 @@ class DigitalTwin(omni.ext.IExt):
         elapsed = time.time() - mgr.start_time if mgr.start_time else 0
         return {"status": "success", "recording": True, "frame_count": mgr.frame_count,
                 "elapsed_s": elapsed, "output_path": mgr.output_path, "fps": mgr.fps}
+
+    # ------------------------------------------------------------------
+    # Contact sensors — used by scripts/motion_logger.py at 50 Hz to
+    # record every physical contact between a cup and any robot link.
+    # Gives deterministic ground truth vs. the swept-volume / convex-
+    # decomp approximations our offline motion_sweep.py uses (which can
+    # miss sub-mm overhang in the convex decomposition pieces).
+    # API: isaacsim.sensors.physics.ContactSensor (introspected live —
+    # docs point to experimental module that isn't installed in 5.0).
+    # ------------------------------------------------------------------
+
+    def _setup_contact_sensors(self):
+        """Subscribe directly to PhysX contact-report events via
+        `omni.physx.get_physx_simulation_interface().subscribe_contact_report_events`.
+
+        Rationale: the isaacsim.sensors.physics.ContactSensor wrapper
+        depends on the `omni.physx.contact` extension, which is not
+        present under that name in Isaac Sim 5.0. Every sensor we created
+        via that path came back is_valid=False. The underlying PhysX
+        simulation interface exposes contact reporting directly; it
+        fires for any contact pair where at least one actor has
+        PhysxContactReportAPI applied. We just need the API applied on
+        the prims we care about (cups + the gripper/jaw/wrist rigid
+        bodies) and a subscription to drain events into a deque.
+
+        Reference material: docs/references/contact-sensor/ contains
+        the three NVIDIA files that pinned down the wrapper diagnosis.
+
+        Event fields captured per contact (resolved on the physics
+        thread — cheap int->SdfPath lookup):
+          - type: CONTACT_FOUND / CONTACT_PERSIST / CONTACT_LOST
+          - actor0/1 path, collider0/1 path
+          - position (world coords), normal, impulse (Vec3)
+          - time (sim time at event)
+
+        Idempotent. Safe on hot-reload — drops any previous subscription
+        before installing a new one.
+        """
+        global _CONTACT_SUB, _CONTACT_EVENTS, _CONTACT_WATCHED_PATHS
+        try:
+            import omni.physx
+            from pxr import UsdPhysics, PhysxSchema, PhysicsSchemaTools
+            import omni.timeline
+        except ImportError as e:
+            print(f"[contact_events] SKIP: import unavailable ({e})")
+            return
+
+        stage = omni.usd.get_context().get_stage()
+
+        # (1) Apply PhysxContactReportAPI with threshold=0 on all prims we
+        # want contact events for. Cups + gripper/jaw/wrist links. If
+        # already applied, skip (idempotent). threshold=0 means "report
+        # any contact regardless of impulse."
+        targets = []
+        for color in ("red", "green", "blue"):
+            targets.append(f"/World/Containers/cup_{color}")
+        for link in ("gripper_link", "moving_jaw_so101_v1_link", "wrist_link"):
+            targets.append(f"/World/SO_ARM101/{link}")
+
+        watched = set()
+        for path in targets:
+            prim = stage.GetPrimAtPath(path)
+            if not prim or not prim.IsValid():
+                print(f"[contact_events] skip missing prim: {path}")
+                continue
+            if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                print(f"[contact_events] skip {path}: no RigidBodyAPI")
+                continue
+            if not prim.HasAPI(PhysxSchema.PhysxContactReportAPI):
+                cr = PhysxSchema.PhysxContactReportAPI.Apply(prim)
+                cr.CreateThresholdAttr().Set(0.0)
+            else:
+                cr = PhysxSchema.PhysxContactReportAPI(prim)
+                thr_attr = cr.GetThresholdAttr()
+                if thr_attr and (thr_attr.Get() is None or thr_attr.Get() > 0.0):
+                    cr.CreateThresholdAttr().Set(0.0)
+            watched.add(path)
+
+        _CONTACT_WATCHED_PATHS = watched
+        # Back-compat dict — populate so motion_logger sees "configured".
+        _CONTACT_SENSORS.clear()
+        for path in watched:
+            name = path.rsplit("/", 1)[-1]
+            _CONTACT_SENSORS[name] = path
+
+        # (2) Drop any existing subscription. The Subscription holder
+        # unsubscribes on __del__ / when reassigned.
+        if _CONTACT_SUB is not None:
+            try:
+                _CONTACT_SUB = None
+            except Exception:
+                pass
+        _CONTACT_EVENTS.clear()
+
+        sim_iface = omni.physx.get_physx_simulation_interface()
+        tl = omni.timeline.get_timeline_interface()
+
+        def _on_contact(headers, data):
+            # Runs on the PhysX thread after each sim step. Keep O(fast).
+            try:
+                t_now = float(tl.get_current_time())
+            except Exception:
+                t_now = 0.0
+            for h in headers:
+                try:
+                    a0_int = int(h.actor0); a1_int = int(h.actor1)
+                    c0_int = int(h.collider0); c1_int = int(h.collider1)
+                    try:
+                        a0 = str(PhysicsSchemaTools.intToSdfPath(a0_int))
+                        a1 = str(PhysicsSchemaTools.intToSdfPath(a1_int))
+                    except Exception:
+                        a0, a1 = f"int:{a0_int}", f"int:{a1_int}"
+                    try:
+                        c0 = str(PhysicsSchemaTools.intToSdfPath(c0_int))
+                        c1 = str(PhysicsSchemaTools.intToSdfPath(c1_int))
+                    except Exception:
+                        c0, c1 = a0, a1
+
+                    # Filter: only events involving at least one watched
+                    # prim. Ground plane + own-body self-contacts get
+                    # dropped (there will be lots of them).
+                    def _is_watched(p):
+                        return any(p == w or p.startswith(w + "/") for w in _CONTACT_WATCHED_PATHS)
+                    if not (_is_watched(a0) or _is_watched(a1)):
+                        continue
+
+                    # Sum contact-data impulses for this header's slice.
+                    ix = iy = iz = 0.0
+                    px = py = pz = 0.0
+                    nc = int(h.num_contact_data)
+                    off = int(h.contact_data_offset)
+                    if nc > 0 and off >= 0:
+                        for k in range(nc):
+                            try:
+                                d = data[off + k]
+                                imp = d.impulse
+                                ix += float(imp[0]); iy += float(imp[1]); iz += float(imp[2])
+                                pos = d.position
+                                px += float(pos[0]); py += float(pos[1]); pos_z = float(pos[2]); pz += pos_z
+                            except Exception:
+                                continue
+                        if nc:
+                            px /= nc; py /= nc; pz /= nc
+
+                    ev_type = str(h.type).rsplit(".", 1)[-1]  # "CONTACT_FOUND"
+                    _CONTACT_EVENTS.append({
+                        "t": t_now,
+                        "type": ev_type,
+                        "a0": a0, "a1": a1,
+                        "c0": c0, "c1": c1,
+                        "impulse": [ix, iy, iz],
+                        "impulse_mag": (ix * ix + iy * iy + iz * iz) ** 0.5,
+                        "position": [px, py, pz],
+                        "n_contacts": nc,
+                    })
+                except Exception:
+                    # Swallow per-event errors — don't crash the physics
+                    # thread if a single header is malformed.
+                    continue
+
+        _CONTACT_SUB = sim_iface.subscribe_contact_report_events(_on_contact)
+        print(f"[contact_events] subscribed — watching {len(watched)} prims: "
+              f"{sorted(_CONTACT_WATCHED_PATHS)}")
+
+    def _cmd_get_contact_events(self, drain: bool = True,
+                                 max_events: int = 256) -> Dict[str, Any]:
+        """Drain buffered contact events. Returns a list of dicts, each
+        with {t, type, a0, a1, c0, c1, impulse, impulse_mag, position,
+        n_contacts}. When drain=True (default) the buffer is emptied;
+        when False, a snapshot is returned and events remain.
+
+        Used by motion_logger at 50 Hz to attribute cup displacement to
+        specific robot-link / cup contact pairs. See _setup_contact_sensors
+        for the subscription mechanism.
+        """
+        global _CONTACT_EVENTS, _CONTACT_SUB
+        events = []
+        if drain:
+            n = min(len(_CONTACT_EVENTS), max_events)
+            for _ in range(n):
+                events.append(_CONTACT_EVENTS.popleft())
+        else:
+            events = list(_CONTACT_EVENTS)[-max_events:]
+        return {
+            "status": "success",
+            "subscribed": _CONTACT_SUB is not None,
+            "watched": sorted(_CONTACT_WATCHED_PATHS),
+            "events": events,
+            "buffer_remaining": len(_CONTACT_EVENTS),
+        }
 
     def on_shutdown(self):
         """Clean shutdown"""
