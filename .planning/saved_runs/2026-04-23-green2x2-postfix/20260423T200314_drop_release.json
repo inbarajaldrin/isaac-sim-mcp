@@ -1,0 +1,61 @@
+{
+  "motion_tag": "drop_release",
+  "traj_dump": "/tmp/arm_traj/20260423T200314_777_drop_release.json",
+  "start_wall": 1776999794.8486776,
+  "start_ref_pos": {
+    "shoulder_pan": 1.5630000108636146,
+    "shoulder_lift": -0.0028613915559506957,
+    "elbow_flex": -0.006550486464994213,
+    "wrist_flex": 1.5739300539962293,
+    "wrist_roll": -1.568470869071587
+  },
+  "end_wall": 1776999799.432134,
+  "duration_s": 4.58345627784729,
+  "samples": 64,
+  "peak_ref_vel_rad_s": {
+    "shoulder_pan": 0.36173647958185323,
+    "shoulder_lift": 0.13590129124542294,
+    "elbow_flex": 1.0512156029341098,
+    "wrist_flex": 0.6648193930008429,
+    "wrist_roll": 0.10270248190293452
+  },
+  "peak_abs_err_ros2_control_rad": {
+    "shoulder_pan": 0.007152402801353208,
+    "shoulder_lift": 0.002687096356262686,
+    "elbow_flex": 0.021052653769564167,
+    "wrist_flex": 0.013314311984214289,
+    "wrist_roll": 0.002030675811623084
+  },
+  "peak_isaac_lag_rad": {
+    "shoulder_pan": 0.09314173140956172,
+    "shoulder_lift": 0.21907712911398644,
+    "elbow_flex": 0.2632028540295438,
+    "wrist_flex": 0.773218422221327,
+    "wrist_roll": 0.026195769664056234
+  },
+  "peak_isaac_lag_deg": {
+    "shoulder_pan": 5.336628106308983,
+    "shoulder_lift": 12.552194886074036,
+    "elbow_flex": 15.080412691690732,
+    "wrist_flex": 44.30215223504654,
+    "wrist_roll": 1.5009070428472566
+  },
+  "closest_approach_to_cups_mm": {
+    "cup_red": 95.73980854437193,
+    "cup_green": 7.7491332097004895,
+    "cup_blue": 20.4693249064403
+  },
+  "cup_displacement_during_motion_mm": {
+    "cup_green": 26.30448777992417,
+    "cup_blue": 0.8016556311669368,
+    "cup_red": 2.6469815479606185
+  },
+  "differential_lag_max_minus_min_rad": 0.7470226525572707,
+  "differential_lag_max_minus_min_deg": 42.80124519219929,
+  "realtime_factor": 0.22908476406197947,
+  "sim_time_advance_s": 1.049999999999045,
+  "render_fps_mean": null,
+  "render_fps_min": null,
+  "app_dt_ms_mean": null,
+  "app_dt_ms_max": null
+}

@@ -1,0 +1,57 @@
+{
+  "motion_tag": "drop_sweep",
+  "traj_dump": "/tmp/arm_traj/20260423T200710_631_drop_sweep.json",
+  "start_wall": 1777000030.670903,
+  "start_ref_pos": {
+    "shoulder_pan": 1.5624029766917351,
+    "shoulder_lift": -0.0038737424292870576,
+    "elbow_flex": -0.00270806872972522,
+    "wrist_flex": 1.5769285805928916,
+    "wrist_roll": -1.5620406739378807
+  },
+  "end_wall": 1777000033.5724776,
+  "duration_s": 2.9015746116638184,
+  "samples": 38,
+  "peak_ref_vel_rad_s": {
+    "shoulder_pan": 0.35437730423899166,
+    "shoulder_lift": 0.6256535826904969,
+    "elbow_flex": 0.19375117793941404,
+    "wrist_flex": 0.6385781273689782,
+    "wrist_roll": 0.1264350578929339
+  },
+  "peak_abs_err_ros2_control_rad": {
+    "shoulder_pan": 0.007130664240951434,
+    "shoulder_lift": 0.012529614318567278,
+    "elbow_flex": 0.003880146458858945,
+    "wrist_flex": 0.012788446945031007,
+    "wrist_roll": 0.0025440848929536575
+  },
+  "peak_isaac_lag_rad": {
+    "shoulder_pan": 0.08520539020863427,
+    "shoulder_lift": 0.15773808039083137,
+    "elbow_flex": 0.04796585301678423,
+    "wrist_flex": 0.15762310249425138,
+    "wrist_roll": 0.036334641078196395
+  },
+  "peak_isaac_lag_deg": {
+    "shoulder_pan": 4.881909250720052,
+    "shoulder_lift": 9.037726274889929,
+    "elbow_flex": 2.7482409386065836,
+    "wrist_flex": 9.031138526678603,
+    "wrist_roll": 2.0818215839033245
+  },
+  "closest_approach_to_cups_mm": {
+    "cup_red": 97.2008947391274,
+    "cup_green": 9.221148801085986,
+    "cup_blue": 50.262914216727374
+  },
+  "cup_displacement_during_motion_mm": {},
+  "differential_lag_max_minus_min_rad": 0.12140343931263498,
+  "differential_lag_max_minus_min_deg": 6.955904690986604,
+  "realtime_factor": 0.2125282817774923,
+  "sim_time_advance_s": 0.6166666666661058,
+  "render_fps_mean": null,
+  "render_fps_min": null,
+  "app_dt_ms_mean": null,
+  "app_dt_ms_max": null
+}

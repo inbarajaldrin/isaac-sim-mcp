@@ -1,4 +1,27 @@
 <!-- GSD:project-start source:PROJECT.md -->
+## Debug-First Entrypoint (read before touching anything)
+
+Before debugging ANY pick-place behavior (cup collisions, IK failures, OMPL
+post-check rejections, tracking lag, gripper attach issues, stale
+`/drop_poses`, control-GUI crashes), **read `docs/DEBUG-GUIDE.md`**. It is a
+living document with:
+
+- How to confirm the stack + telemetry rig are healthy
+- How to read the 3-layer lag decomposition the rig produces
+- Known failure modes with detection/root-cause/fix notes
+- An index of fixes already explored, with verdicts
+- A contribution protocol — *extend that doc as you diagnose new things*
+
+The motion telemetry rig (`scripts/motion_log*.sh`, `scripts/motion_logger.py`,
+`scripts/motion_analyze.py`, `scripts/motion_verify.py`) captures every robot
+motion at 50 Hz with per-joint plan/JTC/Isaac state, cup positions, and physics
+rates. Runs under a supervisor that respawns it if killed. Start with
+`scripts/motion_log.sh status`; analyze with `scripts/motion_log.sh latest` or
+`scan`; run MoveIt collision replay on captured data with
+`scripts/motion_log.sh verify` (replays plan + Isaac trajectories through
+`/check_state_validity` to catch off-plan collisions the plan-time checker
+missed — see DEBUG-GUIDE § 4.1).
+
 ## Project
 
 **SO-ARM101 Pick-and-Place Drop Support**
@@ -107,6 +130,7 @@ Registered in `MCP_TOOL_REGISTRY` at the top of `exts/soarm101-dt/so_arm101_dt/e
 - **X11 GUI safety**: never `kill -9` Isaac Sim, RViz, or any process owning an X window (causes KWin BadWindow cascades). Use the skill's `close` subcommand or SIGTERM. Details in `~/.claude/CLAUDE.md` global rules.
 - **Ghost ROS2 topics** (publisher count = 0 after deleting an action graph prim): cycle the timeline — `tl.stop(); for _ in range(20): app.update(); tl.play()` — to flush the Kit ROS2 bridge publishers.
 - **Cross-extension stdout contamination**: if both `ur5e-dt` and `soarm101-dt` get loaded in the same Isaac Sim session, ur5e-dt's `LogRedirector` can hijack stdout and crash soarm101-dt's `on_startup` with `AttributeError: 'DigitalTwin' object has no attribute '_ext_log_lines'`. Fix by launching with only one `--enable` at a time via `isaacsim_launch.sh` (handles this).
+- **SDF collision regeneration OOM**: gripper_link + moving_jaw_so101_v1_link use `PhysxSDFMeshCollisionAPI` at `resolution: 256` with `margin: 10 mm`. PhysX's voxelizer peaks at ~48 GB RAM during SDF generation (observed: full workstation hang). **Do not call `PhysxSDFMeshCollisionAPI.Apply()` or write any SDF attribute on a running stage** — it triggers full regeneration. Use read-only introspection (`GetSdfResolutionAttr().Get()` etc) to query. If SDF rebuild is unavoidable, run Isaac Sim with swap disabled and close other heavy processes first. This is the PhysX contactOffset fix's main risk vector — prefer authoring `physxCollision:contactOffset` (no SDF rebuild) over changing SDF params.
 
 ## Robot Facts (SO-ARM101)
 
