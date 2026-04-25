@@ -1462,6 +1462,66 @@ class DigitalTwin(omni.ext.IExt):
         print("--- Playing scene ---")
         self._timeline.play()
 
+        # 10b. Create workspace_camera_sim (skip if already exists) and start publisher
+        print("--- Creating workspace camera ---")
+        ws_prim_path = "/World/workspace_camera_sim"
+        ws_stage = omni.usd.get_context().get_stage()
+        ws_existing = ws_stage.GetPrimAtPath(ws_prim_path)
+        if ws_existing and ws_existing.IsValid():
+            print(f"Workspace camera already exists at {ws_prim_path}, skipping creation.")
+        else:
+            ws_width, ws_height = 1280, 720
+            ws_position = (0.6980338662434342, -0.3958419458255837, 0.45249457626357603)
+            # Hand-tuned for SO-ARM101 — overhead-front view of robot + cup arc
+            ws_quat_xyzw = (0.4306700623322567, 0.2612220733325859, 0.4480130626995852, 0.7386275255262917)
+
+            ws_camera_prim = UsdGeom.Camera.Define(ws_stage, ws_prim_path)
+            if ws_camera_prim:
+                # Configure intrinsics (Intel RealSense: HFOV 69.4°, VFOV 42.5° at 1280x720)
+                hfov_deg, vfov_deg = 69.4, 42.5
+                fx = ws_width / (2 * np.tan(np.deg2rad(hfov_deg / 2)))
+                fy = ws_height / (2 * np.tan(np.deg2rad(vfov_deg / 2)))
+                cx, cy = ws_width * 0.5, ws_height * 0.5
+                horizontal_aperture_mm = 36.0
+                focal_length_mm = fx * horizontal_aperture_mm / ws_width
+                vertical_aperture_mm = ws_height * focal_length_mm / fy
+
+                cam = UsdGeom.Camera(ws_camera_prim.GetPrim())
+                cam.CreateHorizontalApertureAttr().Set(horizontal_aperture_mm)
+                cam.CreateVerticalApertureAttr().Set(vertical_aperture_mm)
+                cam.CreateFocalLengthAttr().Set(focal_length_mm)
+                cam.CreateProjectionAttr().Set("perspective")
+                cam.CreateClippingRangeAttr().Set(Gf.Vec2f(0.1, 10000.0))
+
+                cp = ws_camera_prim.GetPrim()
+                cp.CreateAttribute("omni:lensdistortion:model", Sdf.ValueTypeNames.String).Set("opencvPinhole")
+                cp.CreateAttribute("omni:lensdistortion:opencvPinhole:imageSize", Sdf.ValueTypeNames.Int2).Set(Gf.Vec2i(ws_width, ws_height))
+                cp.CreateAttribute("omni:lensdistortion:opencvPinhole:fx", Sdf.ValueTypeNames.Float).Set(fx)
+                cp.CreateAttribute("omni:lensdistortion:opencvPinhole:fy", Sdf.ValueTypeNames.Float).Set(fy)
+                cp.CreateAttribute("omni:lensdistortion:opencvPinhole:cx", Sdf.ValueTypeNames.Float).Set(cx)
+                cp.CreateAttribute("omni:lensdistortion:opencvPinhole:cy", Sdf.ValueTypeNames.Float).Set(cy)
+                for attr_name in ["k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6", "s1", "s2", "s3", "s4"]:
+                    cp.CreateAttribute(f"omni:lensdistortion:opencvPinhole:{attr_name}", Sdf.ValueTypeNames.Float).Set(0.0)
+
+                # Set camera pose
+                xform = UsdGeom.Xform(ws_camera_prim.GetPrim())
+                xform.ClearXformOpOrder()
+                xform.AddTranslateOp().Set(Gf.Vec3d(*ws_position))
+                quat_ws = Gf.Quatd(ws_quat_xyzw[3], ws_quat_xyzw[0], ws_quat_xyzw[1], ws_quat_xyzw[2])
+                xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat_ws)
+                print(f"Workspace camera created at {ws_prim_path} with resolution {ws_width}x{ws_height}")
+            else:
+                print(f"Warning: Failed to create workspace camera at {ws_prim_path}")
+
+        # Start viewport publisher for workspace camera
+        if not _viewport_pub.is_active("workspace_camera_sim"):
+            _viewport_pub.start(ws_prim_path, "workspace_camera_sim", frame_id="workspace_camera_sim")
+            print("Workspace camera viewport publisher started.")
+        await app.next_update_async()
+
+        # Switch active viewport to workspace camera
+        self._set_active_viewport_camera(ws_prim_path)
+
         # 11. Create contact sensors on cups (for motion_logger at 50 Hz).
         # Must be AFTER play — sensor backend initializes on Play per
         # isaacsim.sensors.physics ContactSensor docs. One physics tick is
@@ -2319,9 +2379,9 @@ class DigitalTwin(omni.ext.IExt):
 
         if is_workspace:
             prim_path = "/World/workspace_camera_sim"
-            position = (0.8572405778988392, -1.3321141046870788, 0.9906567613694909)
-            # Euler XYZ: (52.144, 39.13, 26.13) degrees
-            quat_xyzw = (0.4714, 0.1994, 0.3347, 0.7912)  # x, y, z, w
+            position = (0.6980338662434342, -0.3958419458255837, 0.45249457626357603)
+            # Hand-tuned for SO-ARM101 — overhead-front view of robot + cup arc
+            quat_xyzw = (0.4306700623322567, 0.2612220733325859, 0.4480130626995852, 0.7386275255262917)  # x, y, z, w
 
             # Create camera prim using UsdGeom.Camera
             camera_prim = UsdGeom.Camera.Define(stage, prim_path)
@@ -2417,6 +2477,28 @@ class DigitalTwin(omni.ext.IExt):
                     topic_name,
                     graph_suffix
                 )
+
+    def _set_active_viewport_camera(self, camera_path: str) -> bool:
+        """Switch the active Isaac Sim viewport to render through the given camera prim path.
+        Records the previous camera path in self._prev_viewport_cam for potential undo.
+        # TODO: Add ComboBox UI picker (option 3a) in a future task — deferred to keep this change atomic.
+        """
+        try:
+            import omni.kit.viewport.utility as vp_utils
+            from pxr import Sdf
+            viewport = vp_utils.get_active_viewport()
+            if viewport is None:
+                print("No active viewport found — skipping camera switch.")
+                return False
+            prev = str(viewport.camera_path)
+            if prev != camera_path:
+                self._prev_viewport_cam = prev
+            viewport.camera_path = Sdf.Path(camera_path)
+            print(f"Active viewport → {camera_path}")
+            return True
+        except Exception as ex:
+            print(f"Error setting active viewport camera: {ex}")
+            return False
 
     def _create_camera_actiongraph(self, camera_prim, width, height, topic, graph_suffix):
         """Helper method to create camera ActionGraph using og.Controller.edit().
