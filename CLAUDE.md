@@ -34,7 +34,7 @@ Adding drop (place) capability to the SO-ARM101 pick-and-place pipeline across t
 
 - **No commits**: Until user confirms
 - **Message format**: `/drop_poses` uses `tf2_msgs/TFMessage` (same as `/objects_poses`)
-- **Drop pose convention**: Each transform's `child_frame_id` = `drop_{N}` (matching JETANK convention), translation = position above cup rim
+- **Drop pose convention**: Each transform's `child_frame_id` = `drop_{N}` (matching JETANK convention), translation = cup BODY-CENTER (z = cup_base + half_height). Consumers (e.g. `_cmd_drop_sweep`) compute rim_z = z + CUP_BODY_HEIGHT_M/2 internally before adding hover.
 - **Subagent models**: Sonnet for planning/research, Opus for execution
 - **Individual steps**: Drop motion broken into discrete button-press steps with matching debug services
 <!-- GSD:project-end -->
@@ -116,7 +116,7 @@ Registered in `MCP_TOOL_REGISTRY` at the top of `exts/soarm101-dt/so_arm101_dt/e
 - **Publishers**: `setup_pose_publisher`, `setup_force_publisher`, `setup_bbox_publisher`, `setup_wrist_camera_action_graph`, `publish_drop_poses`
 - **Viewport publisher** (Phase 13, active-reuse only, zero RTF cost): `start_viewport_publisher`, `stop_viewport_publisher`, `list_viewport_publishers`
 - **Video recording** (Phase 13, ffmpeg-backed): `start_recording`, `stop_recording`, `get_recording_status`
-- **Objects / cups**: `add_objects`, `delete_objects`, `randomize_object_poses`, `randomize_single_object`, `sort_objects`, `sort_into_cups`, `add_cups`, `delete_cups`
+- **Objects / cups**: `add_objects`, `delete_objects`, `randomize_object_poses`, `randomize_single_object`, `sort_objects`, `sort_into_cups`, `add_cups`, `delete_cups`, `update_cups` (re-snaps cups to default poses; used by `vla_SO-ARM101/scripts/sim_reset.sh`)
 - **State**: `save_scene_state`, `restore_scene_state`, `sync_real_poses`
 - **Escape hatch**: `execute_python_code` (runs arbitrary code in Kit's Python context; set a `result` variable to return data)
 
@@ -131,12 +131,15 @@ Registered in `MCP_TOOL_REGISTRY` at the top of `exts/soarm101-dt/so_arm101_dt/e
 - **Ghost ROS2 topics** (publisher count = 0 after deleting an action graph prim): cycle the timeline — `tl.stop(); for _ in range(20): app.update(); tl.play()` — to flush the Kit ROS2 bridge publishers.
 - **Cross-extension stdout contamination**: if both `ur5e-dt` and `soarm101-dt` get loaded in the same Isaac Sim session, ur5e-dt's `LogRedirector` can hijack stdout and crash soarm101-dt's `on_startup` with `AttributeError: 'DigitalTwin' object has no attribute '_ext_log_lines'`. Fix by launching with only one `--enable` at a time via `isaacsim_launch.sh` (handles this).
 - **SDF collision regeneration OOM**: gripper_link + moving_jaw_so101_v1_link use `PhysxSDFMeshCollisionAPI` at `resolution: 256` with `margin: 10 mm`. PhysX's voxelizer peaks at ~48 GB RAM during SDF generation (observed: full workstation hang). **Do not call `PhysxSDFMeshCollisionAPI.Apply()` or write any SDF attribute on a running stage** — it triggers full regeneration. Use read-only introspection (`GetSdfResolutionAttr().Get()` etc) to query. If SDF rebuild is unavoidable, run Isaac Sim with swap disabled and close other heavy processes first. This is the PhysX contactOffset fix's main risk vector — prefer authoring `physxCollision:contactOffset` (no SDF rebuild) over changing SDF params.
+- **Cup collision padding is ROS-side only**: `_CUP_COLLISION_PADDING` (default 5% = 1.05) lives in `vla_SO-ARM101/.../control_gui.py` and only enlarges cups in MoveIt's planning scene. Isaac Sim's USD cup mesh is unchanged — physics contact telemetry (e.g. omni.physx contact-report subscription) stays honest. If you want padding-aware physics evaluation, that's a separate change in `soarm101-dt`'s scene-build path.
+- **Deterministic planner lives ROS-side**: vla_SO-ARM101 routes every arm motion through tier-1 linear → tier-2 retract-pan-settle → OMPL fallback (opt-in per primitive; `_cmd_grasp_home` opts OUT). End-to-end test scripts at `vla_SO-ARM101/scripts/{test_qs_cycle,sim_reset,test_pick_all}.sh`. Isaac Sim is the physics backend; the planner has zero awareness of physics state beyond `/joint_states` feedback. Planner-collision verdicts (planning-scene) and physics-contact verdicts (PhysX) intentionally don't agree — padding makes the planner conservative on top of physics ground-truth.
+- **`_attached_lego_tcp_offset` populated at attach time**: when `_cmd_gripper_close_for_object` succeeds, the held block's pose-in-tcp_link is captured and used by `_cmd_drop_sweep` to position the block (not tcp_link) over the cup center. Isaac Sim physics decides where the block actually settles after grasp_close — off-center attaches (typical: ~−12 mm in TCP X) are normal and the planner compensates. If physics changes (different lego mass/inertia, new gripper material), the typical offset magnitude can shift; verify with `Attach OK:` log line.
 
 ## Robot Facts (SO-ARM101)
 
 - 5-DOF arm: `shoulder_pan`, `shoulder_lift`, `elbow_flex`, `wrist_flex`, `wrist_roll` + `gripper_joint`.
 - Forward axis = `+X`, joint drives: stiffness=15, damping=0.15, maxForce=3.
-- Drop motion is a kinematic sweep, NOT IK: rotate pan to cup → wrist_flex 90°→0° sweep → gripper release. Cups anchored to shoulder pan axis (not world origin).
+- **Drop motion is IK-planned, not a pure kinematic sweep** (despite the original design intent). Implemented in `vla_SO-ARM101/.../control_gui.py:_cmd_drop_sweep` — IK targets a wrist_flex ~55° pose using the MEASURED attach offset (`_attached_lego_tcp_offset`) and locks `shoulder_pan` to drop_point's value. drop_point itself is a pure pan rotation (only `shoulder_pan` and `wrist_roll` change). Cups anchored to shoulder pan axis (not world origin).
 - ArUco markers on cups: red=ID 0, green=1, blue=2 (DICT_4X4_50).
 - Wrist camera: OV9732 (640×480). Workspace camera: `/World/workspace_camera_sim` (created by Phase 13 workflows, pose mirrors ur5e-dt's).
 
