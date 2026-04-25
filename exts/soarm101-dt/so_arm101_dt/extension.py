@@ -650,16 +650,20 @@ MCP_TOOL_REGISTRY = {
         "parameters": {}
     },
     "randomize_cups": {
-        "description": "Randomize cup (r, theta, yaw) within a drop-reachable arc in front of the robot. Polar sampling — defaults r ∈ [0.24, 0.30] m, theta ∈ [-50°, +50°], yaw full ±180°. Avoids the home-pose forward zone where gripper-vs-cup at trajectory start would block grasp_move. Cups are teleported via the same Kit-command path as update_cups; /drop_poses action graph wrappers are auto-refreshed so subscribers see new poses without manual republish. ArUco markers are child prims so they rotate with the cup — narrow yaw_min_deg/yaw_max_deg if markers must stay facing a particular direction (e.g. workspace camera). Use to stress-test the pick-place pipeline against varied cup poses.",
+        "description": "Randomize cup layout by sampling CUP_LAYOUT params (mode/radius/angle/gap) and delegating placement to the existing _cup_positions_arc / _cup_positions_line generators. Each random sample is a coherent 3-cup layout (proper inter-cup spacing built in) — the function retries with fresh params until the resulting placement clears every lego footprint AND the robot's link AABBs (live-queried, so adaptive to the arm's current pose; call after grasp_home for the home-pose corridor exclusion). Defaults: radius ∈ [0.22, 0.30] m, angle ∈ [-50°, +50°], gap ∈ [0.005, 0.030] m, modes=('arc','line'). Yaw is anchored on the face-origin direction (ArUco markers face camera) with ±15° jitter. Cups teleported via the same Kit-command path as update_cups; /drop_poses wrappers auto-refreshed. After success, CUP_LAYOUT is left at the random params so subsequent 'Update' clicks reproduce the same layout.",
         "parameters": {
-            "r_min": {"type": "number", "description": "radial distance min from pan axis (m)", "default": 0.24},
-            "r_max": {"type": "number", "description": "radial distance max (m)", "default": 0.30},
-            "theta_min_deg": {"type": "number", "description": "angular bound from forward axis (deg)", "default": -50.0},
-            "theta_max_deg": {"type": "number", "description": "angular bound from forward axis (deg)", "default": 50.0},
-            "min_separation": {"type": "number", "description": "cup-center to cup-center min (m)", "default": 0.12},
-            "yaw_min_deg": {"type": "number", "description": "yaw lower bound (deg)", "default": -180.0},
-            "yaw_max_deg": {"type": "number", "description": "yaw upper bound (deg)", "default": 180.0},
-            "max_attempts": {"type": "integer", "description": "per-cup retries before failing", "default": 300},
+            "radius_min": {"type": "number", "description": "layout radius min (m)", "default": 0.22},
+            "radius_max": {"type": "number", "description": "layout radius max (m)", "default": 0.30},
+            "angle_min_deg": {"type": "number", "description": "layout heading min (deg, 0 = forward)", "default": -50.0},
+            "angle_max_deg": {"type": "number", "description": "layout heading max (deg)", "default": 50.0},
+            "gap_min": {"type": "number", "description": "cup-to-cup gap min (m)", "default": 0.005},
+            "gap_max": {"type": "number", "description": "cup-to-cup gap max (m)", "default": 0.030},
+            "modes": {"type": "array", "description": "list of layout modes to sample from. Default ['arc','line']", "required": False},
+            "randomize_order": {"type": "boolean", "description": "shuffle color → slot mapping each sample (6 permutations for red/green/blue). False keeps canonical order", "default": True},
+            "yaw_jitter_deg": {"type": "number", "description": "half-width of yaw jitter around face-origin (deg). 0 = always face origin exactly", "default": 15.0},
+            "cup_lego_clearance": {"type": "number", "description": "extra margin (m) for cup-lego check", "default": 0.01},
+            "cup_robot_clearance": {"type": "number", "description": "extra margin (m) for cup-robot-link check", "default": 0.015},
+            "max_attempts": {"type": "integer", "description": "full-layout samples to try before failing", "default": 200},
             "seed": {"type": "integer", "description": "RNG seed for reproducibility (default: nondeterministic)", "required": False}
         }
     },
@@ -3030,52 +3034,89 @@ class DigitalTwin(omni.ext.IExt):
               f"(action graph preserved)")
 
     def randomize_cups(self, container_path="/World/Containers",
-                        r_min=0.24, r_max=0.30,
-                        theta_min_deg=-50.0, theta_max_deg=50.0,
-                        min_separation=0.12,
-                        yaw_min_deg=-180.0, yaw_max_deg=180.0,
-                        max_attempts=300, seed=None):
-        """Randomly reposition cups within the drop-reachable annulus.
+                        radius_min=0.22, radius_max=0.30,
+                        angle_min_deg=-50.0, angle_max_deg=50.0,
+                        gap_min=0.005, gap_max=0.030,
+                        modes=("arc", "line"),
+                        randomize_order=True,
+                        yaw_jitter_deg=15.0,
+                        objects_path="/World/Objects",
+                        cup_lego_clearance=0.01,
+                        robot_path="/World/SO_ARM101",
+                        cup_robot_clearance=0.015,
+                        max_attempts=200, seed=None):
+        """Randomize cup layout via the existing arc/line layout functions.
 
-        Polar (r, theta) sampling — keeps cups in a clean reachable arc
-        in front of the robot, away from the home-pose footprint.
-        Each cup also gets a random yaw within the configured window.
-        Cup-to-cup minimum separation enforced via rejection sampling.
+        Rather than sampling per-cup positions independently (which often
+        violates spacing or robot-corridor constraints and converges
+        slowly), this samples the LAYOUT PARAMETERS that
+        `_cup_positions_arc` and `_cup_positions_line` already use:
+          - mode: "arc" or "line"
+          - radius: distance from pan axis to layout center
+          - angle_deg: heading of the layout's center axis (0 = forward)
+          - gap: spacing parameter (meters along the arc/line)
 
-        Poses applied through `_set_obj_prim_pose` — same teleport path
-        as `update_cups`, so /drop_poses keeps publishing throughout
-        (the function calls `_cmd_publish_drop_poses` at the end to
-        refresh the action graph wrappers, otherwise /drop_poses keeps
-        broadcasting stale cached transforms). ArUco markers are child
-        prims so they rotate with the cup — narrow yaw_min_deg /
-        yaw_max_deg if markers must keep facing a particular direction.
+        With `randomize_order=True` (default), the cup-color → slot
+        mapping is also shuffled each sample, so red/green/blue can
+        end up in any of the 6 possible orderings along the arc/line.
 
-        Defaults match the SO-ARM101 drop-reachable arc:
-          r ∈ [0.24, 0.30] m  — well inside grasp_workspace r_max=0.31
-                               from workspace_bounds.yaml, with safety
-                               margin for drop_sweep IK convergence.
-          theta ∈ [-50°, +50°] — front 100° arc (avoids the home-pose
-                               sweep volume directly forward of robot
-                               where gripper-vs-cup at wp[0] starts the
-                               trajectory in collision).
+        Each random sample produces a coherent 3-cup layout with
+        proper spacing built in, then is validated against:
+          - Lego footprints (mirrors `randomize_object_poses` exclusion)
+          - Robot-link AABBs at current pose (queried live, so the
+            exclusion adapts — call after grasp_home for the home-pose
+            corridor; only links with z-min ≤ 0.15 m count, since
+            higher links can't intersect a table-level cup)
+        On violation, retry with fresh params. Convergence is fast
+        because every sample is a complete valid layout, not 3
+        independently-sampled points that have to satisfy mutual
+        exclusion plus all obstacle clearances.
+
+        Yaw is anchored on the face-origin direction (same math as
+        `_add_cups_from_ui` lines ~2996-3007). For "arc" mode each cup
+        independently faces the pan axis (yaw = atan2(-dy, -dx)); for
+        "line" mode all cups share angle_deg + π. A `yaw_jitter_deg`
+        window adds per-cup variation while keeping ArUco markers in
+        the camera-side cone.
+
+        Poses applied through `_set_obj_prim_pose` (same teleport path
+        as `update_cups`). After teleporting, calls
+        `_cmd_publish_drop_poses` to refresh action graph wrappers —
+        otherwise /drop_poses keeps broadcasting stale cached transforms.
+
+        Defaults:
+          radius ∈ [0.22, 0.30] m  — inside grasp_workspace r_max=0.31.
+          angle_deg ∈ [-50°, +50°] — heading of layout center.
+          gap ∈ [0.005, 0.030] m   — tight to wide cup spacing.
+          modes = ("arc", "line")  — both layout topologies sampled.
 
         Args:
             container_path: USD parent path containing cup_red/green/blue.
-            r_min, r_max: radial distance bounds from robot pan axis (m).
-            theta_min_deg, theta_max_deg: angular bounds from forward axis
-                (deg). 0° = directly forward; positive = lateral lat>0.
-            min_separation: cup-center to cup-center minimum (meters).
-            yaw_min_deg, yaw_max_deg: cup yaw sample range (degrees).
-                Default ±180° (full rotation). Narrow if markers must
-                stay facing a particular direction (e.g. the workspace
-                camera) — markers are child prims, so they rotate with
-                the cup.
-            max_attempts: per-cup retries before giving up.
+            radius_min, radius_max: layout radius bounds (m).
+            angle_min_deg, angle_max_deg: layout heading bounds (deg).
+            gap_min, gap_max: cup-to-cup gap bounds (m).
+            modes: tuple of layout modes to sample from. Use a single-
+                element tuple to force one topology (e.g. ("arc",)).
+            randomize_order: if True, shuffle CUP_LAYOUT["color_order"]
+                each sample so cup-color → slot assignment varies
+                across runs (6 permutations for 3 cups). False keeps
+                the canonical [red, green, blue] order.
+            yaw_jitter_deg: half-width of yaw jitter around the face-
+                origin base direction. 0 = always face origin exactly.
+            objects_path: USD parent path of lego blocks.
+            cup_lego_clearance: extra margin (m) for cup-lego check.
+            robot_path: USD root of the robot articulation. Set to ""
+                or None to skip robot-collision checks.
+            cup_robot_clearance: extra margin (m) for cup-robot check.
+            max_attempts: how many full-layout samples to try before
+                giving up.
             seed: RNG seed for reproducibility (None = nondeterministic).
 
         Returns:
             {"status": "success" | "error", "message": ...,
-             "placements": [{"color", "fwd", "lat", "yaw_deg"}, ...]}.
+             "params": {"mode", "radius", "angle_deg", "gap"},
+             "placements": [{"color", "fwd", "lat", "yaw_deg",
+                             "base_yaw_deg"}, ...]}.
         """
         import random as _rnd
         rng = _rnd.Random(seed) if seed is not None else _rnd
@@ -3086,7 +3127,6 @@ class DigitalTwin(omni.ext.IExt):
         ground_z = getattr(self, "_ground_plane_z", 0.0)
 
         # First-time / recovery: any cup missing → build defaults first.
-        # Same fallback pattern as _add_cups_from_ui.
         missing = [c for c in colors
                    if not stage.GetPrimAtPath(
                        f"{container_path}/cup_{c}").IsValid()]
@@ -3097,33 +3137,171 @@ class DigitalTwin(omni.ext.IExt):
             self.add_cups()
             self._cmd_publish_drop_poses()
 
-        # Polar reject-sample non-overlapping (r, theta) → (fwd, lat).
-        placed = []  # list of (color, fwd, lat)
-        for c in colors:
-            for _ in range(max_attempts):
-                r = rng.uniform(r_min, r_max)
-                theta = math.radians(rng.uniform(theta_min_deg,
-                                                  theta_max_deg))
-                fwd = r * math.cos(theta)
-                lat = r * math.sin(theta)
-                if all(math.hypot(fwd - pf, lat - pl) >= min_separation
-                       for (_, pf, pl) in placed):
-                    placed.append((c, fwd, lat))
-                    break
-            else:
-                msg = (f"could not place cup_{c} after {max_attempts} "
-                       f"attempts (r ∈ [{r_min:.2f}, {r_max:.2f}], "
-                       f"theta ∈ [{theta_min_deg:.0f}°, {theta_max_deg:.0f}°], "
-                       f"min_sep {min_separation:.2f} m). Widen bounds "
-                       "or reduce min_separation.")
-                print(f"[randomize_cups] ERROR: {msg}")
-                return {"status": "error", "message": msg}
+        # Cup opening radius — used for cup ↔ obstacle exclusion check.
+        cup_info = self._get_cup_positions(container_path)
+        cup_radius = max(
+            (info["opening_radius"] for info in cup_info.values()),
+            default=0.05)
 
-        # Apply poses via the same Kit-command teleport path update_cups uses.
+        # Helper: world (x, y) → robot-frame (fwd, lat).
+        def _world_to_robot(wx, wy):
+            if ROBOT_FORWARD_AXIS == "X":
+                return wx - pan_xy[0], wy - pan_xy[1]
+            return wy - pan_xy[1], -(wx - pan_xy[0])
+
+        # Lego-exclusion list in robot-relative (fwd, lat) frame.
+        lego_exclusions = []
+        objects_root = stage.GetPrimAtPath(objects_path)
+        if objects_root and objects_root.IsValid():
+            for child in objects_root.GetChildren():
+                if child.GetName() == "PhysicsMaterial":
+                    continue
+                try:
+                    xform = UsdGeom.Xformable(child)
+                    tf = xform.ComputeLocalToWorldTransform(
+                        Usd.TimeCode.Default())
+                    pos = tf.ExtractTranslation()
+                    fwd_lego, lat_lego = _world_to_robot(
+                        float(pos[0]), float(pos[1]))
+                    sx, sy, _ = self._get_prim_bbox_size(
+                        str(child.GetPath()))
+                    lego_radius = math.hypot(sx, sy) / 2.0
+                    lego_exclusions.append((fwd_lego, lat_lego, lego_radius))
+                except Exception:
+                    pass
+
+        # Robot-link exclusions — direct children of robot root, with
+        # z-min filter so only table-level links count. Skip prims with
+        # ±inf bounds (frames/joints with no geometry).
+        FINITE_BBOX_LIMIT = 1.0e10
+        CUP_INTERSECT_Z_MAX = 0.15  # m
+        robot_exclusions = []
+        if robot_path:
+            robot_root = stage.GetPrimAtPath(robot_path)
+            if robot_root and robot_root.IsValid():
+                bbox_cache_robot = UsdGeom.BBoxCache(
+                    Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+                for child in robot_root.GetChildren():
+                    if not child.IsValid():
+                        continue
+                    try:
+                        wb = bbox_cache_robot.ComputeWorldBound(child)
+                        rng_aabb = wb.ComputeAlignedRange()
+                        mn, mx = rng_aabb.GetMin(), rng_aabb.GetMax()
+                        if (abs(mn[0]) > FINITE_BBOX_LIMIT
+                                or abs(mx[0]) > FINITE_BBOX_LIMIT):
+                            continue
+                        if mn[2] > CUP_INTERSECT_Z_MAX:
+                            continue
+                        cx_w = (mn[0] + mx[0]) * 0.5
+                        cy_w = (mn[1] + mx[1]) * 0.5
+                        half_x = (mx[0] - mn[0]) * 0.5
+                        half_y = (mx[1] - mn[1]) * 0.5
+                        rad = math.hypot(half_x, half_y)
+                        fwd_link, lat_link = _world_to_robot(cx_w, cy_w)
+                        robot_exclusions.append(
+                            (fwd_link, lat_link, rad))
+                    except Exception:
+                        pass
+
+        # Layout-validation helper: given a positions dict, check every
+        # cup against legos + robot exclusions.
+        def _layout_valid(positions):
+            for fwd, lat in positions.values():
+                # vs. legos
+                for (lf, ll, lr) in lego_exclusions:
+                    if (math.hypot(fwd - lf, lat - ll)
+                            < cup_radius + lr + cup_lego_clearance):
+                        return False
+                # vs. robot links
+                for (rf, rl, rr) in robot_exclusions:
+                    if (math.hypot(fwd - rf, lat - rl)
+                            < cup_radius + rr + cup_robot_clearance):
+                        return False
+            return True
+
+        # Sample layout params + delegate position generation to the
+        # existing _cup_positions_arc / _cup_positions_line functions.
+        # Those read CUP_LAYOUT module-level state, so we temporarily
+        # override it inside the loop and restore on exit.
+        saved_layout = dict(CUP_LAYOUT)
+        canonical_order = list(saved_layout.get("color_order", colors))
+        chosen_params = None
+        chosen_positions = None
+        try:
+            for attempt in range(max_attempts):
+                mode = rng.choice(list(modes))
+                radius = rng.uniform(radius_min, radius_max)
+                angle_deg = rng.uniform(angle_min_deg, angle_max_deg)
+                gap = rng.uniform(gap_min, gap_max)
+                if randomize_order:
+                    sample_order = list(canonical_order)
+                    rng.shuffle(sample_order)
+                else:
+                    sample_order = list(canonical_order)
+
+                CUP_LAYOUT["mode"] = mode
+                CUP_LAYOUT["radius"] = radius
+                CUP_LAYOUT["angle_deg"] = angle_deg
+                CUP_LAYOUT["gap"] = gap
+                CUP_LAYOUT["face_origin"] = True
+                CUP_LAYOUT["color_order"] = sample_order
+
+                if mode == "arc":
+                    positions = _cup_positions_arc()
+                else:
+                    cup_widths = {c: 0.078 for c in sample_order}
+                    positions = _cup_positions_line(cup_widths)
+
+                if _layout_valid(positions):
+                    chosen_params = {
+                        "mode": mode, "radius": radius,
+                        "angle_deg": angle_deg, "gap": gap,
+                        "color_order": sample_order,
+                    }
+                    chosen_positions = positions
+                    break
+        finally:
+            # If we found a valid layout, KEEP CUP_LAYOUT updated to the
+            # new params (so a subsequent "Update" click reproduces this
+            # random layout). On failure, restore to the original.
+            if chosen_params is None:
+                CUP_LAYOUT.update(saved_layout)
+
+        if chosen_params is None:
+            msg = (f"could not find a valid cup layout after "
+                   f"{max_attempts} samples (radius ∈ "
+                   f"[{radius_min:.2f}, {radius_max:.2f}], "
+                   f"angle ∈ [{angle_min_deg:.0f}°, {angle_max_deg:.0f}°], "
+                   f"gap ∈ [{gap_min:.3f}, {gap_max:.3f}] m, "
+                   f"modes={list(modes)}, "
+                   f"{len(lego_exclusions)} legos + "
+                   f"{len(robot_exclusions)} robot links to avoid). "
+                   "Try widening param bounds, lowering clearances, "
+                   "tightening lego placement zone first, or calling "
+                   "from a different arm pose.")
+            print(f"[randomize_cups] ERROR: {msg}")
+            return {"status": "error", "message": msg}
+
+        # Apply: teleport cups via _set_obj_prim_pose with face-origin
+        # yaw + jitter (mirrors _add_cups_from_ui's apply loop, but with
+        # the validated random layout instead of UI-slider values).
+        mode = chosen_params["mode"]
+        angle_deg = chosen_params["angle_deg"]
         results = []
-        for (color, fwd, lat) in placed:
+        for color, (fwd, lat) in chosen_positions.items():
             x, y = _to_world(fwd, lat, anchor=pan_xy)
-            yaw_deg = rng.uniform(yaw_min_deg, yaw_max_deg)
+            dx_pan, dy_pan = x - pan_xy[0], y - pan_xy[1]
+            if abs(dx_pan) > 1e-4 or abs(dy_pan) > 1e-4:
+                if mode == "arc":
+                    base_yaw_rad = math.atan2(-dy_pan, -dx_pan)
+                else:  # "line": all cups share the layout heading
+                    base_yaw_rad = math.radians(angle_deg) + math.pi
+            else:
+                base_yaw_rad = 0.0
+            jitter_rad = math.radians(
+                rng.uniform(-yaw_jitter_deg, yaw_jitter_deg))
+            yaw_deg = math.degrees(base_yaw_rad + jitter_rad)
             cup_path = f"{container_path}/cup_{color}"
             self._set_obj_prim_pose(
                 cup_path,
@@ -3131,25 +3309,29 @@ class DigitalTwin(omni.ext.IExt):
                 rotation_xyz_deg=(0.0, 0.0, yaw_deg),
             )
             results.append({"color": color, "fwd": fwd, "lat": lat,
-                            "yaw_deg": yaw_deg})
+                            "yaw_deg": yaw_deg,
+                            "base_yaw_deg": math.degrees(base_yaw_rad)})
 
-        # Refresh /drop_poses action graph wrappers — without this, the
-        # graph keeps publishing the old prim addresses' cached transforms
-        # even though the cup prims themselves have new world poses. This
-        # is what makes randomize visible to ROS2 subscribers (the control
-        # GUI's drop listbox, aruco_camera_localizer, etc.).
+        # Refresh /drop_poses action graph wrappers.
         try:
             self._cmd_publish_drop_poses()
         except Exception as exc:
             print(f"[randomize_cups] WARN: publish_drop_poses refresh "
                   f"failed: {exc}")
 
-        print(f"[randomize_cups] Randomized {len(placed)} cups "
-              f"(r ∈ [{r_min:.2f}, {r_max:.2f}], "
-              f"theta ∈ [{theta_min_deg:.0f}°, {theta_max_deg:.0f}°], "
-              f"yaw ∈ [{yaw_min_deg:.0f}°, {yaw_max_deg:.0f}°])")
+        print(f"[randomize_cups] Randomized layout: mode={mode} "
+              f"radius={chosen_params['radius']:.3f}m "
+              f"angle={chosen_params['angle_deg']:+.1f}° "
+              f"gap={chosen_params['gap']:.3f}m "
+              f"order={chosen_params['color_order']} "
+              f"(yaw_jitter ±{yaw_jitter_deg:.0f}° around face-origin, "
+              f"avoiding {len(lego_exclusions)} legos + "
+              f"{len(robot_exclusions)} robot links)")
         return {"status": "success",
-                "message": f"Randomized {len(placed)} cups",
+                "message": (f"Randomized cups: mode={mode} "
+                            f"radius={chosen_params['radius']:.3f} "
+                            f"angle={chosen_params['angle_deg']:+.1f}°"),
+                "params": chosen_params,
                 "placements": results}
 
     def add_cups(self, container_path="/World/Containers"):
@@ -5744,25 +5926,37 @@ class DigitalTwin(omni.ext.IExt):
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
 
-    def _cmd_randomize_cups(self, r_min: float = 0.24, r_max: float = 0.30,
-                             theta_min_deg: float = -50.0,
-                             theta_max_deg: float = 50.0,
-                             min_separation: float = 0.12,
-                             yaw_min_deg: float = -180.0,
-                             yaw_max_deg: float = 180.0,
-                             max_attempts: int = 300,
+    def _cmd_randomize_cups(self,
+                             radius_min: float = 0.22,
+                             radius_max: float = 0.30,
+                             angle_min_deg: float = -50.0,
+                             angle_max_deg: float = 50.0,
+                             gap_min: float = 0.005,
+                             gap_max: float = 0.030,
+                             modes: list = None,
+                             randomize_order: bool = True,
+                             yaw_jitter_deg: float = 15.0,
+                             cup_lego_clearance: float = 0.01,
+                             cup_robot_clearance: float = 0.015,
+                             max_attempts: int = 200,
                              seed: int = None) -> Dict[str, Any]:
-        """MCP handler: randomize cup (r, theta, yaw) within reachable arc.
+        """MCP handler: randomize CUP_LAYOUT params (mode/radius/angle/gap),
+        retry until a placement clears legos and robot-link AABBs.
 
         Thin wrapper over self.randomize_cups — see that docstring for the
         full parameter and constraint description.
         """
         try:
             return self.randomize_cups(
-                r_min=r_min, r_max=r_max,
-                theta_min_deg=theta_min_deg, theta_max_deg=theta_max_deg,
-                min_separation=min_separation,
-                yaw_min_deg=yaw_min_deg, yaw_max_deg=yaw_max_deg,
+                radius_min=radius_min, radius_max=radius_max,
+                angle_min_deg=angle_min_deg,
+                angle_max_deg=angle_max_deg,
+                gap_min=gap_min, gap_max=gap_max,
+                modes=tuple(modes) if modes else ("arc", "line"),
+                randomize_order=randomize_order,
+                yaw_jitter_deg=yaw_jitter_deg,
+                cup_lego_clearance=cup_lego_clearance,
+                cup_robot_clearance=cup_robot_clearance,
                 max_attempts=max_attempts, seed=seed,
             )
         except Exception as e:
