@@ -649,6 +649,20 @@ MCP_TOOL_REGISTRY = {
         "description": "Reposition existing cups to match current CUP_LAYOUT settings WITHOUT rebuilding the /drop_poses action graph. Cup prims remain in place; only their xform + velocity are reset. If cups don't yet exist, falls back to delete+add (first-time creation path). Safe to call mid-simulation — /drop_poses keeps publishing throughout.",
         "parameters": {}
     },
+    "randomize_cups": {
+        "description": "Randomize cup (r, theta, yaw) within a drop-reachable arc in front of the robot. Polar sampling — defaults r ∈ [0.24, 0.30] m, theta ∈ [-50°, +50°], yaw full ±180°. Avoids the home-pose forward zone where gripper-vs-cup at trajectory start would block grasp_move. Cups are teleported via the same Kit-command path as update_cups; /drop_poses action graph wrappers are auto-refreshed so subscribers see new poses without manual republish. ArUco markers are child prims so they rotate with the cup — narrow yaw_min_deg/yaw_max_deg if markers must stay facing a particular direction (e.g. workspace camera). Use to stress-test the pick-place pipeline against varied cup poses.",
+        "parameters": {
+            "r_min": {"type": "number", "description": "radial distance min from pan axis (m)", "default": 0.24},
+            "r_max": {"type": "number", "description": "radial distance max (m)", "default": 0.30},
+            "theta_min_deg": {"type": "number", "description": "angular bound from forward axis (deg)", "default": -50.0},
+            "theta_max_deg": {"type": "number", "description": "angular bound from forward axis (deg)", "default": 50.0},
+            "min_separation": {"type": "number", "description": "cup-center to cup-center min (m)", "default": 0.12},
+            "yaw_min_deg": {"type": "number", "description": "yaw lower bound (deg)", "default": -180.0},
+            "yaw_max_deg": {"type": "number", "description": "yaw upper bound (deg)", "default": 180.0},
+            "max_attempts": {"type": "integer", "description": "per-cup retries before failing", "default": 300},
+            "seed": {"type": "integer", "description": "RNG seed for reproducibility (default: nondeterministic)", "required": False}
+        }
+    },
     "quick_start": {
         "description": "One-click setup: loads scene, robot, action graph, force publisher, wrist camera, objects, cups, publishers, and starts simulation.",
         "parameters": {}
@@ -746,6 +760,7 @@ MCP_HANDLERS = {
     "delete_cups": "_cmd_delete_cups",
     "sort_into_cups": "_cmd_sort_into_cups",
     "update_cups": "_cmd_update_cups",
+    "randomize_cups": "_cmd_randomize_cups",
     "quick_start": "_cmd_quick_start",
     "new_stage": "_cmd_new_stage",
     "start_viewport_publisher": "_cmd_start_viewport_publisher",
@@ -1073,6 +1088,8 @@ class DigitalTwin(omni.ext.IExt):
                                 ui.Button("Update", width=70, height=35, clicked_fn=self._add_cups_from_ui)
                                 ui.Button("Delete", width=70, height=35, clicked_fn=self.delete_cups)
                             with ui.HStack(spacing=5):
+                                ui.Button("Randomize", width=100, height=35,
+                                          clicked_fn=lambda: self._cmd_randomize_cups())
                                 ui.Button("Sort Into Cups", width=150, height=35, clicked_fn=self.sort_into_cups)
                                 ui.Button("Unsort", width=100, height=35, clicked_fn=self.disassemble_objects)
                             with ui.HStack(spacing=5):
@@ -3011,6 +3028,129 @@ class DigitalTwin(omni.ext.IExt):
             n += 1
         print(f"[update_cups] Teleported {n} cups in place "
               f"(action graph preserved)")
+
+    def randomize_cups(self, container_path="/World/Containers",
+                        r_min=0.24, r_max=0.30,
+                        theta_min_deg=-50.0, theta_max_deg=50.0,
+                        min_separation=0.12,
+                        yaw_min_deg=-180.0, yaw_max_deg=180.0,
+                        max_attempts=300, seed=None):
+        """Randomly reposition cups within the drop-reachable annulus.
+
+        Polar (r, theta) sampling — keeps cups in a clean reachable arc
+        in front of the robot, away from the home-pose footprint.
+        Each cup also gets a random yaw within the configured window.
+        Cup-to-cup minimum separation enforced via rejection sampling.
+
+        Poses applied through `_set_obj_prim_pose` — same teleport path
+        as `update_cups`, so /drop_poses keeps publishing throughout
+        (the function calls `_cmd_publish_drop_poses` at the end to
+        refresh the action graph wrappers, otherwise /drop_poses keeps
+        broadcasting stale cached transforms). ArUco markers are child
+        prims so they rotate with the cup — narrow yaw_min_deg /
+        yaw_max_deg if markers must keep facing a particular direction.
+
+        Defaults match the SO-ARM101 drop-reachable arc:
+          r ∈ [0.24, 0.30] m  — well inside grasp_workspace r_max=0.31
+                               from workspace_bounds.yaml, with safety
+                               margin for drop_sweep IK convergence.
+          theta ∈ [-50°, +50°] — front 100° arc (avoids the home-pose
+                               sweep volume directly forward of robot
+                               where gripper-vs-cup at wp[0] starts the
+                               trajectory in collision).
+
+        Args:
+            container_path: USD parent path containing cup_red/green/blue.
+            r_min, r_max: radial distance bounds from robot pan axis (m).
+            theta_min_deg, theta_max_deg: angular bounds from forward axis
+                (deg). 0° = directly forward; positive = lateral lat>0.
+            min_separation: cup-center to cup-center minimum (meters).
+            yaw_min_deg, yaw_max_deg: cup yaw sample range (degrees).
+                Default ±180° (full rotation). Narrow if markers must
+                stay facing a particular direction (e.g. the workspace
+                camera) — markers are child prims, so they rotate with
+                the cup.
+            max_attempts: per-cup retries before giving up.
+            seed: RNG seed for reproducibility (None = nondeterministic).
+
+        Returns:
+            {"status": "success" | "error", "message": ...,
+             "placements": [{"color", "fwd", "lat", "yaw_deg"}, ...]}.
+        """
+        import random as _rnd
+        rng = _rnd.Random(seed) if seed is not None else _rnd
+
+        stage = omni.usd.get_context().get_stage()
+        colors = CUP_LAYOUT["color_order"]
+        pan_xy = _get_pan_axis_xy()
+        ground_z = getattr(self, "_ground_plane_z", 0.0)
+
+        # First-time / recovery: any cup missing → build defaults first.
+        # Same fallback pattern as _add_cups_from_ui.
+        missing = [c for c in colors
+                   if not stage.GetPrimAtPath(
+                       f"{container_path}/cup_{c}").IsValid()]
+        if missing:
+            print(f"[randomize_cups] {missing} missing — adding default "
+                  "cups first via delete+add")
+            self.delete_cups()
+            self.add_cups()
+            self._cmd_publish_drop_poses()
+
+        # Polar reject-sample non-overlapping (r, theta) → (fwd, lat).
+        placed = []  # list of (color, fwd, lat)
+        for c in colors:
+            for _ in range(max_attempts):
+                r = rng.uniform(r_min, r_max)
+                theta = math.radians(rng.uniform(theta_min_deg,
+                                                  theta_max_deg))
+                fwd = r * math.cos(theta)
+                lat = r * math.sin(theta)
+                if all(math.hypot(fwd - pf, lat - pl) >= min_separation
+                       for (_, pf, pl) in placed):
+                    placed.append((c, fwd, lat))
+                    break
+            else:
+                msg = (f"could not place cup_{c} after {max_attempts} "
+                       f"attempts (r ∈ [{r_min:.2f}, {r_max:.2f}], "
+                       f"theta ∈ [{theta_min_deg:.0f}°, {theta_max_deg:.0f}°], "
+                       f"min_sep {min_separation:.2f} m). Widen bounds "
+                       "or reduce min_separation.")
+                print(f"[randomize_cups] ERROR: {msg}")
+                return {"status": "error", "message": msg}
+
+        # Apply poses via the same Kit-command teleport path update_cups uses.
+        results = []
+        for (color, fwd, lat) in placed:
+            x, y = _to_world(fwd, lat, anchor=pan_xy)
+            yaw_deg = rng.uniform(yaw_min_deg, yaw_max_deg)
+            cup_path = f"{container_path}/cup_{color}"
+            self._set_obj_prim_pose(
+                cup_path,
+                position=Gf.Vec3d(x, y, ground_z),
+                rotation_xyz_deg=(0.0, 0.0, yaw_deg),
+            )
+            results.append({"color": color, "fwd": fwd, "lat": lat,
+                            "yaw_deg": yaw_deg})
+
+        # Refresh /drop_poses action graph wrappers — without this, the
+        # graph keeps publishing the old prim addresses' cached transforms
+        # even though the cup prims themselves have new world poses. This
+        # is what makes randomize visible to ROS2 subscribers (the control
+        # GUI's drop listbox, aruco_camera_localizer, etc.).
+        try:
+            self._cmd_publish_drop_poses()
+        except Exception as exc:
+            print(f"[randomize_cups] WARN: publish_drop_poses refresh "
+                  f"failed: {exc}")
+
+        print(f"[randomize_cups] Randomized {len(placed)} cups "
+              f"(r ∈ [{r_min:.2f}, {r_max:.2f}], "
+              f"theta ∈ [{theta_min_deg:.0f}°, {theta_max_deg:.0f}°], "
+              f"yaw ∈ [{yaw_min_deg:.0f}°, {yaw_max_deg:.0f}°])")
+        return {"status": "success",
+                "message": f"Randomized {len(placed)} cups",
+                "placements": results}
 
     def add_cups(self, container_path="/World/Containers"):
         """Add colored cups using CUP_LAYOUT config (arc or line mode).
@@ -5600,6 +5740,31 @@ class DigitalTwin(omni.ext.IExt):
             self._add_cups_from_ui()
             return {"status": "success",
                     "message": "Cups updated from CUP_LAYOUT"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
+    def _cmd_randomize_cups(self, r_min: float = 0.24, r_max: float = 0.30,
+                             theta_min_deg: float = -50.0,
+                             theta_max_deg: float = 50.0,
+                             min_separation: float = 0.12,
+                             yaw_min_deg: float = -180.0,
+                             yaw_max_deg: float = 180.0,
+                             max_attempts: int = 300,
+                             seed: int = None) -> Dict[str, Any]:
+        """MCP handler: randomize cup (r, theta, yaw) within reachable arc.
+
+        Thin wrapper over self.randomize_cups — see that docstring for the
+        full parameter and constraint description.
+        """
+        try:
+            return self.randomize_cups(
+                r_min=r_min, r_max=r_max,
+                theta_min_deg=theta_min_deg, theta_max_deg=theta_max_deg,
+                min_separation=min_separation,
+                yaw_min_deg=yaw_min_deg, yaw_max_deg=yaw_max_deg,
+                max_attempts=max_attempts, seed=seed,
+            )
         except Exception as e:
             traceback.print_exc()
             return {"status": "error", "message": str(e)}

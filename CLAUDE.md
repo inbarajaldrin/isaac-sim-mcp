@@ -116,7 +116,7 @@ Registered in `MCP_TOOL_REGISTRY` at the top of `exts/soarm101-dt/so_arm101_dt/e
 - **Publishers**: `setup_pose_publisher`, `setup_force_publisher`, `setup_bbox_publisher`, `setup_wrist_camera_action_graph`, `publish_drop_poses`
 - **Viewport publisher** (Phase 13, active-reuse only, zero RTF cost): `start_viewport_publisher`, `stop_viewport_publisher`, `list_viewport_publishers`
 - **Video recording** (Phase 13, ffmpeg-backed): `start_recording`, `stop_recording`, `get_recording_status`
-- **Objects / cups**: `add_objects`, `delete_objects`, `randomize_object_poses`, `randomize_single_object`, `sort_objects`, `sort_into_cups`, `add_cups`, `delete_cups`, `update_cups` (re-snaps cups to default poses; used by `vla_SO-ARM101/scripts/sim_reset.sh`)
+- **Objects / cups**: `add_objects`, `delete_objects`, `randomize_object_poses`, `randomize_single_object`, `sort_objects`, `sort_into_cups`, `add_cups`, `delete_cups`, `update_cups` (re-snaps cups to default `CUP_LAYOUT` poses; used by `vla_SO-ARM101/scripts/sim_reset.sh`), `randomize_cups` (random `fwd, lat, yaw` within drop-reachable bounds — defaults match grasp_workspace; for stress-testing the pick-place pipeline against varied cup poses)
 - **State**: `save_scene_state`, `restore_scene_state`, `sync_real_poses`
 - **Escape hatch**: `execute_python_code` (runs arbitrary code in Kit's Python context; set a `result` variable to return data)
 
