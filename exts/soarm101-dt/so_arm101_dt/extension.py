@@ -661,7 +661,7 @@ MCP_TOOL_REGISTRY = {
             "modes": {"type": "array", "description": "list of layout modes to sample from. Default ['arc','line']", "required": False},
             "randomize_order": {"type": "boolean", "description": "shuffle color → slot mapping each sample (6 permutations for red/green/blue). False keeps canonical order", "default": True},
             "yaw_jitter_deg": {"type": "number", "description": "half-width of yaw jitter around face-origin (deg). 0 = always face origin exactly", "default": 15.0},
-            "cup_lego_clearance": {"type": "number", "description": "extra margin (m) for cup-lego check", "default": 0.01},
+            "cup_lego_clearance": {"type": "number", "description": "extra margin (m) for cup-lego check (gripper needs room to approach lego — too small and pickup IK fails)", "default": 0.04},
             "cup_robot_clearance": {"type": "number", "description": "extra margin (m) for cup-robot-link check", "default": 0.015},
             "max_attempts": {"type": "integer", "description": "full-layout samples to try before failing", "default": 200},
             "seed": {"type": "integer", "description": "RNG seed for reproducibility (default: nondeterministic)", "required": False}
@@ -3041,7 +3041,7 @@ class DigitalTwin(omni.ext.IExt):
                         randomize_order=True,
                         yaw_jitter_deg=15.0,
                         objects_path="/World/Objects",
-                        cup_lego_clearance=0.01,
+                        cup_lego_clearance=0.04,
                         robot_path="/World/SO_ARM101",
                         cup_robot_clearance=0.015,
                         max_attempts=200, seed=None):
@@ -5936,7 +5936,7 @@ class DigitalTwin(omni.ext.IExt):
                              modes: list = None,
                              randomize_order: bool = True,
                              yaw_jitter_deg: float = 15.0,
-                             cup_lego_clearance: float = 0.01,
+                             cup_lego_clearance: float = 0.04,
                              cup_robot_clearance: float = 0.015,
                              max_attempts: int = 200,
                              seed: int = None) -> Dict[str, Any]:
