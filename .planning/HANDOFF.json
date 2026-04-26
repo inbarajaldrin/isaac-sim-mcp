@@ -1,87 +1,83 @@
 {
   "version": "1.0",
-  "timestamp": "2026-04-25T17:47:01-07:00",
+  "timestamp": "2026-04-25T22:06:42-07:00",
   "context": "default",
   "phase": null,
-  "phase_name": "Real-mode pipeline plumbing + Real Test tab scaffold",
+  "phase_name": "Real-mode pipeline + cup transformation fix (cross-repo session)",
   "phase_dir": null,
   "plan": null,
-  "task": 11,
-  "total_tasks": 17,
+  "task": null,
+  "total_tasks": null,
   "status": "paused",
-  "context_summary": "Cross-repo session connecting aruco_camera_localizer to soarm101-dt sim wrist camera and starting a Real Test tab in vla_SO-ARM101 control_gui. Real-mode pipeline (YOLOE legos + ArUco cups → /objects_poses_real, /drop_poses_real) is fully wired and verified end-to-end. Ready to start Real Test tab scaffold (task #11 in_progress, paused before code edits due to context budget).",
+  "context_summary": "Cross-repo session continuing from prior pause. Built out Real Test tab in vla_SO-ARM101's control_gui.py with cached lego + cup poses, fixed cup pose transformation bug (Y-sign + missing marker→object orientation rotation), implemented marker_geometry.py with cylinder_side_marker function in aruco_camera_localizer. Cups now appear UPRIGHT in MoveIt planning scene (verified via /get_planning_scene). Remaining ~25-30mm xy/z position residual + ~6° orientation residual are pure PnP/camera-side errors, separate calibration task.",
   "completed_tasks": [
-    {"id": 1, "name": "Add cup-marker entries to aruco_config.json", "status": "done"},
-    {"id": 2, "name": "Fix sim drop_poses frame_id from World to base", "status": "done"},
-    {"id": 3, "name": "Restart Isaac Sim cleanly + run quick_start", "status": "done"},
-    {"id": 4, "name": "Rebuild aruco_camera_localizer", "status": "done"},
-    {"id": 5, "name": "Launch localize_aruco --drop with ROS params", "status": "done"},
-    {"id": 6, "name": "Verify /drop_poses_real matches /drop_poses (wiring)", "status": "done", "note": "Wiring works; positions still ~50cm off until camera-frame mismatch resolved (deferred)"},
-    {"id": 7, "name": "Rename workspace_camera_sim prim to workspace_camera", "status": "done"},
-    {"id": 8, "name": "Verify YOLOE lego detection produces /objects_poses_real", "status": "done"},
-    {"id": 10, "name": "Fix _ViewportCameraPublisher to target main viewport", "status": "done"}
-  ],
-  "in_progress_tasks": [
-    {"id": 11, "name": "Real Test tab: add tab + state vars to control_gui.py", "progress": "Identified vla_SO-ARM101/src/so_arm101_control/so_arm101_control/control_gui.py as the file. Tab/widget registration system uses _register_button(parent, tab=..., section=...) pattern. Found via grep around line 702-820. NO code edits yet — paused at this point."}
+    {"id": 1, "name": "Real Test tab scaffold (Setup + Calibration + Run sections)", "status": "done", "commit": "3ea86d8"},
+    {"id": 2, "name": "Refresh Cups Pose handler (subscribe-once /drop_poses_real)", "status": "done", "commit": "3ea86d8"},
+    {"id": 3, "name": "Refresh Legos Pose handler (subscribe-once /objects_poses_real)", "status": "done", "commit": "3ea86d8"},
+    {"id": 4, "name": "Wipe-then-push pattern for both refresh threads (idempotent ApplyPlanningScene)", "status": "done", "commit": "3ea86d8"},
+    {"id": 5, "name": "Clear all caches button (cache + collisions + visual markers + status labels)", "status": "done", "commit": "3ea86d8"},
+    {"id": 6, "name": "Run Real Pick & Drop loop iterating cached legos with cached cup poses", "status": "done", "commit": "3ea86d8"},
+    {"id": 7, "name": "_lookup_bbox 3-tier fallback (exact / color-only / color-prefix)", "status": "done", "commit": "3ea86d8"},
+    {"id": 8, "name": "_build_lego_geometry (mesh-or-box dispatch, no size inference from color)", "status": "done", "commit": "3ea86d8"},
+    {"id": 9, "name": "_cmd_drop_point wrist_roll fixed to sign*(+pi/2), default +90°", "status": "done", "commit": "3ea86d8"},
+    {"id": 10, "name": "Per-robot YOLOE config in robot_config.yaml (prompts, prompt_map, confidence)", "status": "done", "commit": "2317238"},
+    {"id": 11, "name": "config_loader.get_yolo_config() + localize_yoloe CLI>config>default resolution", "status": "done", "commit": "2317238"},
+    {"id": 12, "name": "bbox_catalog.json color-prefix entries (red/green/blue)", "status": "done", "commit": "2317238"},
+    {"id": 13, "name": "marker_geometry.py with cylinder_side_marker + method registry", "status": "done", "commit": "2317238"},
+    {"id": 14, "name": "aruco_config.json marker_to_object schema (method+params, position_offset legacy fallback)", "status": "done", "commit": "2317238"},
+    {"id": 15, "name": "localize_aruco function dispatch + marker→object orientation rotation in published drop_quat", "status": "done", "commit": "2317238"},
+    {"id": 16, "name": "scripts/restart_yoloe.sh launcher (mirrors restart_aruco_localizer.sh pattern)", "status": "done", "commit": "11353e9"},
+    {"id": 17, "name": "Cup orientation verified upright in MoveIt planning scene via /get_planning_scene", "status": "done"}
   ],
   "remaining_tasks": [
-    {"id": 12, "name": "Real Test tab: Open Gripper button (wire to _cmd_gripper_open)"},
-    {"id": 13, "name": "Real Test tab: Drop Point Green button (set ik_target=drop_1 then _cmd_drop_point)"},
-    {"id": 14, "name": "Real Test tab: Grasp Home button (wire to _cmd_grasp_home)"},
-    {"id": 15, "name": "Real Test tab: Wrist Roll +/- toggle (modify _cmd_drop_point IK to apply sign)"},
-    {"id": 16, "name": "Real Test tab: Refresh Cups Pose button (subscribe-once /drop_poses_real, partial-cache merge, push to MoveIt)"},
-    {"id": 17, "name": "Real Test tab: Run Real Pick & Drop button (loop using /objects_poses_real + cached cup poses)"}
+    {"id": 18, "name": "Diagnose ~25-30mm PnP/camera position residual (USD camera VFOV mismatch? distortion? PnP solve ambiguity?)", "status": "not_started"},
+    {"id": 19, "name": "Diagnose ~6° orientation residual (camera intrinsics or marker pose noise?)", "status": "not_started"},
+    {"id": 20, "name": "Implement 'map cups sweep' workflow — rotate-extent scan, log yaw at each detection, revisit + cache permanently", "status": "not_started"},
+    {"id": 21, "name": "End-to-end Run Real Pick & Drop motion test (currently un-exercised; pre-flight gates work)", "status": "not_started"},
+    {"id": 22, "name": "Pre-existing uncommitted state in isaac-sim-mcp (.planning/ROADMAP, STATE, extension.py, etc.) — separate commit cycle", "status": "not_started"}
   ],
   "blockers": [],
   "human_actions_pending": [
-    {"action": "Decide on /vla_SO-ARM101 pull strategy", "context": "Repo is 23 ahead, 27 behind origin/main. Edits coming in tasks 11-17 will add to local divergence. Pull/merge resolution needs its own dedicated session with Phase 9 verification (test_pick_all.sh) on standby.", "blocking": false},
-    {"action": "Run scripts/restart_aruco_localizer.sh in your own terminal when needed", "context": "cv2 imshow needs full session context (D-bus, XDG_SESSION_*) which the Bash tool's subshell doesn't reliably provide. Launching from a real terminal makes the Merged Detection window appear normally.", "blocking": false}
+    {"action": "If cv2 preview windows desired, relaunch aruco/yoloe from your own terminal", "context": "Currently running headless from this session's Bash subshell. Bash subshells lack reliable D-bus/XDG context for cv2.imshow per CLAUDE.md. To get preview windows, run scripts/restart_aruco_localizer.sh and scripts/restart_yoloe.sh from your own terminal.", "blocking": false}
   ],
   "decisions": [
-    {"decision": "wrist_roll +/- toggle = camera-angle for marker visibility (not drop-orientation or kinematics)", "rationale": "User clarification: + is the optimal cup-markers-in-FOV pose; - is the alternate when + is occluded. Default +."},
-    {"decision": "refresh_cups_pose = partial-cache, keep-previous-for-missing", "rationale": "Robust to occlusion. If only 2 of 3 markers detected, update those 2, keep previously-cached value for the third. User-chosen via AskUserQuestion."},
-    {"decision": "Real Test tab in vla_SO-ARM101 control_gui.py — testing in isolation, refactor later", "rationale": "User suggested approach: build all real-mode buttons in one new tab, validate end-to-end, then move blocks into respective sections of existing UI. Lower risk than weaving into existing tabs immediately."},
-    {"decision": "_objects_poses_real (YOLOE) is sole source for lego positions in real mode — even if it deviates from sim ground truth", "rationale": "User correction during session: real mode mocks the real workflow, sim ground truth is irrelevant. The whole point is to validate real-pipeline accuracy. Don't fall back to /objects_poses_sim."},
-    {"decision": "Don't modify _cmd_drop_sweep — variant lives in new Run Real Pick & Drop handler", "rationale": "Keep sim mode untouched. New flow has its own variant that substitutes _cached_cup_poses for the live /drop_poses topic lookup."},
-    {"decision": "Camera intrinsics aligned at 1280x720 (matches active-viewport publisher emit + real RealSense)", "rationale": "Originally 640x480 in YAML, 1280x720 publisher emit. Mismatch caused 2x scale errors in PnP. YAML now bumped to 1280x720 — sim and real share same intrinsics."},
-    {"decision": "MARKER_SIZE in localizer: 32mm → 25mm for so_arm101", "rationale": "Origin's hardcoded 0.032 was for JETANK markers. SO-ARM101 cup markers are 25mm per CUP_ARUCO_CONFIG in soarm101-dt extension.py:391-401. Hardcoded fix; ideally should be config-driven per-robot."},
-    {"decision": "Cup marker offset in aruco_config.json: Y=-0.005, Z=-0.033 (computed from sim ground truth)", "rationale": "User's prior uncommitted Y=+0.083 was geometrically invalid (would land below floor). Recomputed by reading marker mesh bbox + cup body-center bbox from sim — produces 5mm up, 33mm into cup body (marker is inset 6mm into wall, not flush)."},
-    {"decision": "Sim /drop_poses frame_id changed from World → base via /World/base passthrough Xform prim", "rationale": "Aligns with /ee_pose convention and real localizer's frame_id='base'. Small addition to _cmd_publish_drop_poses (extension.py:5774-5786)."},
-    {"decision": "_ViewportCameraPublisher.start() now picks main 'Viewport' window explicitly, not get_active_viewport()", "rationale": "get_active_viewport() returned 'Viewport 2' (programmatic, hidden) while UI showed 'Viewport' (Persp). Subscription bound to wrong viewport caused topic to publish Persp content despite metadata claiming wrist. Fix iterates get_viewport_window_instances()."}
+    {"decision": "marker→object transformation lives in aruco_camera_localizer config + function, NOT control_gui or sim publisher", "rationale": "User constraint: 'input to VLA package has to be the same in sim and real, the transformation of aruco to cup center happens in the config of the aruco camera localizer'. Config now declares geometry method+params; marker_geometry.py computes both offset AND orientation."},
+    {"decision": "cylinder_side_marker function returns both offset AND orientation_quat_marker_to_object", "rationale": "Position-only fix would still leave cups visually wrong in planning scene (lying on side instead of upright). Orientation rotation is essential for mesh collision objects to render correctly."},
+    {"decision": "R_marker_to_object derived empirically (R_marker_world.inv() * R_object_known) not from first-principles geometric reasoning", "rationale": "ArUco PnP labels marker frame axes in a specific way (Y=right, X=up vs my initial Z=face/Y=up assumption). First geometric guess produced wrong result; empirical derivation from one captured marker quat + known object quat is gold standard."},
+    {"decision": "marker_to_object schema is forward-compatible (method registry) with legacy position_offset fallback for jetank backward compat", "rationale": "Adding box_top_marker / sphere_pole_marker / etc. requires only a function addition + config edit, no call-site changes. Jetank rows continue to work without migration."},
+    {"decision": "Y-sign was wrong in original aruco_config.json (Y=-0.005 should have been Y=+0.005)", "rationale": "Comment claimed '-Y in marker frame = up on cup' (assumed image-Y-down convention), but ArUco PnP outputs marker frame with Y up on cup pattern. Function with marker_y_axis='up' produces correct +0.00483 automatically."},
+    {"decision": "wipe-then-push pattern (REMOVE + 500ms wait + ADD) for cup/lego refreshes mirroring _cmd_grasp_refresh", "rationale": "MoveIt's ApplyPlanningScene ADD-on-existing-id is not idempotent — repeat refreshes silently fail without prior REMOVE. Diagnosed via systematic comparison of working sim refresh vs broken real refresh code paths."},
+    {"decision": "_lookup_bbox 3-tier fallback (exact, color-only, color-prefix) handles both /objects_bbox_sim and /objects_bbox_real", "rationale": "Sim catalog publishes size-specific keys (red_2x4); YOLOE catalog publishes color-prefix keys. Tier-3 (any key starting with color_) makes lookup catalog-agnostic without branching on Sim/Real Hardware toggle."},
+    {"decision": "_build_lego_geometry: mesh-by-size if known, else SolidPrimitive.BOX with bbox catalog dims — NO color→size inference", "rationale": "User explicit constraint: 'in real world the injection pipeline cant know what size it is'. Vision detects color but not size. SolidPrimitive.BOX from bbox catalog is the size-agnostic geometry; catalog values can be edited per real cup setup."},
+    {"decision": "drop_point wrist_roll changed from sign*(-pi/2) to sign*(+pi/2)", "rationale": "User found cup ArUco markers were not visible at scan pose with default wrist_roll=-90°. Sign convention flipped so default +1 sign now produces +90° (markers in FOV). Drop sweep stays at -pi/2 unchanged (different motion phase, jaw-clearing not scanning)."}
   ],
   "uncommitted_files": {
     "isaac-sim-mcp": [
-      ".planning/ROADMAP.md (M, pre-existing)",
-      ".planning/STATE.md (M, pre-existing — does not yet reflect today's work)",
+      ".planning/ROADMAP.md (M, pre-existing from prior session)",
+      ".planning/STATE.md (M, pre-existing from prior session)",
+      "exts/soarm101-dt/so_arm101_dt/extension.py (M, pre-existing from prior session)",
       ".planning/phases/09-collision-scene-completeness/09-SUMMARY.md (?? pre-existing)",
-      ".planning/quick/260424-te8-promote-omniversekit-persp-pose-to-soarm/ (?? earlier today's quick task)",
-      "exts/soarm101-dt/so_arm101_dt/extension.py (M today: workspace_camera auto-create + auto-switch in quick_start; frame_id World→base via /World/base passthrough; workspace_camera_sim prim → workspace_camera rename; setup_wrist_camera_action_graph opencvPinhole + RunOnce-removal experiments [didn't fix wrist topic but match ur5e pattern more closely]; _ViewportCameraPublisher.start() main-viewport-pick fix)",
-      "scripts/restart_aruco_localizer.sh (?? new launcher with thorough pre-kill)"
+      ".planning/quick/ (?? pre-existing)",
+      "mobileclip_blt.ts (?? large model artifact, gitignore candidate, do NOT commit as-is)"
     ],
-    "Desktop/ros2_ws/src/aruco_camera_localizer": [
-      "aruco_camera_localizer/merged_localization_aruco.py (M: parse_known_args, rclpy.init(args=sys.argv), MARKER_SIZE 0.032→0.025, sys import)",
-      "aruco_camera_localizer/merged_localization_yoloe.py (M: rclpy.init(args=sys.argv), sys import)",
-      "config/aruco_config.json (M: cup row offset corrected to Y=-0.005, Z=-0.033)",
-      "config/robot_config.yaml (M: so_arm101 width 1280→640→1280 net same as origin)",
-      "(plus 4 .pt YOLOE text_embeddings cache files — gitignore candidates)"
-    ],
-    "vla_SO-ARM101": [
-      "(no edits yet from this session — repo is 23↑ 27↓ from origin/main from prior work, awaits dedicated pull session)"
+    "vla_SO-ARM101": [],
+    "aruco_camera_localizer": [
+      ".text_embeddings_*.pt files (?? cache artifacts, gitignore candidates)"
     ]
   },
-  "next_action": "Resume task #11 (Real Test tab: add tab + state vars). Open /home/aaugus11/Projects/Exploring-VLAs/vla_SO-ARM101/src/so_arm101_control/so_arm101_control/control_gui.py. Find the existing tab-build pattern (_build_grasp_tab is one example, look for the ttk.Notebook .add() calls) and add a new _build_real_test_tab method following the same conventions. Add instance vars _drop_wrist_roll_sign=+1 and _cached_cup_poses={} in __init__. Tab body: empty placeholder with a label 'Real Test (under construction)' for now. After verifying tab shows in GUI, proceed to tasks 12 (Open Gripper), 14 (Grasp Home), 13 (Drop Point Green) — easy wires to existing services.",
-  "context_notes": "User's mental model: real-mode mocks real-world workflow. Cameras can't see everything always — must scan-then-cache. Cup poses are detected ONCE per cycle at scan pose (drop_point on green cup, where wrist camera sees all 3 markers), pushed into MoveIt as collision objects, then never refreshed. Lego poses refresh every cycle from /objects_poses_real (YOLOE). Both detection sources are 'authoritative' for real mode regardless of how they compare with sim ground truth. Build all this in a fresh Real Test tab in vla_SO-ARM101 control_gui.py, validate end-to-end, then refactor blocks into existing UI sections. Order: scaffold → simple wires (Open Gripper, Grasp Home, Drop Point Green) → wrist_roll +/- toggle → Refresh Cups Pose with MoveIt push → Run Real Pick & Drop loop.",
+  "next_action": "Either (a) diagnose the residual ~25-30mm xy/z position error in the real pipeline (USD camera VFOV mismatch is a leading suspect: rendered VFOV=75° vs robot_config.yaml's 67.7°), or (b) implement the 'map cups sweep' workflow user described (rotate-extent scan, log yaw on detection, revisit + cache permanently for robust real-world cup localization), or (c) run end-to-end real pick-drop motion test now that all caches and orientation are correct.",
+  "context_notes": "User's mental model: real-mode mocks real-world workflow. Cameras can't see everything always — must scan-then-cache. The Real Test tab is the testing surface; eventually refactor the working flows into existing UI sections. The marker_to_object schema in aruco_config.json should hold any future cup/marker geometry — adding new objects is a function + config addition, not hand-tuned offsets.",
   "live_infrastructure": {
-    "isaac_sim": "Running (PID was 389660 at restart, may have changed). Scene built via quick_start. Wrist camera prim at /World/SO_ARM101/camera_mount_link/usb_camera/wrist_camera. Workspace camera at /World/workspace_camera (renamed from _sim today).",
-    "wrist_viewport_publisher": "Active. Restarted via MCP after viewport-publisher fix. Both Viewport (main UI) and Viewport 2 currently set to wrist_camera. Topic /wrist_camera_rgb_sim publishing at ~6 Hz.",
-    "control_stack": "Running — /so_arm101_control_gui, MoveIt, RViz, all Phase-9 services up.",
-    "localize_yoloe": "Running in bg. Subscribed /wrist_camera_rgb_sim. Publishing /objects_poses_real, /objects_bbox_real.",
-    "localize_aruco": "User running in their own terminal via scripts/restart_aruco_localizer.sh. Subscribed /wrist_camera_rgb_sim. Publishing /drop_poses_real, /aruco_poses_real.",
-    "topics_verified": "/wrist_camera_rgb_sim, /workspace_camera_rgb_sim, /ee_pose (frame=base), /camera_pose (frame=base, points to camera_link), /drop_poses (sim, frame=base after today's fix), /drop_poses_real (real, frame=base), /aruco_poses_real, /objects_poses_sim (frame=World), /objects_poses_real (frame=base), /objects_bbox_sim, /objects_bbox_real"
+    "isaac_sim": "Running. Scene built via quick_start. Wrist + workspace cameras publishing.",
+    "control_stack": "Running — /so_arm101_control_gui, MoveIt, RViz, all services up. Real Test tab visible.",
+    "localize_yoloe": "Running headless (background, launched from this Bash subshell). Config-driven prompts: red/blue/green object → mapped to red/blue/green child_frame_ids.",
+    "localize_aruco": "Running headless (PID 1074948+, launched from this Bash subshell). Now uses marker_to_object schema → applies orientation rotation; published cups upright in world frame.",
+    "moveit_planning_scene": "Contains ground_plane + 3 cup_drop_* meshes (UPRIGHT) + 5 lego_*_N boxes (when Refresh Legos was last run). Verified via /get_planning_scene — cup euler ≈ (0, +6, +90)° matches sim's (0, 0, +90)° within PnP noise."
   },
   "anti_patterns_discovered": [
-    {"pattern": "Trusting metadata over rendered output", "manifestation": "get_active_viewport() reported wrist_camera but actual rendered frames came from a different viewport (Persp). Spent significant time analyzing camera-frame math when the real bug was that the topic was publishing the wrong camera entirely.", "severity": "advisory", "mitigation": "When pose math seems wildly wrong, always verify the IMAGE STREAM matches expectation before deeper analysis. Capture and visually inspect the raw topic content."},
-    {"pattern": "Hardcoded values in 'verified' upstream code masquerading as bugs in our setup", "manifestation": "MARKER_SIZE = 0.032 was hardcoded for JETANK in origin's localizer. Looked correct (origin verified) but was wrong for SO-ARM101's 25mm markers. Origin's so_arm101 path was half-finished (config block existed, hardcodes weren't parameterized).", "severity": "advisory", "mitigation": "When using upstream code 'verified for X' on a different robot Y, audit hardcoded constants for X-specific values. Don't assume 'verified' means 'parameterized for all robots'."},
-    {"pattern": "Multiple parallel clones of the same repo with divergent uncommitted edits", "manifestation": "Two clones of aruco_camera_localizer (Projects/RoboSort vs Desktop/ros2_ws/src). Bashrc sourced Desktop's install. My edits to Projects/RoboSort were ignored at runtime because Desktop's PYTHONPATH took priority. Discovered only after env -i diagnostic.", "severity": "advisory", "mitigation": "When multiple clones exist, identify which one is on the runtime PYTHONPATH BEFORE editing. Run `python3 -c 'import pkg; print(pkg.__file__)'` to confirm. Consolidate to one clone when possible."}
+    {"pattern": "Trusting first-principles geometric reasoning over empirical derivation for marker frame conventions", "manifestation": "First R_marker_to_object matrix was geometrically logical but produced cup tilted 96° from upright. Empirical R = R_marker_world.inv() * R_object_known produced the correct matrix on first try.", "severity": "advisory", "mitigation": "When marker frame axis convention is unclear, derive R_m_to_obj empirically from one captured marker quat + known object quat. Document the empirical derivation method in marker_geometry.py."},
+    {"pattern": "MoveIt ApplyPlanningScene ADD-on-existing-id is not idempotent", "manifestation": "First refresh after clear-cache succeeded; second refresh silently failed (no log). Spent multiple cycles debugging until comparing with sim's working _cmd_grasp_refresh which uses wipe-then-push pattern.", "severity": "blocking", "mitigation": "ANY scene-mutation flow that may be called more than once on the same id MUST do REMOVE + 500ms wait + ADD. Just calling ADD twice silently no-ops or returns false-success. Mirror _cmd_grasp_refresh's pattern."},
+    {"pattern": "stdout from threaded apply closures is buffered; success log lines may not appear immediately", "manifestation": "Applied changes that appeared 'silent' for tens of seconds, leading to false-negative diagnosis. Direct /get_planning_scene query is the source-of-truth for verifying scene state.", "severity": "advisory", "mitigation": "For verifying MoveIt scene mutations: query /get_planning_scene service directly with WORLD_OBJECT_NAMES|WORLD_OBJECT_GEOMETRY components. Do NOT rely on RViz visual or log lines."},
+    {"pattern": "stale config holders (config loaded once at process start) require restart, not just file edit", "manifestation": "Edited bbox_catalog.json with new color-prefix keys; localize_yoloe was already running and held stale catalog in memory; control_gui kept seeing old keys; legos silently failed to reach planning scene. Spent multiple cycles diagnosing until restarting yoloe.", "severity": "advisory", "mitigation": "When editing config files that consumer processes load at startup (not via topic subscription), restart the consumer to pick up changes. Verify via topic echo of the published config (/objects_bbox_real) before assuming runtime state matches the file."}
   ]
 }
