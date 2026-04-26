@@ -74,7 +74,12 @@ Do not make direct repo edits outside a GSD workflow unless the user explicitly 
 
 - **This repo** (`~/Documents/isaac-sim-mcp`, branch `so-arm101`): Isaac Sim extension `soarm101-dt` at `exts/soarm101-dt/`. MCP socket on port **8767**.
 - **ROS2 control stack**: `~/Projects/Exploring-VLAs/vla_SO-ARM101` — control GUI, MoveIt, geometric IK, drop motion scripts. Launch: `ros2 launch so_arm101_control control.launch.py rviz:=true`
-- **aruco_camera_localizer**: publishes `/drop_poses` from real camera. (Path TBD — used in Phase 3 and onward.)
+- **aruco_camera_localizer**: `~/Desktop/ros2_ws/src/aruco_camera_localizer` (branch `robosort` — also has a stale duplicate at `~/Projects/RoboSort/aruco_camera_localizer/`; runtime always uses Desktop via colcon `--symlink-install`). Publishes `/aruco_poses_real`, `/drop_poses_real` (ArUco) and `/objects_poses_real`, `/objects_bbox_real` (YOLOE). Per-marker geometry in `config/aruco_config.json`'s `marker_to_object` blocks (function-driven via `marker_geometry.py`); YOLOE prompts in `config/robot_config.yaml`'s `<robot>.detection.yolo` block. **Read that repo's `CLAUDE.md` before editing.**
+
+  Launchers (run from your own terminal — cv2.imshow needs D-bus / XDG_SESSION context that Bash subshells lack):
+  - ArUco: `bash scripts/restart_aruco_localizer.sh`
+  - YOLOE: `bash scripts/restart_yoloe.sh` (config-driven prompts; flags `--bg`, `--headless`, `--conf`, `--prompts`, `--camera`)
+  - Add new marker/object: `python3 ~/Desktop/ros2_ws/src/aruco_camera_localizer/scripts/derive_marker_config.py --marker-id N --cup-prim PATH --marker-prim PATH` — derives `marker_to_object` config from USD ground truth + live PnP. Marker MUST be in camera FOV during the run (Kalman extrapolation produces nonsense values otherwise).
 
 Branch model: `main` = UR5e extension (`ur5e-dt`), `so-arm101` = this project (`soarm101-dt`), `aic` = AIC extension. Do not cross branches without understanding the merge implications — the extensions coexist in `exts/` on each branch but only one is `--enable`'d per launch.
 
