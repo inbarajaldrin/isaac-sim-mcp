@@ -109,7 +109,14 @@ Interpret:
 1. `bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch soarm101-dt` — blocks until socket ready (~10s warm, ~90s cold, max 120s). **NEVER** set a Bash timeout on this script; it has its own.
 2. Call `quick_start` via socket 8767 to spawn scene + robot + action graphs + publishers.
 3. Source ROS2 + launch control stack: `source /opt/ros/humble/setup.bash && source ~/Projects/Exploring-VLAs/vla_SO-ARM101/install/setup.bash && ros2 launch so_arm101_control control.launch.py rviz:=true`
-4. Verify: `ros2 topic list` should show `/joint_states`, `/drop_poses`, `/objects_poses_sim`, `/wrist_camera_rgb_sim`.
+4. **For real-mode work** (Real Test tab, lego/cup detection from camera) — also launch the two detectors **from your own terminal** (NOT a Bash subshell — cv2.imshow needs D-bus / XDG_SESSION):
+   - ArUco: `bash scripts/restart_aruco_localizer.sh` → publishes `/aruco_poses_real`, `/drop_poses_real`
+   - YOLOE: `bash scripts/restart_yoloe.sh` → publishes `/objects_poses_real`, `/objects_bbox_real` (config-driven prompts from `~/Desktop/ros2_ws/src/aruco_camera_localizer/config/robot_config.yaml`)
+   - Both have `--headless` and `--bg` flags if you don't need cv2 preview windows. For sim-only work, skip this step.
+5. Verify topics:
+   - Sim only: `ros2 topic list` should show `/joint_states`, `/drop_poses`, `/objects_poses_sim`, `/wrist_camera_rgb_sim`.
+   - + Real-mode: also `/drop_poses_real`, `/aruco_poses_real`, `/objects_poses_real`, `/objects_bbox_real`.
+6. Verify the planning scene (real-mode): `python3 -c "import rclpy; from rclpy.node import Node; from moveit_msgs.srv import GetPlanningScene; from moveit_msgs.msg import PlanningSceneComponents; rclpy.init(); n=Node('check'); c=n.create_client(GetPlanningScene,'/get_planning_scene'); c.wait_for_service(3.0); r=GetPlanningScene.Request(); r.components.components=PlanningSceneComponents.WORLD_OBJECT_NAMES; f=c.call_async(r); rclpy.spin_until_future_complete(n,f,5.0); [print(co.id) for co in f.result().scene.world.collision_objects]; rclpy.shutdown()"
 
 Shutdown: `bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh close` (graceful SIGTERM). For the ROS2 stack: `pkill -SIGINT -f "ros2.*launch.*control.launch"` — SIGINT propagates to children, SIGTERM does not.
 
