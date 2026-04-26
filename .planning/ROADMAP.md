@@ -22,9 +22,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 07.1: Widget Registry Expansion — Full CLI-Level Control** (INSERTED) - Extend `_button_registry` to cover Spinboxes, Checkbuttons, Entries, Listboxes, Scales. Add `_srv_list_widgets` / `_srv_get_widget_value` / `_srv_set_widget_value` so agents can read/write every interactive widget by name, not just click buttons. (completed 2026-04-18)
 - [x] **Phase 07.2: Motion Planning Problem Analysis & Inline Fix** (INSERTED) - FC-1 yaw-fallback + FC-2 OMPL goal-perturb retry + FixStartStateCollision adapters landed. FC-3 (out-of-reach spawns) handled by FC-1's pick-time detection. Residual cycle-8+ cup-tipping root-caused to lego blocks not tracked in MoveIt planning scene — deferred to Phase 9 by design. Verified cross-axis N=10 run: 5/5 reached-spawn cycles clean, 0 cups tipped. (completed 2026-04-19)
 - [ ] **Phase 8: Isaac Sim Extension Cleanup** - Button/socket parity, fix cup position update, scene state management, update ArUco marker positions to match real world
-- [ ] **Phase 9: Collision Scene Completeness** - Add lego block collision objects to MoveIt planning scene
+- [x] **Phase 9: Collision Scene Completeness** - Tiered deterministic motion planner (tier-1 linear → tier-2 retract-pan-settle → opt-in OMPL fallback) + drop motion robustness (`_attached_lego_tcp_offset` measured offset, `lock_pan` kwarg, hover 30→50 mm, drop_point/sweep slowed to 3.0 s, 5% cup padding) + `randomize_cups` MCP tool with lego/robot exclusions for stress-testing. 27/27 QS cycles PASS, 0 OMPL fallback. (completed 2026-04-24)
 - [ ] **Phase 10: Motion Quality & Real Deployment Drop** - Fix drop point orientation, trajectory-based grasp, reduce jerk, camera-guided drop sequence
-- [ ] **Phase 11: Full Pick-and-Place Pipeline Verification** - End-to-end YOLOE + ArUco via aruco_camera_localizer
+- [ ] **Phase 11: Full Pick-and-Place Pipeline Verification** - End-to-end YOLOE + ArUco via aruco_camera_localizer (in progress — 11-01 color-driven single-pick workflow)
 - [ ] **Phase 12: Isaac Sim Joint States Fallback Publisher** - Publish /joint_states from physics engine, auto-backoff, prevent snap-to-zero
 - [x] **Phase 13: Port UR5e-dt Backend Features to SO-ARM101** - Active-viewport publisher, `new_stage`, recording backend ported (MCP-only). Wrist action graph kept after empirical RTF test (completed 2026-04-18, commit 480ddf4)
 
@@ -91,7 +91,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 5 → 05.1 → 6 → 7 → 07
 | 8. Isaac Sim Extension Cleanup | Not started | - |
 | 9. Collision Scene Completeness | Not started | - |
 | 10. Motion Quality & Real Deployment Drop | Not started | - |
-| 11. Full Pick-and-Place Pipeline Verification | Not started | - |
+| 11. Full Pick-and-Place Pipeline Verification | In progress | - |
 | 12. Isaac Sim Joint States Fallback Publisher | Not started | - |
 
 ## Phase Details (Upcoming)
