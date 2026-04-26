@@ -1,83 +1,79 @@
 {
   "version": "1.0",
-  "timestamp": "2026-04-25T22:06:42-07:00",
-  "context": "default",
-  "phase": null,
-  "phase_name": "Real-mode pipeline + cup transformation fix (cross-repo session)",
-  "phase_dir": null,
-  "plan": null,
-  "task": null,
-  "total_tasks": null,
+  "timestamp": "2026-04-26T10:44:18Z",
+  "phase": "11",
+  "phase_name": "Full Pick-and-Place Pipeline Verification",
+  "phase_dir": ".planning/phases/11-full-pick-and-place-pipeline-verification",
+  "plan": "11-01",
+  "task": 6,
+  "total_tasks": 6,
   "status": "paused",
-  "context_summary": "Cross-repo session continuing from prior pause. Built out Real Test tab in vla_SO-ARM101's control_gui.py with cached lego + cup poses, fixed cup pose transformation bug (Y-sign + missing marker→object orientation rotation), implemented marker_geometry.py with cylinder_side_marker function in aruco_camera_localizer. Cups now appear UPRIGHT in MoveIt planning scene (verified via /get_planning_scene). Remaining ~25-30mm xy/z position residual + ~6° orientation residual are pure PnP/camera-side errors, separate calibration task.",
+  "context_summary": "Phase 11-01 implementation landed end-to-end across 4 commits worth of work (consolidated into 2 commits this session). Color-driven single-pick workflow + per-step debug buttons + Drop Scan workflow + Roll +90/-90 split + sweep range/swap. All sim-data-leak families fixed (D-11/12/13/14). Drop Scan motion-side verified (wrist_roll holds at user-set value through entire sweep, configurable range, direction-swap working). Cup detection itself NOT yet verified end-to-end because /wrist_camera_rgb_sim publisher is broken — Isaac Sim's bridge initialized with system rclpy and image-typed publishers aren't visible to ROS2 graph. Next session: get cameras publishing OR diagnose camera-side issue; then re-test Drop Scan with real detections; then build the lego workflow user wants to discuss next.",
   "completed_tasks": [
-    {"id": 1, "name": "Real Test tab scaffold (Setup + Calibration + Run sections)", "status": "done", "commit": "3ea86d8"},
-    {"id": 2, "name": "Refresh Cups Pose handler (subscribe-once /drop_poses_real)", "status": "done", "commit": "3ea86d8"},
-    {"id": 3, "name": "Refresh Legos Pose handler (subscribe-once /objects_poses_real)", "status": "done", "commit": "3ea86d8"},
-    {"id": 4, "name": "Wipe-then-push pattern for both refresh threads (idempotent ApplyPlanningScene)", "status": "done", "commit": "3ea86d8"},
-    {"id": 5, "name": "Clear all caches button (cache + collisions + visual markers + status labels)", "status": "done", "commit": "3ea86d8"},
-    {"id": 6, "name": "Run Real Pick & Drop loop iterating cached legos with cached cup poses", "status": "done", "commit": "3ea86d8"},
-    {"id": 7, "name": "_lookup_bbox 3-tier fallback (exact / color-only / color-prefix)", "status": "done", "commit": "3ea86d8"},
-    {"id": 8, "name": "_build_lego_geometry (mesh-or-box dispatch, no size inference from color)", "status": "done", "commit": "3ea86d8"},
-    {"id": 9, "name": "_cmd_drop_point wrist_roll fixed to sign*(+pi/2), default +90°", "status": "done", "commit": "3ea86d8"},
-    {"id": 10, "name": "Per-robot YOLOE config in robot_config.yaml (prompts, prompt_map, confidence)", "status": "done", "commit": "2317238"},
-    {"id": 11, "name": "config_loader.get_yolo_config() + localize_yoloe CLI>config>default resolution", "status": "done", "commit": "2317238"},
-    {"id": 12, "name": "bbox_catalog.json color-prefix entries (red/green/blue)", "status": "done", "commit": "2317238"},
-    {"id": 13, "name": "marker_geometry.py with cylinder_side_marker + method registry", "status": "done", "commit": "2317238"},
-    {"id": 14, "name": "aruco_config.json marker_to_object schema (method+params, position_offset legacy fallback)", "status": "done", "commit": "2317238"},
-    {"id": 15, "name": "localize_aruco function dispatch + marker→object orientation rotation in published drop_quat", "status": "done", "commit": "2317238"},
-    {"id": 16, "name": "scripts/restart_yoloe.sh launcher (mirrors restart_aruco_localizer.sh pattern)", "status": "done", "commit": "11353e9"},
-    {"id": 17, "name": "Cup orientation verified upright in MoveIt planning scene via /get_planning_scene", "status": "done"}
+    {"id": 1, "name": "11-01-01 _register_combobox helper", "status": "done", "commit": "5a60fa5"},
+    {"id": 2, "name": "11-01-02 Color dropdown UI in Real Test Run", "status": "done", "commit": "5a60fa5"},
+    {"id": 3, "name": "11-01-03 _real_refresh_color_dropdown helper", "status": "done", "commit": "5a60fa5"},
+    {"id": 4, "name": "11-01-04 _cmd_real_run_one_color single-pick handler", "status": "done", "commit": "5a60fa5"},
+    {"id": 5, "name": "11-01-05 Post-drop cache eviction + planning-scene reconcile", "status": "done", "commit": "5a60fa5"},
+    {"id": "extras-A", "name": "Sim-data leak fix (D-11): force grasp/bbox/drop topics + always re-sub + per-step re-inject", "status": "done", "commit": "5a60fa5"},
+    {"id": "extras-B", "name": "Visual marker source-of-truth fix (D-12): cups_dict parameter on _publish_cup_visual_markers", "status": "done", "commit": "5a60fa5"},
+    {"id": "extras-C", "name": "Lego collision orphan removal (D-14): query /get_planning_scene + union before REMOVE", "status": "done", "commit": "5a60fa5"},
+    {"id": "extras-D", "name": "_objects_callback gated on _qs_state != running (no auto-resync during scan/run)", "status": "done", "commit": "5a60fa5"},
+    {"id": "extras-E", "name": "Drop Scan workflow (replaces Drop Point Green): scan_home + sweep + servo + 3s avg", "status": "done", "commit": "5a60fa5"},
+    {"id": "extras-F", "name": "7 manual step buttons (real_grasp_*, real_drop_*) for debug stepping via _qs_execute_step", "status": "done", "commit": "5a60fa5"},
+    {"id": "extras-G", "name": "Roll +90 / Roll -90 explicit buttons replace toggle (wrist-only motion)", "status": "done", "commit": "5a60fa5"},
+    {"id": "extras-H", "name": "scan_home_preserve_roll: Drop Scan locks captured wrist_roll through sweep + return", "status": "done", "commit": "5a60fa5"},
+    {"id": "extras-I", "name": "Sweep range spinbox (5-180°, default 90°) + swap-direction button", "status": "done", "commit": "5a60fa5"},
+    {"id": 6, "name": "11-01-06 UAT verification + write 11-01-SUMMARY.md", "status": "in_progress", "progress": "Motion-side verified (sweep, wrist_roll lock, direction swap, range spinbox). Detection-side blocked on /wrist_camera_rgb_sim publisher. SUMMARY.md NOT yet written."}
   ],
   "remaining_tasks": [
-    {"id": 18, "name": "Diagnose ~25-30mm PnP/camera position residual (USD camera VFOV mismatch? distortion? PnP solve ambiguity?)", "status": "not_started"},
-    {"id": 19, "name": "Diagnose ~6° orientation residual (camera intrinsics or marker pose noise?)", "status": "not_started"},
-    {"id": 20, "name": "Implement 'map cups sweep' workflow — rotate-extent scan, log yaw at each detection, revisit + cache permanently", "status": "not_started"},
-    {"id": 21, "name": "End-to-end Run Real Pick & Drop motion test (currently un-exercised; pre-flight gates work)", "status": "not_started"},
-    {"id": 22, "name": "Pre-existing uncommitted state in isaac-sim-mcp (.planning/ROADMAP, STATE, extension.py, etc.) — separate commit cycle", "status": "not_started"}
+    {"id": 6, "name": "11-01-06 UAT detection-side + write SUMMARY", "status": "blocked_on_camera"},
+    {"id": "future-A", "name": "Document D-15/D-16/D-17 in CONTEXT.md (split-roll buttons, scan_home_preserve_roll, range/swap)", "status": "not_started"},
+    {"id": "future-B", "name": "Lego workflow discussion (user said 'after this is done then ill talk about the lego workflow')", "status": "blocked_on_drop_scan_validation"}
   ],
-  "blockers": [],
+  "blockers": [
+    {"description": "/wrist_camera_rgb_sim publisher count = 0 in ROS2 graph despite Isaac Sim viewport publisher being internally active (count=659+ frames sent)", "type": "external", "workaround": "None found this session — tried timeline cycle, setup_wrist_camera_action_graph, quick_start, new_stage+quick_start, full Isaac Sim restart via isaacsim_launch.sh, daemon restart. Workspace_camera_rgb_sim has same problem (only 0 publishers visible)."},
+    {"description": "Hypothesis: isaacsim.ros2.bridge-4.9.3 initialized with system rclpy at startup ('Attempting to load system rclpy' in /tmp/isaacsim.log L9.033) instead of the Python 3.11 build at /home/aaugus11/IsaacSim-ros_workspaces/build_ws/humble/humble_ws/install/local/lib/python3.11/dist-packages — and the bridge's image-typed publishers (sensor_msgs/Image) aren't visible across DDS to other rclpy clients, but TFMessage/JointState topics are fine.", "type": "technical", "workaround": "Likely needs PYTHONPATH adjustment BEFORE Isaac Sim startup so bridge picks the right rclpy from the start, OR a different launch mechanism. Out of scope for Phase 11-01."}
+  ],
   "human_actions_pending": [
-    {"action": "If cv2 preview windows desired, relaunch aruco/yoloe from your own terminal", "context": "Currently running headless from this session's Bash subshell. Bash subshells lack reliable D-bus/XDG context for cv2.imshow per CLAUDE.md. To get preview windows, run scripts/restart_aruco_localizer.sh and scripts/restart_yoloe.sh from your own terminal.", "blocking": false}
+    {"action": "Diagnose + fix /wrist_camera_rgb_sim publisher visibility (or relaunch Isaac Sim with corrected env)", "context": "Without this Drop Scan can't actually detect cups — only motion-side is verifiable. User's lego workflow discussion is blocked on Drop Scan being end-to-end functional.", "blocking": true}
   ],
   "decisions": [
-    {"decision": "marker→object transformation lives in aruco_camera_localizer config + function, NOT control_gui or sim publisher", "rationale": "User constraint: 'input to VLA package has to be the same in sim and real, the transformation of aruco to cup center happens in the config of the aruco camera localizer'. Config now declares geometry method+params; marker_geometry.py computes both offset AND orientation."},
-    {"decision": "cylinder_side_marker function returns both offset AND orientation_quat_marker_to_object", "rationale": "Position-only fix would still leave cups visually wrong in planning scene (lying on side instead of upright). Orientation rotation is essential for mesh collision objects to render correctly."},
-    {"decision": "R_marker_to_object derived empirically (R_marker_world.inv() * R_object_known) not from first-principles geometric reasoning", "rationale": "ArUco PnP labels marker frame axes in a specific way (Y=right, X=up vs my initial Z=face/Y=up assumption). First geometric guess produced wrong result; empirical derivation from one captured marker quat + known object quat is gold standard."},
-    {"decision": "marker_to_object schema is forward-compatible (method registry) with legacy position_offset fallback for jetank backward compat", "rationale": "Adding box_top_marker / sphere_pole_marker / etc. requires only a function addition + config edit, no call-site changes. Jetank rows continue to work without migration."},
-    {"decision": "Y-sign was wrong in original aruco_config.json (Y=-0.005 should have been Y=+0.005)", "rationale": "Comment claimed '-Y in marker frame = up on cup' (assumed image-Y-down convention), but ArUco PnP outputs marker frame with Y up on cup pattern. Function with marker_y_axis='up' produces correct +0.00483 automatically."},
-    {"decision": "wipe-then-push pattern (REMOVE + 500ms wait + ADD) for cup/lego refreshes mirroring _cmd_grasp_refresh", "rationale": "MoveIt's ApplyPlanningScene ADD-on-existing-id is not idempotent — repeat refreshes silently fail without prior REMOVE. Diagnosed via systematic comparison of working sim refresh vs broken real refresh code paths."},
-    {"decision": "_lookup_bbox 3-tier fallback (exact, color-only, color-prefix) handles both /objects_bbox_sim and /objects_bbox_real", "rationale": "Sim catalog publishes size-specific keys (red_2x4); YOLOE catalog publishes color-prefix keys. Tier-3 (any key starting with color_) makes lookup catalog-agnostic without branching on Sim/Real Hardware toggle."},
-    {"decision": "_build_lego_geometry: mesh-by-size if known, else SolidPrimitive.BOX with bbox catalog dims — NO color→size inference", "rationale": "User explicit constraint: 'in real world the injection pipeline cant know what size it is'. Vision detects color but not size. SolidPrimitive.BOX from bbox catalog is the size-agnostic geometry; catalog values can be edited per real cup setup."},
-    {"decision": "drop_point wrist_roll changed from sign*(-pi/2) to sign*(+pi/2)", "rationale": "User found cup ArUco markers were not visible at scan pose with default wrist_roll=-90°. Sign convention flipped so default +1 sign now produces +90° (markers in FOV). Drop sweep stays at -pi/2 unchanged (different motion phase, jaw-clearing not scanning)."}
+    {"decision": "Drop Scan no longer flips wrist_roll itself; user sets it via Roll +90 / Roll -90 buttons BEFORE pressing Drop Scan; Drop Scan captures current at start and locks throughout", "rationale": "User's explicit design: 'we have that as a toggle so we know what the sweep is supposed to do... instead of calling grasp home you call grasp home with the new roll value and from there the sweep just locks the current roll as it only deals with operating the pan joint'. Implementation: _real_scan_home_preserve_roll(captured_wrist_roll) + pan target locks wrist_roll to scan-start value."},
+    {"decision": "Drop Scan default sweep direction = right→left (start +90° going to -90°)", "rationale": "User: 'use the direction we have right now'. Direction-swap button toggles between (start +90°, step -5°) and (start -90°, step +5°)."},
+    {"decision": "Drop Scan default sweep range = 90° from start (not 180°)", "rationale": "User: 'i want it to range by default only 90 degrees from its start point'. Spinbox allows 5°-180°."},
+    {"decision": "Per-step pan duration = 1.5s (was 0.4s)", "rationale": "0.4s was insufficient for SO-ARM101's weak drives (stiffness=15) to converge wrist_roll back to commanded value against shoulder_pan dynamic disturbance — wrist drifted from +90° to -90° over a sweep. 1.5s per step + locking wrist_roll to a captured constant (not live joint state) holds the camera frame stable."},
+    {"decision": "_real_ensure_real_topics ALWAYS re-subscribes (no idempotent skip)", "rationale": "Hot-reload bypass discovered: _build_grasp_tab creates initial subscription on build-time default (/objects_poses_sim) and _restore_gui_state sets the StringVar back to /objects_poses_real but doesn't trigger re-subscription. So widget could say 'real' while actual sub is on 'sim'. Always-re-sub costs ~1ms and eliminates the divergence."},
+    {"decision": "_remove_lego_collision_objects queries /get_planning_scene for orphans before REMOVE", "rationale": "Local _lego_collision_names tracker is 'last add' not 'all in scene' — replaced wholesale on each add. Topic switches before this fix landed left 8 sim-named lego collisions stuck in planning scene because tracker had moved on to real-named entries. Querying the authoritative source eliminates the leak."},
+    {"decision": "Two commits this session: (1) vla_SO-ARM101 control_gui.py +1089/-160 = 5a60fa5; (2) isaac-sim-mcp planning artifacts (CONTEXT, 11-01-PLAN, ROADMAP, STATE) = 5eb822d", "rationale": "Clean separation: code change in one repo, planning in another. Both committed without --no-verify, no Co-Authored-By per global CLAUDE.md."}
   ],
   "uncommitted_files": {
     "isaac-sim-mcp": [
-      ".planning/ROADMAP.md (M, pre-existing from prior session)",
-      ".planning/STATE.md (M, pre-existing from prior session)",
-      "exts/soarm101-dt/so_arm101_dt/extension.py (M, pre-existing from prior session)",
+      "exts/soarm101-dt/so_arm101_dt/extension.py (M, pre-existing from prior session, NOT touched this session)",
       ".planning/phases/09-collision-scene-completeness/09-SUMMARY.md (?? pre-existing)",
       ".planning/quick/ (?? pre-existing)",
+      "scripts/restart_aruco_localizer.sh (?? pre-existing — committable standalone)",
       "mobileclip_blt.ts (?? large model artifact, gitignore candidate, do NOT commit as-is)"
     ],
     "vla_SO-ARM101": [],
     "aruco_camera_localizer": [
-      ".text_embeddings_*.pt files (?? cache artifacts, gitignore candidates)"
+      ".text_embeddings_*.pt files (?? cache artifacts, gitignore candidates, do NOT commit)"
     ]
   },
-  "next_action": "Either (a) diagnose the residual ~25-30mm xy/z position error in the real pipeline (USD camera VFOV mismatch is a leading suspect: rendered VFOV=75° vs robot_config.yaml's 67.7°), or (b) implement the 'map cups sweep' workflow user described (rotate-extent scan, log yaw on detection, revisit + cache permanently for robust real-world cup localization), or (c) run end-to-end real pick-drop motion test now that all caches and orientation are correct.",
-  "context_notes": "User's mental model: real-mode mocks real-world workflow. Cameras can't see everything always — must scan-then-cache. The Real Test tab is the testing surface; eventually refactor the working flows into existing UI sections. The marker_to_object schema in aruco_config.json should hold any future cup/marker geometry — adding new objects is a function + config addition, not hand-tuned offsets.",
+  "next_action": "Resume by running `/gsd-resume-work`. Then either: (a) Diagnose /wrist_camera_rgb_sim publisher visibility — likely need PYTHONPATH-modified Isaac Sim launch so bridge picks correct Python 3.11 rclpy from startup; OR (b) If user has a different idea (e.g. relaunch sequence they know works), follow that. Once camera publishes, re-trigger /so_arm101_control_gui/real_drop_scan and verify cup detections + cache. Then proceed to lego workflow discussion.",
+  "context_notes": "User explicitly said 'we don't need to follow gsd workflow but maintain logs correctly' — so this session ran lightweight, writing CONTEXT.md decisions inline rather than full discuss-phase ceremony. The Real Test tab now has 4 sections: Setup (Grasp Home, Open Gripper, Roll +90, Roll -90, Sweep range spinbox, Swap direction, Drop Scan), Calibration (Refresh Cups, Refresh Legos, Clear cache), Steps (manual debug — 7 buttons), Run (color dropdown + Pick & Drop Selected Color). User's mental model: Roll buttons set the wrist orientation, Drop Scan sweeps with it locked, Color dropdown picks a target, step buttons let them debug individual cycle steps without short-circuiting on first failure. Verification gap: detection itself (PnP-driven cup pose averaging during sweep) couldn't be tested because cameras weren't publishing — when they're back, the existing code SHOULD just work (motion-side fully verified).",
   "live_infrastructure": {
-    "isaac_sim": "Running. Scene built via quick_start. Wrist + workspace cameras publishing.",
-    "control_stack": "Running — /so_arm101_control_gui, MoveIt, RViz, all services up. Real Test tab visible.",
-    "localize_yoloe": "Running headless (background, launched from this Bash subshell). Config-driven prompts: red/blue/green object → mapped to red/blue/green child_frame_ids.",
-    "localize_aruco": "Running headless (PID 1074948+, launched from this Bash subshell). Now uses marker_to_object schema → applies orientation rotation; published cups upright in world frame.",
-    "moveit_planning_scene": "Contains ground_plane + 3 cup_drop_* meshes (UPRIGHT) + 5 lego_*_N boxes (when Refresh Legos was last run). Verified via /get_planning_scene — cup euler ≈ (0, +6, +90)° matches sim's (0, 0, +90)° within PnP noise."
+    "isaac_sim": "Running (PID 2003067 last known). MCP socket port 8767 responsive. /clock ticking. Cameras' viewport publishers active internally but ROS2 graph shows 0 publishers — bridge issue.",
+    "control_stack": "Running. /so_arm101_control_gui registered with 76+ services. ros2_control + MoveIt + RViz alive. Joint state controller publishes /joint_states fine.",
+    "localize_aruco": "Running headless background (PID 1994799 last known). Subscribed to /wrist_camera_rgb_sim but receiving 0 frames (bridge issue blocking input).",
+    "localize_yoloe": "Running headless background (PID 1993820 last known). Same input-starved state."
   },
   "anti_patterns_discovered": [
-    {"pattern": "Trusting first-principles geometric reasoning over empirical derivation for marker frame conventions", "manifestation": "First R_marker_to_object matrix was geometrically logical but produced cup tilted 96° from upright. Empirical R = R_marker_world.inv() * R_object_known produced the correct matrix on first try.", "severity": "advisory", "mitigation": "When marker frame axis convention is unclear, derive R_m_to_obj empirically from one captured marker quat + known object quat. Document the empirical derivation method in marker_geometry.py."},
-    {"pattern": "MoveIt ApplyPlanningScene ADD-on-existing-id is not idempotent", "manifestation": "First refresh after clear-cache succeeded; second refresh silently failed (no log). Spent multiple cycles debugging until comparing with sim's working _cmd_grasp_refresh which uses wipe-then-push pattern.", "severity": "blocking", "mitigation": "ANY scene-mutation flow that may be called more than once on the same id MUST do REMOVE + 500ms wait + ADD. Just calling ADD twice silently no-ops or returns false-success. Mirror _cmd_grasp_refresh's pattern."},
-    {"pattern": "stdout from threaded apply closures is buffered; success log lines may not appear immediately", "manifestation": "Applied changes that appeared 'silent' for tens of seconds, leading to false-negative diagnosis. Direct /get_planning_scene query is the source-of-truth for verifying scene state.", "severity": "advisory", "mitigation": "For verifying MoveIt scene mutations: query /get_planning_scene service directly with WORLD_OBJECT_NAMES|WORLD_OBJECT_GEOMETRY components. Do NOT rely on RViz visual or log lines."},
-    {"pattern": "stale config holders (config loaded once at process start) require restart, not just file edit", "manifestation": "Edited bbox_catalog.json with new color-prefix keys; localize_yoloe was already running and held stale catalog in memory; control_gui kept seeing old keys; legos silently failed to reach planning scene. Spent multiple cycles diagnosing until restarting yoloe.", "severity": "advisory", "mitigation": "When editing config files that consumer processes load at startup (not via topic subscription), restart the consumer to pick up changes. Verify via topic echo of the published config (/objects_bbox_real) before assuming runtime state matches the file."}
+    {"pattern": "Class-level constants don't survive _patch_methods hot-reload", "manifestation": "Wrote _REAL_COLOR_TO_CUP and _DROP_SCAN_* as class attributes. Hot-reload patched methods but not class constants. Patched methods accessing self._REAL_COLOR_TO_CUP got AttributeError, silently swallowed in daemon thread → execution stopped without log. Bit me twice in one session.", "severity": "advisory", "mitigation": "DEFAULT to module-level constants in this codebase. The hot-reload comment at L89-90 of control_gui.py is load-bearing, not historical. Only use class-level if you understand _patch_methods semantics AND the constant is unlikely to change."},
+    {"pattern": "Verification-before-completion: claiming 'works' from grep + service registration", "manifestation": "Multiple times this session I claimed code worked based on (a) syntax valid, (b) hot-reload returned ok, (c) grep found function references — without actually invoking the service to see end-to-end behavior. Each time I claimed done, the next test invocation revealed a serial bug: hung controllers, missing pause-event releases, drift, etc. User explicitly called this out: 'did you test what you wrote'.", "severity": "blocking", "mitigation": "After every implementation, INVOKE the service/button at least once and confirm log output OR concrete state change BEFORE claiming done. If motion is required and unsafe-to-trigger, say so explicitly rather than claim."},
+    {"pattern": "Daemon threads silently swallow exceptions", "manifestation": "Several Drop Scan failures were caused by AttributeError or other exceptions in the worker thread that produced NO log output and NO traceback. Behavior looked like 'thread did nothing' — actually was 'thread crashed line 1'.", "severity": "advisory", "mitigation": "Wrap every daemon-thread body in try/except Exception as e: self._append_log(f'failed: {type(e).__name__}: {e}', 'err') from day one. Already added to _real_refresh_color_dropdown; SHOULD be added to all other _real_*_thread methods."},
+    {"pattern": "Two-source-of-truth state divergence", "manifestation": "Three instances this session: tk StringVar vs rclpy subscription topic (D-13); local _lego_collision_names tracker vs planning scene (D-14); _drop_data vs cups_dict cache (D-12). All same shape: a local mirror disagreed with the authoritative remote.", "severity": "advisory", "mitigation": "Whenever you have local cache mirroring remote state with mutations on either side, default to 'always re-query authoritative' rather than 'check local cache, skip if matches'. The skip optimization saves microseconds and hides bugs."},
+    {"pattern": "TRANSIENT_LOCAL --once gives stale retained, not latest", "manifestation": "Spent significant time thinking visual markers weren't being published correctly because ros2 topic echo --once on the TRANSIENT_LOCAL publisher returned an OLD retained message, not the latest. Fix was to use --qos-durability volatile to see only new publishes.", "severity": "advisory", "mitigation": "Any TRANSIENT_LOCAL debugging session: prefer --qos-durability volatile when you want 'what was JUST published'. --once + TRANSIENT_LOCAL = depth-buffer replay, NOT latest."},
+    {"pattern": "SO-ARM101 weak drives (stiffness=15, damping=0.15) can't sustain >30°/s", "manifestation": "Multiple Drop Scan hangs caused by sending trajectories that demanded faster motion than drives could deliver. Controller would accept the goal, never converge, _send_arm_goal blocking indefinitely until timeout.", "severity": "advisory", "mitigation": "Compute trajectory duration from max_joint_delta / 30°/s with floor of 1.5s. _real_grasp_home_with_toggled_roll did this correctly. Per-step Drop Scan was 0.4s (~12.5°/s for 5°), too tight — bumped to 1.5s and drift resolved."}
   ]
 }
