@@ -116,13 +116,20 @@ class _ViewportCameraPublisher:
             return False
 
     def start(self, camera_prim_path, topic_name, frame_id=None):
-        """Publish the ACTIVE viewport (pointed at camera_prim_path) to a ROS2 Image topic.
+        """Publish the MAIN user-facing viewport (pointed at camera_prim_path) to a ROS2 Image topic.
 
         Reuses the already-rendered viewport frame — zero extra GPU render cost,
-        physics-friendly. Sets the active viewport's camera to camera_prim_path so the
-        topic truly reflects that camera's POV. Dedicated-viewport mode was removed
-        after empirical measurement showed it costs ~0.3 RTF per extra viewport, which
-        defeats the purpose of this class.
+        physics-friendly. Forces the main viewport's camera to camera_prim_path so the
+        UI viewport AND the topic both reflect that camera's POV. Dedicated-viewport
+        mode was removed after empirical measurement showed it costs ~0.3 RTF per
+        extra viewport, which defeats the purpose of this class.
+
+        Important: targets the main viewport (named "Viewport", first instance)
+        rather than `get_active_viewport()`. The latter can return a secondary
+        programmatic viewport (e.g. "Viewport 2") whose camera is updated, but
+        whose render frames are NOT what the user sees in the UI — leading to a
+        silent mismatch where the topic published Persp content while metadata
+        claimed the camera was correctly assigned. (See 2026-04-25 debugging.)
         """
         import rclpy  # noqa: F401
         import omni.kit.viewport.utility as vp_utils
@@ -138,7 +145,23 @@ class _ViewportCameraPublisher:
         self._ensure_node()
         pub = self._node.create_publisher(Image, f"/{topic_name}", 10)
 
-        viewport = vp_utils.get_active_viewport()
+        # Pick the MAIN UI viewport — prefer the one named "Viewport", fall back
+        # to the first instance, and only use get_active_viewport() as last resort.
+        viewport = None
+        try:
+            from omni.kit.viewport.window import get_viewport_window_instances
+            instances = list(get_viewport_window_instances())
+            for w in instances:
+                name = getattr(w, "name", None) or str(w)
+                if name == "Viewport":
+                    viewport = w.viewport_api
+                    break
+            if viewport is None and instances:
+                viewport = instances[0].viewport_api
+        except Exception as e:
+            print(f"[ViewportPub] window enumeration failed ({e}), falling back to active viewport")
+        if viewport is None:
+            viewport = vp_utils.get_active_viewport()
         viewport.camera_path = camera_prim_path
 
         entry = {
@@ -680,7 +703,7 @@ MCP_TOOL_REGISTRY = {
         "parameters": {
             "camera_prim_path": {
                 "type": "string",
-                "description": "USD path of the camera prim, e.g. /World/workspace_camera_sim"
+                "description": "USD path of the camera prim, e.g. /World/workspace_camera"
             },
             "topic_name": {
                 "type": "string",
@@ -1462,9 +1485,11 @@ class DigitalTwin(omni.ext.IExt):
         print("--- Playing scene ---")
         self._timeline.play()
 
-        # 10b. Create workspace_camera_sim (skip if already exists) and start publisher
+        # 10b. Create workspace camera (skip if already exists) and start publisher
+        # Prim path is /World/workspace_camera (no _sim suffix — the prim *is* the camera).
+        # Topic name + frame_id keep the _sim suffix for sim/real disambiguation.
         print("--- Creating workspace camera ---")
-        ws_prim_path = "/World/workspace_camera_sim"
+        ws_prim_path = "/World/workspace_camera"
         ws_stage = omni.usd.get_context().get_stage()
         ws_existing = ws_stage.GetPrimAtPath(ws_prim_path)
         if ws_existing and ws_existing.IsValid():
@@ -2272,7 +2297,6 @@ class DigitalTwin(omni.ext.IExt):
             {
                 keys.CREATE_NODES: [
                     ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
-                    ("RunOnce", "isaacsim.core.nodes.OgnIsaacRunOneSimulationFrame"),
                     ("RenderProduct", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
                     ("Context", "isaacsim.ros2.bridge.ROS2Context"),
                     ("ReadSimTime", "isaacsim.core.nodes.IsaacReadSimulationTime"),
@@ -2293,8 +2317,12 @@ class DigitalTwin(omni.ext.IExt):
                     ("ReadSimTime.inputs:resetOnStop", False),
                 ],
                 keys.CONNECT: [
-                    ("OnPlaybackTick.outputs:tick", "RunOnce.inputs:execIn"),
-                    ("RunOnce.outputs:step", "RenderProduct.inputs:execIn"),
+                    # RunOnce gate removed: fire RenderProduct every tick so the publishers
+                    # keep their DDS connections alive. ur5e-dt's setup_camera_action_graph
+                    # uses RunOnce too, but on Isaac Sim 5.0 + soarm101-dt's camera prim
+                    # ancestry, that gate caused the publishers to register only briefly
+                    # and disappear. Continuous tick is the documented stable pattern.
+                    ("OnPlaybackTick.outputs:tick", "RenderProduct.inputs:execIn"),
                     ("RenderProduct.outputs:execOut", "CameraInfoPublish.inputs:execIn"),
                     ("RenderProduct.outputs:execOut", "RGBPublish.inputs:execIn"),
                     ("RenderProduct.outputs:renderProductPath", "CameraInfoPublish.inputs:renderProductPath"),
@@ -2304,6 +2332,31 @@ class DigitalTwin(omni.ext.IExt):
                 ],
             }
         )
+
+        # Set opencvPinhole lens distortion attributes on the camera prim.
+        # Without these, ROS2CameraHelper (RGBPublish) silently fails to register
+        # a DDS publisher — matches the working pattern in setup_camera_action_graph
+        # (line 2111+) and exts/ur5e-dt/.../setup_camera_action_graph (line 3166+).
+        camera_prim = stage.GetPrimAtPath(CAMERA_PRIM)
+        if camera_prim and camera_prim.IsValid():
+            import numpy as np
+            # Wrist camera: 100° HFOV, square pixels (matches sim render product + real lens)
+            hfov_deg = 100.0
+            vfov_deg = 67.7
+            fx = IMAGE_WIDTH / (2 * np.tan(np.deg2rad(hfov_deg / 2)))
+            fy = IMAGE_HEIGHT / (2 * np.tan(np.deg2rad(vfov_deg / 2)))
+            cx = IMAGE_WIDTH * 0.5
+            cy = IMAGE_HEIGHT * 0.5
+
+            camera_prim.CreateAttribute("omni:lensdistortion:model", Sdf.ValueTypeNames.String).Set("opencvPinhole")
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:imageSize", Sdf.ValueTypeNames.Int2).Set(Gf.Vec2i(IMAGE_WIDTH, IMAGE_HEIGHT))
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:fx", Sdf.ValueTypeNames.Float).Set(fx)
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:fy", Sdf.ValueTypeNames.Float).Set(fy)
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:cx", Sdf.ValueTypeNames.Float).Set(cx)
+            camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:cy", Sdf.ValueTypeNames.Float).Set(cy)
+            for attr_name in ["k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6", "s1", "s2", "s3", "s4"]:
+                camera_prim.CreateAttribute(f"omni:lensdistortion:opencvPinhole:{attr_name}", Sdf.ValueTypeNames.Float).Set(0.0)
+            print(f"Wrist camera intrinsics: fx={fx:.1f}, fy={fy:.1f}, cx={cx:.1f}, cy={cy:.1f}")
 
         print(f"Wrist camera ActionGraph created!")
         print(f"Test with: ros2 topic echo /{ROS2_TOPIC}")
@@ -2378,7 +2431,7 @@ class DigitalTwin(omni.ext.IExt):
             return
 
         if is_workspace:
-            prim_path = "/World/workspace_camera_sim"
+            prim_path = "/World/workspace_camera"
             position = (0.6980338662434342, -0.3958419458255837, 0.45249457626357603)
             # Hand-tuned for SO-ARM101 — overhead-front view of robot + cup arc
             quat_xyzw = (0.4306700623322567, 0.2612220733325859, 0.4480130626995852, 0.7386275255262917)  # x, y, z, w
@@ -2439,11 +2492,11 @@ class DigitalTwin(omni.ext.IExt):
         stage = omni.usd.get_context().get_stage()
 
         if is_workspace:
-            if not stage.GetPrimAtPath("/World/workspace_camera_sim"):
-                print("Error: Workspace camera not found at /World/workspace_camera_sim. Create it first.")
+            if not stage.GetPrimAtPath("/World/workspace_camera"):
+                print("Error: Workspace camera not found at /World/workspace_camera. Create it first.")
             else:
                 self._create_camera_actiongraph(
-                    "/World/workspace_camera_sim",
+                    "/World/workspace_camera",
                     width, height,
                     "workspace_camera_sim",
                     "WorkspaceCameraSim"
@@ -5771,11 +5824,20 @@ class DigitalTwin(omni.ext.IExt):
 
             graph_path = "/Graph/ActionGraph_drop_poses"
             topic_name = "drop_poses"
-            parent_prim = "/World"
+            # parent_prim's BASENAME becomes the published TF header.frame_id.
+            # Use "/World/base" (identity-xform Xform at world origin) so frame_id="base"
+            # — matches /ee_pose convention and the URDF base_link, since SO-ARM101's
+            # base is co-located with World origin.
+            parent_prim = "/World/base"
 
             stage = omni.usd.get_context().get_stage()
             if not stage:
                 return {"status": "error", "message": "No stage found"}
+
+            # Ensure /World/base exists as an identity-xform Xform (idempotent).
+            base_prim = stage.GetPrimAtPath(parent_prim)
+            if not (base_prim and base_prim.IsValid()):
+                UsdGeom.Xform.Define(stage, parent_prim)
 
             # Color → aruco_id mapping is kept only for frame-id naming
             # (drop_{aruco_id}) and for aruco_camera_localizer symmetry on
