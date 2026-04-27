@@ -1,0 +1,95 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-04-27T13:08:15-07:00",
+  "phase": "10.2",
+  "phase_name": "lerobot-data-collection-linux-isaac-sim",
+  "phase_dir": ".planning/phases/10.2-lerobot-data-collection-linux-isaac-sim",
+  "plan": null,
+  "task": null,
+  "total_tasks": null,
+  "status": "blocked_pick_place_not_running_during_record",
+  "completed_tasks": [
+    {"id": 1, "name": "Fix .gitmodules junk line in Exploring-VLAs", "status": "done"},
+    {"id": 2, "name": "Init lerobot submodule + checkout ros2-camera-on-main", "status": "done"},
+    {"id": 3, "name": "Inspect lerobot pyproject.toml — Python 3.12+ required", "status": "done"},
+    {"id": 4, "name": "Create linux-env pixi env (robostack-jazzy + lerobot)", "status": "done"},
+    {"id": 5, "name": "Cross-boundary smoke test (system Humble Cyclone ↔ pixi Jazzy Cyclone)", "status": "done", "note": "Required force-overriding CYCLONEDDS_URI to a multicast-enabled config"},
+    {"id": 6, "name": "Bring up Isaac Sim + control stack + verify topics", "status": "done"},
+    {"id": 7, "name": "Write Linux record_sim_isaac.sh", "status": "done"},
+    {"id": 8, "name": "Wrist camera ROS2 publisher fix", "status": "done", "note": "Built _ReplicatorCameraPublisher (hidden viewport + capture_viewport_to_buffer) — bypasses broken Kit ROS2CameraHelper"},
+    {"id": 9, "name": "RGB encoding (alpha strip)", "status": "done", "note": "Done CONSUMER-side in lerobot's _msg_to_ndarray. Doing it in Isaac Sim's render-thread callback throttles RTF to ~1 Hz."},
+    {"id": 10, "name": "Workspace cam resolution change to 640x480", "status": "done_but_zoomed", "note": "Resolution is 640x480 but FOV intrinsics are still authored for 16:9 (HFOV=69.4 VFOV=42.5) — 4:3 viewport center-crops the wider FOV → 'zoomed' look. Wrist cam works because it uses square-pixel formula vfov=hfov*H/W."}
+  ],
+  "remaining_tasks": [
+    {"id": 11, "name": "Make pick-place actually run during recording", "status": "blocked", "note": "PRIMARY BLOCKER — robot DID NOT MOVE during 5-episode recording. control_gui's tkinter mainloop is starved under recording load → qs_refresh_all + qs_select services time out → qs_play has no lego selected → arm only moves during initial grasp_home (~3s) then stays still. Mac doesn't hit this because everything runs in one pixi process tree (no DDS cross-boundary contention)."},
+    {"id": 12, "name": "Fix workspace cam aspect ratio (4:3 → square pixels)", "status": "not_started", "note": "Change extension.py:1649 — replace `vfov_deg=42.5` with `vfov_deg = hfov_deg * ws_height / ws_width` (= 52.05° for 4:3 at hfov=69.4°). Mirror the wrist cam pattern at extension.py:2342."},
+    {"id": 13, "name": "Push reference dataset to HF + run verify_parity.py", "status": "not_started"},
+    {"id": 14, "name": "Write LEROBOT_ROS2_LINUX_SETUP.md doc", "status": "not_started"}
+  ],
+  "blockers": [
+    {
+      "description": "Robot does not move during recording — control_gui services time out under DDS+GPU load",
+      "type": "technical",
+      "severity": "blocking",
+      "evidence": "Driver log shows: init grasp_home succeeds, then qs_refresh_all timeout 15s, qs_select timeout 15s, qs_play 'success=True dispatched' (async ack only), TIMEOUT after 90s. Standalone test (no recording) — same QS cycle completed in 30s.",
+      "workaround_options": [
+        "A. Record AFTER offline trajectory replay — run test_pick_all.sh standalone, log to rosbag, then replay+record in two passes",
+        "B. Bypass control_gui entirely — Python driver publishes directly to /arm_controller/joint_trajectory, computes IK from /objects_poses_sim + /drop_poses",
+        "C. Reduce concurrent load — drop one camera or lower fps so control_gui mainloop has CPU budget",
+        "D. Run the entire stack inside a single pixi env (Mac approach) — but Linux Humble doesn't have robostack equivalent for Python 3.12"
+      ]
+    },
+    {
+      "description": "Workspace camera 'zoomed' in rerun despite reporting 640x480",
+      "type": "technical",
+      "severity": "advisory",
+      "evidence": "User: 'workspace camera is zoomed in for some reason though it shows 640x480 wrist cam shows up correctly'. Aspect ratio mismatch: HFOV 69.4° + VFOV 42.5° were authored for 16:9 (1280x720); applying to 4:3 (640x480) center-crops the FOV.",
+      "workaround_options": [
+        "Replace vfov_deg=42.5 with computed vfov_deg = hfov_deg * H/W in extension.py:1649",
+        "OR use ws_width=640, ws_height=360 (16:9) instead of 4:3"
+      ]
+    },
+    {
+      "description": "ROS2 daemon repeatedly enters 'empty node name returned by RMW layer' state under load",
+      "type": "technical",
+      "severity": "advisory",
+      "evidence": "Multiple times during this session, ros2 CLI commands started failing with xmlrpc Fault. Recovery: ros2 daemon stop && start && wait 3s. Cyclonedds shared memory is fine; issue is daemon's xmlrpc layer getting overwhelmed with too many participants.",
+      "workaround_options": [
+        "Always restart daemon before service call sequences",
+        "Use direct rclpy from Python instead of ros2 CLI for all sequences"
+      ]
+    },
+    {
+      "description": "Multiple ros2 launches accumulate without proper teardown",
+      "type": "technical",
+      "severity": "advisory",
+      "evidence": "Saw 3 simultaneous control_gui processes at one point (PIDs 2548725, 2575711, 2621619) competing for the /so_arm101_control_gui name. Service calls would route to a random instance.",
+      "workaround_options": [
+        "Always pkill -SIGINT -f 'ros2.*launch.*control.launch' BEFORE relaunching",
+        "Wait 5+ seconds for full teardown",
+        "Verify with pgrep before relaunch"
+      ]
+    }
+  ],
+  "human_actions_pending": [
+    {"action": "Decide which workaround to use for pick-place-during-recording (A/B/C/D in blocker #1)", "context": "Mac approach (D) is structurally cleanest but requires building Linux equivalent. Approach (A) — record-after-replay — is most pragmatic.", "blocking": true},
+    {"action": "Verify rerun viewer actually shows live data when display is available", "context": "rerun process spawns correctly (port 9876, expect-data-soon) but I never confirmed the GUI window actually appeared — was running headless from Bash subshell. User reported workspace cam zoom in rerun — implying they CAN see it, so display works.", "blocking": false}
+  ],
+  "decisions": [
+    {"decision": "Use pixi + robostack-jazzy for the lerobot env (not system pip)", "rationale": "lerobot pyproject hard-pins Python>=3.12; system Humble is Python 3.10. Jazzy↔Humble IDL works for sensor_msgs/Image and JointState across the version step."},
+    {"decision": "Force CYCLONEDDS_URI to linux-env/cyclonedds.xml (multicast enabled on `lo`)", "rationale": "System default config (~/Documents/ros-mcp-server/cyclonedds_local.xml) has AllowMulticast=false, which blocks cross-process-tree discovery between system Humble and pixi Jazzy."},
+    {"decision": "Don't rename Isaac Sim publisher topics", "rationale": "User direction in this session — keep _sim suffixes. lerobot's BYOH `cameras` config maps any topic name to any feature key, so renaming is unnecessary. Object pose/bbox _sim vs _real are semantically different (USD truth vs ArUco detection) — collapsing them would erase information."},
+    {"decision": "Strip alpha consumer-side (lerobot _msg_to_ndarray patch), not at Isaac Sim publisher", "rationale": "Microbench said numpy alpha-strip was 4.7ms but actual production rate dropped to 1 Hz when stripping at the render-thread callback. Some Kit threshold throttles when callbacks take too long. Consumer-side strip leaves Isaac Sim at 18 Hz."},
+    {"decision": "Use hidden viewport for wrist cam (_ReplicatorCameraPublisher class), not action graph or replicator annotators", "rationale": "Action graph ROS2CameraHelper silently fails to register DDS publisher in Kit 107.3 (confirmed bug, prior session fb450bb8 reached same diagnosis). Replicator annotators + IsaacCamera require rep.orchestrator.step() which is async-only in Kit. Hidden viewport with viewport.updates_enabled=True forced is the only working path."},
+    {"decision": "joint_states_to_commands.py mirror to provide /joint_commands", "rationale": "Sim has no leader/follower split; planner IS the leader. control_gui doesn't publish /joint_commands. drive_base_yaw_sweep.py was a shim. Mirror approximates action ≈ achieved-state for behavioral cloning."},
+    {"decision": "Workspace camera at 640x480 default, matching wrist", "rationale": "User direction. But intrinsics (HFOV/VFOV) authored for 16:9 cause apparent zoom at 4:3 — needs follow-up fix in next session."}
+  ],
+  "uncommitted_files": [
+    "isaac-sim-mcp:exts/soarm101-dt/so_arm101_dt/extension.py — _ReplicatorCameraPublisher class + workspace cam 640x480 + viewport.resolution force + RunOnce gate restored in setup_wrist_camera_action_graph (forward-compat) + post-graph intrinsic re-authoring",
+    "Exploring-VLAs:lerobot/src/lerobot/cameras/ros2/camera_ros2.py — RGBA/BGRA → RGB strip in _msg_to_ndarray",
+    "Exploring-VLAs:linux-env/ — NEW directory: pixi.toml, cyclonedds.xml, scripts/{record_sim_isaac.sh, drive_pick_place.py, drive_pick_place_loop.sh, joint_states_to_commands.py, _lib.sh}, symlink to drive_base_yaw_sweep.py",
+    "Exploring-VLAs:.gitmodules — removed bogus 'url = submodule.lerobot.path' line"
+  ],
+  "next_action": "Read .planning/phases/10.2-lerobot-data-collection-linux-isaac-sim/.continue-here.md FULLY before doing anything. Pick a workaround from blocker #1 (recommend option A or B). Test pick-and-place actually runs during recording BEFORE recording another dataset.",
+  "context_notes": "5+ hours of session debugging. Recording infrastructure works perfectly — all topics flow at correct rates (joint_states 50 Hz, wrist 22 Hz, top 22 Hz, joint_commands via mirror 50 Hz). Lerobot writes valid v3 datasets. The remaining blocker is the actual pick-and-place doesn't execute under DDS+GPU load. Standalone (no recording) it works in 30s. Mac doesn't hit this because they run everything in one pixi process tree."
+}
