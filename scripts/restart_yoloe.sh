@@ -82,7 +82,10 @@ if [ -n "$CONF" ]; then
   ARGS+=(--yolo-conf "$CONF")
 fi
 if [ -n "$HEADLESS" ]; then ARGS+=("$HEADLESS"); fi
-ARGS+=(--ros-args -p objects_poses_topic:=/objects_poses_real -p objects_bbox_topic:=/objects_bbox_real)
+ARGS+=(--ros-args
+       -p objects_poses_topic:=/objects_poses_real
+       -p objects_bbox_topic:=/objects_bbox_real
+       -p annotated_image_topic:=/yoloe_annotated)
 
 if [ "$RUN_BG" -eq 1 ]; then
   nohup ros2 run aruco_camera_localizer localize_yoloe "${ARGS[@]}" \
