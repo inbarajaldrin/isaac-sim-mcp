@@ -128,7 +128,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-26T05:20:41.795Z
-Stopped at: context exhaustion at 90% (2026-04-26)
-Resume file: None
-Handoff: none
+Last session: 2026-04-26T17:34:00Z
+Stopped at: Phase 10.1 inserted (URGENT) — awaiting `/gsd-plan-phase 10.1`. Phase 11-01 task 6 paused, blocked on 10.1 merge.
+Resume file: .planning/phases/10.1-reconcile-upstream-merge/.continue-here.md
+Handoff: .planning/HANDOFF.json (structured, primary resumption source)
+Resumed: 2026-04-27 (this session) — proceeding to plan Phase 10.1
