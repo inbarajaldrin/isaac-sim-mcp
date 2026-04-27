@@ -24,7 +24,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 8: Isaac Sim Extension Cleanup** - Button/socket parity, fix cup position update, scene state management, update ArUco marker positions to match real world
 - [x] **Phase 9: Collision Scene Completeness** - Tiered deterministic motion planner (tier-1 linear → tier-2 retract-pan-settle → opt-in OMPL fallback) + drop motion robustness (`_attached_lego_tcp_offset` measured offset, `lock_pan` kwarg, hover 30→50 mm, drop_point/sweep slowed to 3.0 s, 5% cup padding) + `randomize_cups` MCP tool with lego/robot exclusions for stress-testing. 27/27 QS cycles PASS, 0 OMPL fallback. (completed 2026-04-24)
 - [ ] **Phase 10: Motion Quality & Real Deployment Drop** - Fix drop point orientation, trajectory-based grasp, reduce jerk, camera-guided drop sequence
-- [ ] **Phase 10.1: Reconcile + Merge Upstream Exploring-VLAs Main** *(INSERTED)* - Pull 27 unmerged upstream commits (lerobot submodule, mac-env, sim_ground_truth, real-hardware bring-up). Compare divergent control_gui.py + URDF + launch files. Pick best mechanism per overlap. Merge cleanly. Push as single source of truth. **Blocks resumption of Phase 11-01 task 6.**
+- [x] **Phase 10.1: Reconcile + Merge Upstream Exploring-VLAs Main** *(INSERTED)* - Pulled 27 unmerged upstream commits (lerobot submodule, mac-env, sim_ground_truth, real-hardware bring-up). Resolved 4 conflicts (joint_limits.yaml, control_gui.py × 2 regions, vla CLAUDE.md). Linux sim verification PASSED (test_qs_cycle.sh red_2x3, full pick-drop). Linux Gazebo fix landed (per-backend ros2_controllers yaml split). Merge commit `e6a30ae` pushed to `DIME-LAB/Exploring-VLAs:main` 2026-04-27.
+- [ ] **Phase 10.2: LeRobot Data Collection (Linux + Isaac Sim)** *(INSERTED)* - Bring up lerobot v3 dataset recording from Isaac Sim on Linux. Three tracks: (1) topic-naming unification across all three packages so sim and real share canonical names — gazebo/isaacsim run one-at-a-time; (2) conda env validation for ROS2 cross-boundary communication; (3) `lerobot-record` end-to-end + reference dataset + `verify_parity.py` PASS + `LEROBOT_ROS2_LINUX_SETUP.md` doc. Sim-only (real-hw recording stays on Mac per user direction).
 - [ ] **Phase 11: Full Pick-and-Place Pipeline Verification** - End-to-end YOLOE + ArUco via aruco_camera_localizer (in progress — 11-01 color-driven single-pick workflow, paused at task 6 pending Phase 10.1)
 - [ ] **Phase 12: Isaac Sim Joint States Fallback Publisher** - Publish /joint_states from physics engine, auto-backoff, prevent snap-to-zero
 - [x] **Phase 13: Port UR5e-dt Backend Features to SO-ARM101** - Active-viewport publisher, `new_stage`, recording backend ported (MCP-only). Wrist action graph kept after empirical RTF test (completed 2026-04-18, commit 480ddf4)
@@ -92,6 +93,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 5 → 05.1 → 6 → 7 → 07
 | 8. Isaac Sim Extension Cleanup | Not started | - |
 | 9. Collision Scene Completeness | Not started | - |
 | 10. Motion Quality & Real Deployment Drop | Not started | - |
+| 10.1. Reconcile + Merge Upstream Exploring-VLAs Main | Complete | 2026-04-27 |
+| 10.2. LeRobot Data Collection (Linux + Isaac Sim) | Not started (INSERTED) | - |
 | 11. Full Pick-and-Place Pipeline Verification | In progress | - |
 | 12. Isaac Sim Joint States Fallback Publisher | Not started | - |
 
@@ -185,6 +188,32 @@ Phases execute in numeric order: 1 → 2 → 3 → 5 → 05.1 → 6 → 7 → 07
   6. Merge commit pushed to origin/main; downstream collaborators can pull cleanly.
   7. Phase 11-01 Drop Scan still works end-to-end on the merged branch (regression check before declaring complete).
 **Plans**: 0 plans (to be created during /gsd-plan-phase 10.1)
+
+### Phase 10.2: LeRobot Data Collection (Linux + Isaac Sim) *(INSERTED)*
+**Goal**: Bring up the lerobot v3 dataset recording pipeline on Linux against Isaac Sim as the sim backend. Produce a reference dataset that passes `verify_parity.py` against `arjunsinghyadav2/blue_sort_black_bg_colored_cups_v1_440ep`. Document the Linux setup as the Linux sibling of the existing Mac runbook. Refactor topic naming across all three packages (`isaac-sim-mcp`, `vla_SO-ARM101`, `aruco_camera_localizer`) so sim and real share canonical names — exploiting the "only one sim runs at a time" constraint to drop `_sim`/`_real` suffixes.
+**Why this exists**: Phase 10.1 brought lerobot's submodule + BYOH plugins + record scripts in from upstream. Mac team has the recording pipeline working against Gazebo. Linux is missing it entirely. Per user: "i want to test the datacollection process from isaacsim using the lerobot pipeline ... gazebo or isaacsim can be run only one at a time not both at a time". Sim-only on Linux; real-hw recording stays on Mac per user direction.
+**Depends on**: Phase 10.1 (merge brought lerobot in)
+**Blocks**: Future Phase 11 sub-phases that consume recorded sim datasets (no immediate blocker)
+**Requirements**: TBD (to be derived during /gsd-plan-phase 10.2)
+**Three tracks** (interlocked):
+  1. **Topic-naming unification** — refactor across `isaac-sim-mcp` soarm101-dt, `vla_SO-ARM101` control_gui + sim_ground_truth, `aruco_camera_localizer` so canonical names (`/wrist_camera`, `/top_camera`, `/joint_states`, `/joint_commands`, `/drop_poses`, `/objects_poses`, `/objects_bbox`, `/aruco_poses`) work for sim AND real. Collapses Phase 11-01's `_sim_ensure_sim_topics` / `_real_ensure_real_topics` branching.
+  2. **Conda env validation** — smoke test that lerobot in conda can subscribe to / publish on ROS2 topics across the env-boundary to system Humble. If pass → conda. If fail → fallback (system pip / venv).
+  3. **LeRobot recording end-to-end** — submodule init, Linux drive script, lerobot-record against Isaac Sim, push to HF, `verify_parity.py` PASS, write `LEROBOT_ROS2_LINUX_SETUP.md`.
+**Success Criteria** (what must be TRUE):
+  1. `git submodule update --init --recursive` initializes lerobot; submodule on `ros2-camera-on-main` branch.
+  2. Topic-naming unification refactor landed across the three repos. `test_qs_cycle.sh red_2x3` PASSES on the renamed code (regression gate).
+  3. Conda env validation smoke test PASSES — lerobot inside conda receives ≥10 frames at correct shape from a system-ROS2 publisher with no rmw discovery hang. Decision artifact: "conda confirmed" or documented fallback.
+  4. `lerobot-record` produces a v3 dataset against Isaac Sim with both wrist + top camera streams + `/joint_states` + `/joint_commands` populated.
+  5. Reference dataset pushed to HF (e.g. `inbarajaldrin/so_arm101_sim_isaac_v0`) — at least 3 episodes via automated motion driver (port of `drive_base_yaw_sweep.py`).
+  6. `verify_parity.py` PASSES the new dataset against `arjunsinghyadav2/blue_sort_black_bg_colored_cups_v1_440ep` — same schema as Mac+Gazebo path.
+  7. `vla_SO-ARM101/docs/LEROBOT_ROS2_LINUX_SETUP.md` written, mirroring Mac doc structure.
+  8. `vla_SO-ARM101/CLAUDE.md` "Related docs" updated with cross-link.
+  9. No regression: Phase 9 deterministic planner + Phase 11-01 Drop Scan structural fixes still work after the topic-rename refactor.
+**Out of scope**:
+  - Real-hardware recording on Linux (jointstatereader Linux + USB-camera bring-up — separate phase if needed; recording from real stays on Mac per user)
+  - Training (covered by `LEROBOT_GUIDE.md` Windows/RTX4090 flow — separate work area)
+  - Pick-and-place data collection (drive-script-driven motion is sufficient for the first reference dataset; meaningful pick-place data is a follow-up)
+**Plans**: 0 plans (to be created during /gsd-plan-phase 10.2; preliminary sketch in `.continue-here.md` shows ~5 plans across the three tracks + docs)
 
 ### Phase 11: Full Pick-and-Place Pipeline Verification
 **Goal**: Verify the complete pick-and-place pipeline end-to-end using YOLOE for object detection and ArUco markers for drop pose detection via the aruco_camera_localizer package.
