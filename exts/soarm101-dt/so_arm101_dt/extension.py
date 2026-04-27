@@ -463,12 +463,22 @@ def _get_usb_camera_usd_path():
     return "file://" + os.path.abspath(_local)
 
 
-# Each color maps to a list of unique USD filenames — one per block instance.
-# Each USD has a uniquely-named body prim matching its filename (e.g. red_2x2).
+# Each color maps to a list of (block_name, usd_filename) tuples — one per
+# block instance. Block name is the unique identifier used for the
+# /objects_poses_sim child_frame_id and the prim path under /World/Objects;
+# usd_filename is the source asset (multiple instances may reference the
+# same USD via different block names).
+#
+# Current scene contract: 2 of each color, all 2x3. Distractor legos
+# (non-target colors) remain so the policy must learn color discrimination
+# rather than picking by position.
 LEGO_USDS = {
-    "red":    ["lego_red_2x2.usd", "lego_red_2x3.usd", "lego_red_2x4.usd"],
-    "green":  ["lego_green_2x2.usd", "lego_green_2x3.usd", "lego_green_2x4.usd"],
-    "blue":   ["lego_blue_2x2.usd", "lego_blue_2x3.usd", "lego_blue_2x4.usd"],
+    "red":    [("red_2x3_a", "lego_red_2x3.usd"),
+               ("red_2x3_b", "lego_red_2x3.usd")],
+    "green":  [("green_2x3_a", "lego_green_2x3.usd"),
+               ("green_2x3_b", "lego_green_2x3.usd")],
+    "blue":   [("blue_2x3_a", "lego_blue_2x3.usd"),
+               ("blue_2x3_b", "lego_blue_2x3.usd")],
 }
 
 # =============================================================================
@@ -4803,10 +4813,8 @@ class DigitalTwin(omni.ext.IExt):
             if not usds:
                 print(f"Warning: No USD files configured for color '{color_name}'")
                 continue
-            for usd_file in usds:
+            for block_name, usd_file in usds:
                 usd_path = _get_lego_folder() + usd_file
-                # Block name = USD body name (e.g. lego_red_2x2.usd -> red_2x2)
-                block_name = usd_file.replace('.usd', '').replace('lego_', '')
                 blocks.append((block_name, color_name, usd_path))
 
         # Check if all blocks already exist
