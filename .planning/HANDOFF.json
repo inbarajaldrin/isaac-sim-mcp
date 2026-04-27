@@ -1,13 +1,21 @@
 {
   "version": "1.0",
-  "timestamp": "2026-04-27T00:06:17Z",
-  "phase": "11",
-  "phase_name": "Full Pick-and-Place Pipeline Verification",
-  "phase_dir": ".planning/phases/11-full-pick-and-place-pipeline-verification",
-  "plan": "11-01",
-  "task": 6,
-  "total_tasks": 6,
-  "status": "paused",
+  "timestamp": "2026-04-27T00:30:00Z",
+  "phase": "10.1",
+  "phase_name": "Reconcile + Merge Upstream Exploring-VLAs Main",
+  "phase_dir": ".planning/phases/10.1-reconcile-upstream-merge",
+  "phase_status": "inserted, awaiting plan",
+  "next_phase_command": "/gsd-plan-phase 10.1",
+  "blocks": "Phase 11-01 task 6 (UAT) — do NOT resume until 10.1 complete",
+  "predecessor_phase": "11",
+  "predecessor_plan": "11-01",
+  "predecessor_task": 6,
+  "predecessor_total_tasks": 6,
+  "predecessor_status": "paused (blocked on 10.1)",
+  "plan": null,
+  "task": null,
+  "total_tasks": null,
+  "status": "phase_inserted_unplanned",
   "context_summary": "End-to-end Drop Scan UAT surfaced a chain of pre-existing bugs that this session fixed: rclpy InvalidHandle race in _real_ensure_real_topics, tkinter 'main thread is not in main loop' in _real_set_status, visual-servo infinite re-loop on flaky cups, lack of pre-scan setup (no auto gripper-open / wrist-flip), gripper-open leaving planning group on 'gripper', and the user-identified sim/real subscription leak (Grasp Refresh after a Real Test session was pulling from /*_real topics into the sim collision scene). Three repos updated and committed. Mathematical analysis ruled OUT camera-pan-axis parallax as the cause of drop_2's 134mm² xy variance — Cy is only 5mm, predicting <1.5° pointing error which is negligible. Real cause remains unidentified — top hypotheses are PnP marker-pose ambiguity at oblique viewing angles after the 19° servo, or tracking lag between commanded pan and actual joint state during the 0.3s settle window.",
   "completed_tasks": [
     {"id": 1, "name": "11-01-01 _register_combobox helper", "status": "done", "commit": "5a60fa5"},
@@ -60,7 +68,7 @@
       ".text_embeddings_*.pt files (?? cache artifacts, gitignore candidates, do NOT commit)"
     ]
   },
-  "next_action": "Resume by running `/gsd-resume-work`. Then either: (a) Verify visual servo correctness via Isaac Sim ground-truth — pull cup USD prim transforms via MCP socket :8767, diff against _cached_cup_poses, screenshot mid-servo. ~1 hour. OR (b) Close Phase 11-01 and write SUMMARY.md acknowledging the working structural pipeline + outstanding detection-quality issues as separate phase scope. OR (c) Move directly to lego workflow discussion (user's stated next priority).",
+  "next_action": "Resume by running `/gsd-resume-work`. THE FIRST THING: plan Phase 10.1 (`/gsd-plan-phase 10.1`) — the urgent upstream-merge phase that BLOCKS Phase 11-01 task 6 resumption. Do NOT skip to Phase 11-01 verification work. Origin/main is [ahead 26, behind 27]; the 27 unmerged commits include lerobot submodule, sim_ground_truth /drop_poses (overlaps with isaac-sim-mcp), mac-env, real-hardware bring-up. Reconciling now prevents double-resolving conflicts later.",
   "context_notes": "Session was largely successful — all structural Drop Scan bugs identified and fixed end-to-end with visual confirmation + log evidence. The user's mental model: drop_scan should be idiot-proof (auto-flip wrist, auto-open gripper, no infinite loops, no hanging on motion failures, clean separation between sim and real workflows). All four of those are now true. The remaining issue is *quality* of the cup detection — drop_2 sometimes has ~12mm xy_std after a large servo, which is NOT a structural bug but a tuning/diagnostic problem. Also there's an open question about whether drop_0 is reachable in the current sweep config or if the user needs to extend range_deg. The math analysis was a turning point — I had been assuming parallax was the cause and was about to suggest a parallax correction; the math showed Cy is ~5mm not ~50mm, ruling that out cleanly. Hot-reload via Ctrl+R only works after `xdotool windowactivate <wid>` first — that delivered ~9 minutes of failed scan attempts before figuring out. Worth documenting in the project CLAUDE.md.",
   "live_infrastructure": {
     "isaac_sim": "Running (PID 2092329, launched with PYTHONPATH=python3.11-build first to fix bridge rclpy mismatch). MCP socket port 8767 responsive.",

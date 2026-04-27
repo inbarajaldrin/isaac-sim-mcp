@@ -24,7 +24,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 8: Isaac Sim Extension Cleanup** - Button/socket parity, fix cup position update, scene state management, update ArUco marker positions to match real world
 - [x] **Phase 9: Collision Scene Completeness** - Tiered deterministic motion planner (tier-1 linear → tier-2 retract-pan-settle → opt-in OMPL fallback) + drop motion robustness (`_attached_lego_tcp_offset` measured offset, `lock_pan` kwarg, hover 30→50 mm, drop_point/sweep slowed to 3.0 s, 5% cup padding) + `randomize_cups` MCP tool with lego/robot exclusions for stress-testing. 27/27 QS cycles PASS, 0 OMPL fallback. (completed 2026-04-24)
 - [ ] **Phase 10: Motion Quality & Real Deployment Drop** - Fix drop point orientation, trajectory-based grasp, reduce jerk, camera-guided drop sequence
-- [ ] **Phase 11: Full Pick-and-Place Pipeline Verification** - End-to-end YOLOE + ArUco via aruco_camera_localizer (in progress — 11-01 color-driven single-pick workflow)
+- [ ] **Phase 10.1: Reconcile + Merge Upstream Exploring-VLAs Main** *(INSERTED)* - Pull 27 unmerged upstream commits (lerobot submodule, mac-env, sim_ground_truth, real-hardware bring-up). Compare divergent control_gui.py + URDF + launch files. Pick best mechanism per overlap. Merge cleanly. Push as single source of truth. **Blocks resumption of Phase 11-01 task 6.**
+- [ ] **Phase 11: Full Pick-and-Place Pipeline Verification** - End-to-end YOLOE + ArUco via aruco_camera_localizer (in progress — 11-01 color-driven single-pick workflow, paused at task 6 pending Phase 10.1)
 - [ ] **Phase 12: Isaac Sim Joint States Fallback Publisher** - Publish /joint_states from physics engine, auto-backoff, prevent snap-to-zero
 - [x] **Phase 13: Port UR5e-dt Backend Features to SO-ARM101** - Active-viewport publisher, `new_stage`, recording backend ported (MCP-only). Wrist action graph kept after empirical RTF test (completed 2026-04-18, commit 480ddf4)
 
@@ -170,9 +171,24 @@ Phases execute in numeric order: 1 → 2 → 3 → 5 → 05.1 → 6 → 7 → 07
   5. Works with both Isaac Sim and real hardware camera feeds
 **Plans**: 0 plans
 
+### Phase 10.1: Reconcile + Merge Upstream Exploring-VLAs Main *(INSERTED)*
+**Goal**: Resolve the 27 unmerged upstream commits on `origin/main` (lerobot submodule add, mac-env, sim_ground_truth + cup containers + /drop_poses sim parity, real-hardware bring-up, ROS2 plugins docs) against the 26 local commits (Drop Scan / Real Test tab + deterministic motion planner + drop motion robustness). Compare overlapping mechanisms (control_gui.py, URDF, /drop_poses producers). Pick the better implementation per overlap and merge into a single coherent main. Push so collaborators see one source of truth.
+**Why URGENT**: Discovered during Phase 11-01 task 6 wrap-up — divergence has been growing for ~2 weeks across the team. Several Phase 11-01 issues this session (sim_ground_truth /drop_poses overlap with isaac-sim-mcp's publisher, missing real-hardware bring-up infrastructure, no lerobot data recording) would have been avoided or framed differently if upstream had been pulled regularly. Continuing Phase 11-01 task 6 (UAT) without first reconciling means double-resolving the same conflicts later.
+**Depends on**: Phase 9 (current local main lineage); blocks Phase 11-01 task 6 + lego workflow.
+**Requirements**: TBD (to be derived during /gsd-plan-phase)
+**Success Criteria** (what must be TRUE):
+  1. `git status` on `vla_SO-ARM101` shows `[main: ahead 0, behind 0]` after merge — no divergence remaining.
+  2. lerobot submodule cloned and initialized at the upstream-defined path; submodule pointer matches upstream.
+  3. control_gui.py final state preserves: deterministic motion planner (tier-1/tier-2/OMPL), Drop Scan + Real Test tab, sim/real sub leak fix, gripper open planning-group switch — AND any improved equivalents from upstream (e.g. jointstatereader dual-publish if better than local).
+  4. /drop_poses producer overlap resolved: ONE authoritative producer (either upstream sim_ground_truth or local isaac-sim-mcp soarm101-dt) — the other deferred or removed.
+  5. URDF / launch / config conflicts resolved by side-by-side comparison; explicit log of which side won per file.
+  6. Merge commit pushed to origin/main; downstream collaborators can pull cleanly.
+  7. Phase 11-01 Drop Scan still works end-to-end on the merged branch (regression check before declaring complete).
+**Plans**: 0 plans (to be created during /gsd-plan-phase 10.1)
+
 ### Phase 11: Full Pick-and-Place Pipeline Verification
 **Goal**: Verify the complete pick-and-place pipeline end-to-end using YOLOE for object detection and ArUco markers for drop pose detection via the aruco_camera_localizer package.
-**Depends on**: Phase 10
+**Depends on**: Phase 10, Phase 10.1
 **Requirements**: TBD
 **Success Criteria** (what must be TRUE):
   1. YOLOE detects lego blocks and publishes poses on /objects_poses

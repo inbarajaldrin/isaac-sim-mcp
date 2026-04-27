@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 11-01 in progress — color-driven single-pick workflow + cache lifecycle (Real Test tab)
-stopped_at: implementation in flight
-last_updated: "2026-04-25T22:30:00.000Z"
+status: Phase 10.1 (INSERTED) ready to plan — upstream merge BLOCKS Phase 11-01 task 6 resumption
+stopped_at: phase 10.1 inserted, awaiting /gsd-plan-phase 10.1
+last_updated: "2026-04-27T00:30:00.000Z"
 progress:
-  total_phases: 12
+  total_phases: 13
   completed_phases: 3
   total_plans: 12
   completed_plans: 5
-  percent: 42
+  percent: 38
 ---
 
 # Project State
@@ -114,6 +114,7 @@ None yet.
 - Phase 13 added: Port UR5e-dt backend features to soarm101-dt — `_ViewportCameraPublisher` as camera publishing REPLACEMENT, stage lifecycle cleanup, `new_stage`, `execute_python_code` sessions, video recording backend (MCP-only, no UI)
 - Phase 07.1 inserted after Phase 7 (URGENT, 2026-04-18): Widget Registry Expansion — Full CLI-Level Control. Extends button-only registry to Spinboxes/Checkbuttons/Entries/Listboxes/Scales with generic list/get/set widget services. Inserted mid-Phase-7 (after 07-01 landed) because Plan 07-03/07-04 UAT benefits from agent-driven widget control. Inspired by element-registry skill pattern.
 - Phase 07.2 inserted after Phase 07.1 (URGENT, 2026-04-19): Motion Planning Problem Analysis & Inline Fix. Scope expanded during discuss-phase from analysis-only to analysis + inline fix — 07.2 now owns the three Phase-6 flakiness items (no-IK at edge, OMPL error −2 post-release, out-of-reach spawns) instead of routing them to Phase 10. Method: reachable-workspace + config-space analysis + N=10 random-seed trials per class in Isaac Sim only. See `.planning/phases/07.2-motion-planning-problem-analysis/07.2-CONTEXT.md`.
+- Phase 10.1 inserted after Phase 10 (URGENT, 2026-04-27): Reconcile + Merge Upstream Exploring-VLAs Main. Discovered during Phase 11-01 task 6 that origin/main is `[ahead 26, behind 27]` — 27 unmerged upstream commits include lerobot submodule add, mac-env, sim_ground_truth + cup containers + /drop_poses sim parity, real-hardware bring-up. Several Phase 11-01 issues (sim_ground_truth /drop_poses overlap with isaac-sim-mcp, missing real-hardware infrastructure, no lerobot data recording) would have been avoided or framed differently if upstream had been pulled regularly. **Blocks Phase 11-01 task 6 resumption** — pull/compare/merge BEFORE continuing UAT. See `.planning/phases/10.1-reconcile-upstream-merge/`.
 
 ### Blockers/Concerns
 
