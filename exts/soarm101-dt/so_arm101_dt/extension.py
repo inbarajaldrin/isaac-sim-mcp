@@ -231,6 +231,163 @@ class _ViewportCameraPublisher:
 if "_viewport_pub" not in globals():
     _viewport_pub = _ViewportCameraPublisher()
 
+
+class _ReplicatorCameraPublisher:
+    """Publishes a camera prim's rendered frames to a ROS2 Image topic via
+    a dedicated hidden viewport. Bypasses the Kit ROS2CameraHelper
+    action-graph node, which silently fails to register DDS publishers on
+    Isaac Sim 5.0 / Kit 107.3 / isaacsim.ros2.bridge 4.9.3 — graph nodes
+    compute, but no publisher ever appears on the wire.
+
+    Why a hidden viewport (not replicator annotators or isaacsim Camera):
+    both of those rely on rep.orchestrator stepping to populate frames,
+    which only runs in standalone mode (not during Kit play). Viewports
+    render every frame regardless. Each hidden viewport costs ~0.3 RTF
+    — acceptable for recording use.
+
+    Use this for cameras that aren't the active UI viewport. For the one
+    camera you also want to see in the UI, _ViewportCameraPublisher
+    (active-viewport reuse) is free (~0 RTF).
+    """
+
+    def __init__(self):
+        self._publishers = {}  # {topic_name: entry}
+
+    def is_rclpy_available(self):
+        try:
+            import rclpy  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    def start(self, camera_prim_path, topic_name, width=640, height=480, frame_id=None):
+        """Create a hidden viewport pointed at the camera prim and publish
+        each rendered frame as sensor_msgs/Image on the topic."""
+        import rclpy  # noqa: F401
+        import omni.kit.viewport.utility as vp_utils
+        from omni.kit.viewport.window import ViewportWindow
+        from sensor_msgs.msg import Image
+        import ctypes, array
+
+        if frame_id is None:
+            frame_id = topic_name
+
+        if topic_name in self._publishers:
+            self.stop(topic_name)
+
+        # Reuse _ViewportCameraPublisher's persistent rclpy node to keep all
+        # extension publishers on a single DDS participant.
+        global _viewport_pub
+        _viewport_pub._ensure_node()
+        node = _viewport_pub._node
+        pub = node.create_publisher(Image, f"/{topic_name}", 10)
+
+        # Create a dedicated viewport window pointed at the target camera.
+        # We hide the window from the UI but force updates_enabled=True so
+        # the viewport keeps rendering — the kit default disables updates
+        # on hidden windows to save GPU, which is the wrong tradeoff for us.
+        window_name = f"HiddenViewport_{topic_name}"
+        viewport_window = ViewportWindow(window_name, width=width, height=height)
+        viewport_window.visible = False
+        viewport = viewport_window.viewport_api
+        # Set camera_path eagerly — and re-set it defensively in on_frame for
+        # the first few frames. Kit silently drops the assignment if the
+        # viewport_api isn't fully constructed yet, leaving the viewport
+        # rendering /OmniverseKit_Persp (verified 2026-04-27). Late-binding the
+        # assignment in the frame callback is the only reliable fix found.
+        viewport.camera_path = camera_prim_path
+        viewport.resolution = (width, height)
+        try:
+            viewport.updates_enabled = True
+        except Exception:  # noqa: BLE001
+            pass  # API may be read-only on some Kit versions; subscribe still works
+
+        entry = {
+            "pub": pub, "sub": None,
+            "viewport": viewport, "window": viewport_window,
+            "camera_path": camera_prim_path, "frame_id": frame_id,
+            "width": width, "height": height,
+            "active": True, "count": 0,
+            "camera_set_attempts": 0,  # tracks defensive re-binding in on_frame
+        }
+
+        def on_capture(buffer, buffer_size, vp_width, vp_height, fmt):
+            if not entry["active"]:
+                return
+            try:
+                import array
+                ctypes.pythonapi.PyCapsule_GetPointer.restype = ctypes.c_void_p
+                ctypes.pythonapi.PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+                ptr = ctypes.pythonapi.PyCapsule_GetPointer(buffer, None)
+                c_arr = (ctypes.c_ubyte * buffer_size).from_address(ptr)
+                a = array.array('B'); a.frombytes(c_arr)
+                msg = Image()
+                msg.header.frame_id = entry["frame_id"]
+                msg.height = vp_height; msg.width = vp_width
+                msg.encoding = "rgba8"; msg.is_bigendian = False
+                msg.step = vp_width * 4
+                msg.data = a
+                entry["pub"].publish(msg)
+                entry["count"] += 1
+            except Exception:
+                pass
+
+        def on_frame(_event):
+            if not entry["active"]:
+                return
+            # Defensive re-bind for first ~10 frames: Kit drops camera_path
+            # assignment when the viewport_api isn't fully constructed at start()
+            # time. Once the assignment sticks, stop trying.
+            if entry["camera_set_attempts"] < 10:
+                vp = entry["viewport"]
+                if str(vp.camera_path) != str(entry["camera_path"]):
+                    vp.camera_path = entry["camera_path"]
+                entry["camera_set_attempts"] += 1
+            vp_utils.capture_viewport_to_buffer(entry["viewport"], on_capture)
+
+        entry["sub"] = viewport.subscribe_to_frame_change(on_frame)
+        self._publishers[topic_name] = entry
+        print(f"[ReplicatorPub] Started /{topic_name} from {camera_prim_path} ({width}x{height}) via hidden viewport")
+
+    def stop(self, topic_name):
+        if topic_name not in self._publishers:
+            return
+        entry = self._publishers[topic_name]
+        entry["active"] = False
+        entry["sub"] = None  # drops the frame_change subscription
+        # Destroy the hidden viewport window
+        try:
+            if entry.get("window"):
+                entry["window"].destroy()
+        except Exception as e:  # noqa: BLE001
+            print(f"[ReplicatorPub] window destroy warning: {e}")
+        global _viewport_pub
+        if _viewport_pub._node is not None:
+            try:
+                _viewport_pub._node.destroy_publisher(entry["pub"])
+            except Exception as e:  # noqa: BLE001
+                print(f"[ReplicatorPub] destroy_publisher warning: {e}")
+        del self._publishers[topic_name]
+        print(f"[ReplicatorPub] Stopped /{topic_name}")
+
+    def stop_all(self):
+        for topic in list(self._publishers.keys()):
+            self.stop(topic)
+
+    def is_active(self, topic_name=None):
+        if topic_name:
+            return topic_name in self._publishers and self._publishers[topic_name]["active"]
+        return any(e["active"] for e in self._publishers.values())
+
+    def get_status(self):
+        return {t: {"camera": e["camera_path"], "active": e["active"], "count": e["count"]}
+                for t, e in self._publishers.items()}
+
+
+# Module-level singleton — survives hot-reloads via globals() guard
+if "_replicator_pub" not in globals():
+    _replicator_pub = _ReplicatorCameraPublisher()
+
 # MCP socket server port - change this for different extensions
 MCP_SERVER_PORT = 8767
 
@@ -1495,15 +1652,21 @@ class DigitalTwin(omni.ext.IExt):
         if ws_existing and ws_existing.IsValid():
             print(f"Workspace camera already exists at {ws_prim_path}, skipping creation.")
         else:
-            ws_width, ws_height = 1280, 720
+            ws_width, ws_height = 640, 480
             ws_position = (0.6980338662434342, -0.3958419458255837, 0.45249457626357603)
             # Hand-tuned for SO-ARM101 — overhead-front view of robot + cup arc
             ws_quat_xyzw = (0.4306700623322567, 0.2612220733325859, 0.4480130626995852, 0.7386275255262917)
 
             ws_camera_prim = UsdGeom.Camera.Define(ws_stage, ws_prim_path)
             if ws_camera_prim:
-                # Configure intrinsics (Intel RealSense: HFOV 69.4°, VFOV 42.5° at 1280x720)
-                hfov_deg, vfov_deg = 69.4, 42.5
+                # Configure intrinsics. RealSense's authored values are HFOV 69.4°,
+                # VFOV 42.5° at 16:9 (1280x720). At 4:3 (640x480) the same VFOV
+                # crops the frustum vertically — apparent zoom. Derive VFOV from
+                # HFOV and the actual aspect so the rendered frame matches the
+                # OpenCVPinhole calibration. Same square-pixel formula as the
+                # wrist camera (extension.py:2417, 2520).
+                hfov_deg = 69.4
+                vfov_deg = hfov_deg * ws_height / ws_width
                 fx = ws_width / (2 * np.tan(np.deg2rad(hfov_deg / 2)))
                 fy = ws_height / (2 * np.tan(np.deg2rad(vfov_deg / 2)))
                 cx, cy = ws_width * 0.5, ws_height * 0.5
@@ -1538,14 +1701,46 @@ class DigitalTwin(omni.ext.IExt):
             else:
                 print(f"Warning: Failed to create workspace camera at {ws_prim_path}")
 
-        # Start viewport publisher for workspace camera
+        # Start viewport publisher for workspace camera. Force the viewport's
+        # render resolution to match the camera's intrinsic resolution so the
+        # ROS2 frames match the OpenCVPinhole calibration on the prim. Without
+        # this the active UI viewport renders at its window size (e.g.
+        # 1280x720) regardless of camera intrinsics.
         if not _viewport_pub.is_active("workspace_camera_sim"):
             _viewport_pub.start(ws_prim_path, "workspace_camera_sim", frame_id="workspace_camera_sim")
-            print("Workspace camera viewport publisher started.")
+            try:
+                ws_entry = _viewport_pub._publishers.get("workspace_camera_sim")
+                if ws_entry and ws_entry.get("viewport"):
+                    ws_entry["viewport"].resolution = (ws_width, ws_height)
+            except Exception as e:  # noqa: BLE001
+                print(f"Warning: failed to force workspace viewport resolution: {e}")
+            print(f"Workspace camera viewport publisher started @ {ws_width}x{ws_height}.")
         await app.next_update_async()
 
         # Switch active viewport to workspace camera
         self._set_active_viewport_camera(ws_prim_path)
+
+        # 10c. Start replicator-based wrist camera publisher.
+        # The action graph at /Graph/ActionGraph_WristCamera is left in place
+        # (forward-compatible with the eventual Kit fix), but doesn't publish
+        # on Isaac Sim 5.0 / Kit 107.3 / isaacsim.ros2.bridge 4.9.3 — the
+        # IsaacCreateRenderProduct → ROS2CameraHelper chain silently fails to
+        # register a DDS publisher. _ReplicatorCameraPublisher bypasses that
+        # broken chain by using omni.replicator.core directly + manual rclpy
+        # publish. Costs ~0.05 RTF (one extra GPU render pass for the wrist
+        # camera, no UI viewport overhead).
+        wrist_cam_prim = "/World/SO_ARM101/camera_mount_link/usb_camera/wrist_camera"
+        wrist_stage = omni.usd.get_context().get_stage()
+        if wrist_stage.GetPrimAtPath(wrist_cam_prim).IsValid():
+            if not _replicator_pub.is_active("wrist_camera_rgb_sim"):
+                _replicator_pub.start(
+                    wrist_cam_prim, "wrist_camera_rgb_sim",
+                    width=640, height=480, frame_id="camera_link",
+                )
+                print("Wrist camera replicator publisher started.")
+            await app.next_update_async()
+        else:
+            print(f"Warning: wrist camera prim {wrist_cam_prim} not found, skipping replicator publisher")
 
         # 11. Create contact sensors on cups (for motion_logger at 50 Hz).
         # Must be AFTER play — sensor backend initializes on Play per
@@ -2297,6 +2492,7 @@ class DigitalTwin(omni.ext.IExt):
             {
                 keys.CREATE_NODES: [
                     ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
+                    ("RunOnce", "isaacsim.core.nodes.OgnIsaacRunOneSimulationFrame"),
                     ("RenderProduct", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
                     ("Context", "isaacsim.ros2.bridge.ROS2Context"),
                     ("ReadSimTime", "isaacsim.core.nodes.IsaacReadSimulationTime"),
@@ -2317,12 +2513,8 @@ class DigitalTwin(omni.ext.IExt):
                     ("ReadSimTime.inputs:resetOnStop", False),
                 ],
                 keys.CONNECT: [
-                    # RunOnce gate removed: fire RenderProduct every tick so the publishers
-                    # keep their DDS connections alive. ur5e-dt's setup_camera_action_graph
-                    # uses RunOnce too, but on Isaac Sim 5.0 + soarm101-dt's camera prim
-                    # ancestry, that gate caused the publishers to register only briefly
-                    # and disappear. Continuous tick is the documented stable pattern.
-                    ("OnPlaybackTick.outputs:tick", "RenderProduct.inputs:execIn"),
+                    ("OnPlaybackTick.outputs:tick", "RunOnce.inputs:execIn"),
+                    ("RunOnce.outputs:step", "RenderProduct.inputs:execIn"),
                     ("RenderProduct.outputs:execOut", "CameraInfoPublish.inputs:execIn"),
                     ("RenderProduct.outputs:execOut", "RGBPublish.inputs:execIn"),
                     ("RenderProduct.outputs:renderProductPath", "CameraInfoPublish.inputs:renderProductPath"),
@@ -2333,21 +2525,36 @@ class DigitalTwin(omni.ext.IExt):
             }
         )
 
-        # Set opencvPinhole lens distortion attributes on the camera prim.
-        # Without these, ROS2CameraHelper (RGBPublish) silently fails to register
-        # a DDS publisher — matches the working pattern in setup_camera_action_graph
-        # (line 2111+) and exts/ur5e-dt/.../setup_camera_action_graph (line 3166+).
+        # Re-author USD camera intrinsics + opencvPinhole AFTER the action graph is
+        # created. This mirrors the exact ordering in setup_camera_action_graph
+        # (Intel cam, ur5e-port pattern) and exts/ur5e-dt/.../setup_camera_action_graph.
+        # The post-graph re-authoring appears to be load-bearing: ROS2CameraHelper
+        # silently fails to register a DDS publisher if intrinsics are only set
+        # before the graph references the camera prim. Re-authoring after the
+        # render-product node is wired triggers the binding properly.
         camera_prim = stage.GetPrimAtPath(CAMERA_PRIM)
         if camera_prim and camera_prim.IsValid():
             import numpy as np
-            # Wrist camera: 100° HFOV, square pixels (matches sim render product + real lens)
-            hfov_deg = 100.0
-            vfov_deg = 67.7
-            fx = IMAGE_WIDTH / (2 * np.tan(np.deg2rad(hfov_deg / 2)))
-            fy = IMAGE_HEIGHT / (2 * np.tan(np.deg2rad(vfov_deg / 2)))
+            # OV9732: 100° HFOV, square pixels (matches sim render product + real lens)
+            HFOV_DEG = 100.0
+            VFOV_DEG = HFOV_DEG * IMAGE_HEIGHT / IMAGE_WIDTH
+            fx = IMAGE_WIDTH / (2 * np.tan(np.deg2rad(HFOV_DEG / 2)))
+            fy = IMAGE_HEIGHT / (2 * np.tan(np.deg2rad(VFOV_DEG / 2)))
             cx = IMAGE_WIDTH * 0.5
             cy = IMAGE_HEIGHT * 0.5
 
+            # Re-author USD aperture/focal/clipping (already set in attach_usb_camera,
+            # but re-setting after graph creation is what makes ROS2CameraHelper bind).
+            horizontal_aperture_mm = 36.0
+            focal_length_mm = fx * horizontal_aperture_mm / IMAGE_WIDTH
+            vertical_aperture_mm = IMAGE_HEIGHT * focal_length_mm / fy
+            camera = UsdGeom.Camera(camera_prim)
+            camera.CreateHorizontalApertureAttr().Set(horizontal_aperture_mm)
+            camera.CreateVerticalApertureAttr().Set(vertical_aperture_mm)
+            camera.CreateFocalLengthAttr().Set(focal_length_mm)
+            camera.CreateClippingRangeAttr().Set(Gf.Vec2f(0.01, 100.0))
+
+            # Set opencvPinhole lens distortion model.
             camera_prim.CreateAttribute("omni:lensdistortion:model", Sdf.ValueTypeNames.String).Set("opencvPinhole")
             camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:imageSize", Sdf.ValueTypeNames.Int2).Set(Gf.Vec2i(IMAGE_WIDTH, IMAGE_HEIGHT))
             camera_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:fx", Sdf.ValueTypeNames.Float).Set(fx)
