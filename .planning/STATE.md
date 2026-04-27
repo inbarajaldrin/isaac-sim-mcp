@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 10.1 (INSERTED) ready to plan — upstream merge BLOCKS Phase 11-01 task 6 resumption
-stopped_at: phase 10.1 inserted, awaiting /gsd-plan-phase 10.1
-last_updated: "2026-04-27T00:30:00.000Z"
+status: Phase 10.1 COMPLETE (merge pushed) — Phase 10.2 (INSERTED) awaiting /gsd-plan-phase 10.2 (lerobot data collection on Linux + Isaac Sim)
+stopped_at: phase 10.2 inserted, awaiting /gsd-plan-phase or /gsd-discuss-phase 10.2
+last_updated: "2026-04-27T05:23:40.000Z"
 progress:
-  total_phases: 13
-  completed_phases: 3
+  total_phases: 14
+  completed_phases: 4
   total_plans: 12
   completed_plans: 5
-  percent: 38
+  percent: 40
 ---
 
 # Project State
@@ -20,13 +20,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-27)
 
 **Core value:** SO-ARM101 can sort lego blocks by color into matching cups — pick from table, drop into the correct cup — driven by poses from Isaac Sim and ArUco camera detection
-**Current focus:** Phase 11-01 — color-driven single-pick workflow in Real Test tab. User picks color from dropdown → arm picks closest cached lego of that color → drops in matching cup → cache evicts dropped lego. Phase 11 also formally adopts the prior cross-repo work captured in HANDOFF.json (Real Test tab scaffold, marker_geometry cylinder_side_marker, cup orientation fix, YOLOE config-driven prompts). Deferred within Phase 11: 11-02 camera-spec single-source-of-truth + VFOV residual diagnosis; 11-03 autonomous mode (criterion 5).
+**Current focus:** Phase 10.2 (INSERTED) — LeRobot data collection on Linux against Isaac Sim. Three tracks: (1) topic-naming unification across the three packages (sim and real share canonical names), (2) conda env validation for ROS2 cross-boundary communication, (3) lerobot-record end-to-end + reference dataset + verify_parity PASS + Linux setup doc. Sim-only on Linux; real-hw recording stays on Mac per user direction. Phase 11-01 task 6 (Drop Scan UAT) deferred until 10.2 lands the topic-naming refactor that collapses sim/real branching.
 
 ## Current Position
 
-Phase: 11 (Full Pick-and-Place Pipeline Verification) — IN PROGRESS, plan 11-01 (color-driven single-pick) authored 2026-04-25.
-Phases 1-6, 05.1, 7, 07.1, 07.2, 9, 13 complete (11 of 15 phases done).
-Remaining: Phase 8 (audit, deferred) → 10 (deferred) → 11 (in flight) → 12 (deferred).
+Phase: 10.2 (LeRobot Data Collection — Linux + Isaac Sim) — INSERTED 2026-04-27, awaiting `/gsd-plan-phase 10.2` or `/gsd-discuss-phase 10.2`.
+Phases 1-6, 05.1, 7, 07.1, 07.2, 9, 10.1, 13 complete (12 of 16 phases done).
+Remaining: Phase 8 (audit, deferred) → 10 (deferred) → 10.2 (just inserted, next up) → 11 (paused on 11-01 task 6 pending 10.2's topic-rename refactor) → 12 (deferred).
 
 **Phase 9 spillover that pre-completes parts of remaining phases:**
 
@@ -114,7 +114,8 @@ None yet.
 - Phase 13 added: Port UR5e-dt backend features to soarm101-dt — `_ViewportCameraPublisher` as camera publishing REPLACEMENT, stage lifecycle cleanup, `new_stage`, `execute_python_code` sessions, video recording backend (MCP-only, no UI)
 - Phase 07.1 inserted after Phase 7 (URGENT, 2026-04-18): Widget Registry Expansion — Full CLI-Level Control. Extends button-only registry to Spinboxes/Checkbuttons/Entries/Listboxes/Scales with generic list/get/set widget services. Inserted mid-Phase-7 (after 07-01 landed) because Plan 07-03/07-04 UAT benefits from agent-driven widget control. Inspired by element-registry skill pattern.
 - Phase 07.2 inserted after Phase 07.1 (URGENT, 2026-04-19): Motion Planning Problem Analysis & Inline Fix. Scope expanded during discuss-phase from analysis-only to analysis + inline fix — 07.2 now owns the three Phase-6 flakiness items (no-IK at edge, OMPL error −2 post-release, out-of-reach spawns) instead of routing them to Phase 10. Method: reachable-workspace + config-space analysis + N=10 random-seed trials per class in Isaac Sim only. See `.planning/phases/07.2-motion-planning-problem-analysis/07.2-CONTEXT.md`.
-- Phase 10.1 inserted after Phase 10 (URGENT, 2026-04-27): Reconcile + Merge Upstream Exploring-VLAs Main. Discovered during Phase 11-01 task 6 that origin/main is `[ahead 26, behind 27]` — 27 unmerged upstream commits include lerobot submodule add, mac-env, sim_ground_truth + cup containers + /drop_poses sim parity, real-hardware bring-up. Several Phase 11-01 issues (sim_ground_truth /drop_poses overlap with isaac-sim-mcp, missing real-hardware infrastructure, no lerobot data recording) would have been avoided or framed differently if upstream had been pulled regularly. **Blocks Phase 11-01 task 6 resumption** — pull/compare/merge BEFORE continuing UAT. See `.planning/phases/10.1-reconcile-upstream-merge/`.
+- Phase 10.1 inserted after Phase 10 (URGENT, 2026-04-27): Reconcile + Merge Upstream Exploring-VLAs Main. Discovered during Phase 11-01 task 6 that origin/main is `[ahead 26, behind 27]` — 27 unmerged upstream commits include lerobot submodule add, mac-env, sim_ground_truth + cup containers + /drop_poses sim parity, real-hardware bring-up. **COMPLETED 2026-04-27** — merge commit `e6a30ae` pushed to `DIME-LAB/Exploring-VLAs:main`. All 4 conflicts resolved (joint_limits.yaml kept local 2.0; control_gui.py kept local comment + took upstream's tk-on-main architecture; vla CLAUDE.md synthesized). Linux Gazebo also fixed via per-backend yaml split. Verification: test_qs_cycle.sh red_2x3 PASSED on merged code; gazebo grasp_home executed 51-wp trajectory. See `.planning/phases/10.1-reconcile-upstream-merge/` and `~/Documents/merge-quarantine/vla-SO-ARM101-2026-04-27/`.
+- Phase 10.2 inserted after Phase 10.1 (NORMAL, 2026-04-27): LeRobot Data Collection (Linux + Isaac Sim). User-driven, post-merge. Three tracks: (1) topic-naming unification across the three packages so sim and real share canonical names — exploits "only one sim runs at a time" constraint to drop _sim/_real suffixes, collapsing Phase 11-01's sim/real branching; (2) conda env validation for ROS2 cross-boundary communication — user explicitly noted contingent on this passing; (3) lerobot-record end-to-end + reference dataset to HF + verify_parity.py PASS + LEROBOT_ROS2_LINUX_SETUP.md doc. Sim-only on Linux per user; real-hw recording stays on Mac. See `.planning/phases/10.2-lerobot-data-collection-linux-isaac-sim/.continue-here.md` for the full track-by-track plan + 10 required reading items.
 
 ### Blockers/Concerns
 
@@ -128,8 +129,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-26T17:34:00Z
-Stopped at: Phase 10.1 inserted (URGENT) — awaiting `/gsd-plan-phase 10.1`. Phase 11-01 task 6 paused, blocked on 10.1 merge.
-Resume file: .planning/phases/10.1-reconcile-upstream-merge/.continue-here.md
-Handoff: .planning/HANDOFF.json (structured, primary resumption source)
-Resumed: 2026-04-27 (this session) — proceeding to plan Phase 10.1
+Last session: 2026-04-27T05:23:40Z
+Stopped at: Phase 10.2 inserted — awaiting `/gsd-plan-phase 10.2` or `/gsd-discuss-phase 10.2`. Phase 10.1 (upstream merge) COMPLETE + pushed earlier in this session.
+Resume file: .planning/phases/10.2-lerobot-data-collection-linux-isaac-sim/.continue-here.md
+Handoff: none active (the previous Phase 11-01 HANDOFF.json was archived to .planning/phases/11-full-pick-and-place-pipeline-verification/HANDOFF-PRE-10.2.json — its content is still relevant for when Phase 11-01 task 6 resumes after Phase 10.2 Track 1 lands)
+Last completed: Phase 10.1 merge committed as `e6a30ae` and pushed to `DIME-LAB/Exploring-VLAs:main`. Linux Gazebo fix landed in same session. Three repos pushed: Exploring-VLAs main, isaac-sim-mcp so-arm101, aruco_camera_localizer robosort. Planning artifacts cleaned (10.1's .continue-here.md → 10.1-SUMMARY.md; HANDOFF.json archived; Phase 11 blocker updated to 10.2-Track1).
