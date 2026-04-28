@@ -557,6 +557,26 @@ BLOCK_SPAWN_FORWARD = 0.3     # forward distance for initial row layout
 BLOCK_RANDOM_FORWARD = (0.135, 0.285)
 BLOCK_RANDOM_LATERAL = (-0.10, 0.10)
 
+# Main ground plane (collision + visual). Covers the entire scene so any
+# lego or cup placed outside the workspace still rests on the floor.
+# Color + roughness control the "outdoors" look beyond the workspace
+# tile defined below.
+GROUND_PLANE_SIZE_M = 5000               # square edge length in meters
+GROUND_PLANE_COLOR = (0.45, 0.45, 0.45)  # neutral gray
+GROUND_PLANE_ROUGHNESS = 1.0             # fully diffuse
+
+# Workspace ground tile — visual-only black quad that sits on top of
+# /World/defaultGroundPlane in the active pick-place area. Gives
+# camera frames a clean black backdrop for dataset capture without
+# turning the whole scene pitch black. Per-side extents in world
+# frame; the UI panel edits these values and re-authors the tile.
+# Set WORKSPACE_GROUND_X_RANGE to None to disable the tile entirely.
+WORKSPACE_GROUND_X_RANGE = (-0.04, 0.70)    # (x_min, x_max) world-frame X (forward), meters
+WORKSPACE_GROUND_Y_RANGE = (-0.35, 0.30)    # (y_min, y_max) world-frame Y (lateral), meters
+WORKSPACE_GROUND_Z_OFFSET_M = 0.002         # lift above main ground (z-fight avoidance)
+WORKSPACE_GROUND_COLOR = (0.0, 0.0, 0.0)    # matte black
+WORKSPACE_GROUND_ROUGHNESS = 1.0            # fully diffuse
+
 # Cup container assets (one per block color)
 CUP_USDS = {
     "red":   "cup_red.usd",
@@ -583,8 +603,25 @@ CUP_LAYOUT_DEFAULTS = {
     "gap": 0.01,
     "face_origin": True,       # rotate cups to face the robot base (perpendicular to radial)
     "color_order": ["red", "green", "blue"],
+    # Cluster-level offset in WORLD frame. Applied AFTER _to_world() so
+    # cups still face the pan axis via face_origin (the cluster
+    # translates without re-aiming). Honored by add_cups,
+    # _add_cups_from_ui, and randomize_cups.
+    "cluster_offset_x": 0.0,   # meters; +X = forward of pan axis
+    "cluster_offset_y": 0.0,   # meters; +Y = lateral (left of robot for ROBOT_FORWARD_AXIS="X")
 }
 CUP_LAYOUT = dict(CUP_LAYOUT_DEFAULTS)
+
+# Real-world calibration overrides — applied by the "Match Real World"
+# UI button and automatically during quick_start. Only the keys listed
+# here are overwritten on CUP_LAYOUT; everything else (mode, radius,
+# angle_deg, color_order, face_origin) keeps whatever value the user has
+# set in CUP_LAYOUT_DEFAULTS or the live UI.
+CUP_LAYOUT_REAL_WORLD = {
+    "cluster_offset_x": 0.12,
+    "cluster_offset_y": 0.06,
+    "gap": 0.02,
+}
 
 # ArUco markers on cup surfaces — one marker per cup, placed on the side facing the robot.
 # dictionary: ArUco dictionary name
@@ -681,6 +718,32 @@ def _cup_positions_line(cup_widths):
         )
         cursor += w + gap
     return positions
+
+def _apply_cup_cluster_offset(positions):
+    """Shift a dict of cup positions by CUP_LAYOUT's cluster_offset_x/y.
+
+    Operates in robot-relative (forward, lateral) space. Offset values
+    are authored as WORLD-frame XY for intuitive UX ("shift the cluster
+    by 5 cm in world X"), so we convert to robot-relative based on
+    ROBOT_FORWARD_AXIS:
+
+      "X" axis: world (dx, dy) ≡ robot-relative (dfwd, dlat)
+      "Y" axis: world (dx, dy) ≡ robot-relative (-dlat, dfwd) → invert
+
+    Applied BEFORE _to_world() so the offset participates in any
+    downstream validation (e.g. randomize_cups' lego/robot-AABB checks).
+    Returns a fresh dict; caller's input dict is untouched.
+    """
+    ox = CUP_LAYOUT.get("cluster_offset_x", 0.0)
+    oy = CUP_LAYOUT.get("cluster_offset_y", 0.0)
+    if not ox and not oy:
+        return positions  # no-op fast path
+    if ROBOT_FORWARD_AXIS == "X":
+        fwd_off, lat_off = ox, oy
+    else:  # "Y"
+        fwd_off, lat_off = oy, -ox
+    return {c: (f + fwd_off, l + lat_off) for c, (f, l) in positions.items()}
+
 
 def _get_cups_folder():
     """Local assets/cups/ only."""
@@ -1159,6 +1222,31 @@ class DigitalTwin(omni.ext.IExt):
                         self._viewport_toggle_btn = ui.Button("Disable Viewport", width=140, height=35, clicked_fn=self._toggle_viewport_rendering)
                         ui.Button("Quick Start", width=120, height=35, clicked_fn=lambda: asyncio.ensure_future(self.quick_start()))
 
+            with ui.CollapsableFrame(title="Workspace Ground", collapsed=True, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    # 4 per-side extent fields + Apply / Reset buttons.
+                    # Edits the visual workspace tile in place — the
+                    # main /World/defaultGroundPlane (collision) is
+                    # untouched.
+                    self._wsg_x_min_model = ui.SimpleFloatModel(WORKSPACE_GROUND_X_RANGE[0])
+                    self._wsg_x_max_model = ui.SimpleFloatModel(WORKSPACE_GROUND_X_RANGE[1])
+                    self._wsg_y_min_model = ui.SimpleFloatModel(WORKSPACE_GROUND_Y_RANGE[0])
+                    self._wsg_y_max_model = ui.SimpleFloatModel(WORKSPACE_GROUND_Y_RANGE[1])
+                    with ui.HStack(spacing=5, height=0):
+                        ui.Label("X (forward) min:", width=120)
+                        ui.FloatField(model=self._wsg_x_min_model, width=70)
+                        ui.Label("max:", width=40)
+                        ui.FloatField(model=self._wsg_x_max_model, width=70)
+                    with ui.HStack(spacing=5, height=0):
+                        ui.Label("Y (lateral) min:", width=120)
+                        ui.FloatField(model=self._wsg_y_min_model, width=70)
+                        ui.Label("max:", width=40)
+                        ui.FloatField(model=self._wsg_y_max_model, width=70)
+                    with ui.HStack(spacing=5, height=0):
+                        ui.Button("Apply", width=80, height=30,
+                                  clicked_fn=self._cmd_apply_workspace_ground)
+                        ui.Button("Reset to Defaults", width=140, height=30,
+                                  clicked_fn=self._cmd_reset_workspace_ground)
 
             with ui.CollapsableFrame(title="SO-ARM101 Control", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
@@ -1295,11 +1383,41 @@ class DigitalTwin(omni.ext.IExt):
                                 self._cup_face_origin_cb.model.add_value_changed_fn(self._on_cup_layout_changed)
                                 ui.Label("Face origin", alignment=ui.Alignment.LEFT)
 
+                            # Cluster X offset (world frame; shifts ALL cups)
+                            with ui.HStack(spacing=5):
+                                ui.Label("Offset X:", width=60, alignment=ui.Alignment.LEFT)
+                                self._cup_offset_x_slider = ui.FloatSlider(
+                                    min=-0.20, max=0.20, step=0.01, width=180)
+                                self._cup_offset_x_slider.model.set_value(
+                                    float(CUP_LAYOUT.get("cluster_offset_x", 0.0)))
+                                self._cup_offset_x_slider.model.add_value_changed_fn(
+                                    self._on_cup_layout_changed)
+                                self._cup_offset_x_label = ui.Label(
+                                    f"{CUP_LAYOUT.get('cluster_offset_x', 0.0)*100:.0f}cm",
+                                    width=45)
+
+                            # Cluster Y offset (world frame)
+                            with ui.HStack(spacing=5):
+                                ui.Label("Offset Y:", width=60, alignment=ui.Alignment.LEFT)
+                                self._cup_offset_y_slider = ui.FloatSlider(
+                                    min=-0.20, max=0.20, step=0.01, width=180)
+                                self._cup_offset_y_slider.model.set_value(
+                                    float(CUP_LAYOUT.get("cluster_offset_y", 0.0)))
+                                self._cup_offset_y_slider.model.add_value_changed_fn(
+                                    self._on_cup_layout_changed)
+                                self._cup_offset_y_label = ui.Label(
+                                    f"{CUP_LAYOUT.get('cluster_offset_y', 0.0)*100:.0f}cm",
+                                    width=45)
+
                             # Buttons
                             with ui.HStack(spacing=5):
                                 ui.Button("Add Cups", width=80, height=35, clicked_fn=self.add_cups)
                                 ui.Button("Update", width=70, height=35, clicked_fn=self._add_cups_from_ui)
                                 ui.Button("Delete", width=70, height=35, clicked_fn=self.delete_cups)
+                            with ui.HStack(spacing=5):
+                                ui.Button("Match Real World", width=160, height=30,
+                                          clicked_fn=lambda: self._cmd_match_real_world(reposition=True),
+                                          tooltip="Apply CUP_LAYOUT_REAL_WORLD overrides (offset + gap) and re-place cups. Auto-called during quick_start.")
                             with ui.HStack(spacing=5):
                                 ui.Button("Randomize", width=100, height=35,
                                           clicked_fn=lambda: self._cmd_randomize_cups())
@@ -1546,7 +1664,12 @@ class DigitalTwin(omni.ext.IExt):
             world = World()
             print("Physics scene already exists, skipping initialization")
 
-        # Check for ground plane on stage and add if missing
+        # Check for ground plane on stage and add if missing.
+        # Two layers: a large default-gray collision plane covers the
+        # whole scene; a smaller configurable WORKSPACE_GROUND tile
+        # (visual only, no collision) sits on top inside the active
+        # pick-place region for high-contrast dataset frames. See
+        # GROUND_PLANE_* and WORKSPACE_GROUND_* module constants.
         ground_prim = stage.GetPrimAtPath("/World/defaultGroundPlane")
         if ground_prim and ground_prim.IsValid():
             print("Ground plane already exists, skipping")
@@ -1554,30 +1677,31 @@ class DigitalTwin(omni.ext.IExt):
             import numpy as np
             from isaacsim.core.api.objects import GroundPlane
             from pxr import Sdf
-            # color is a per-channel RGB float array in [0, 1]; black for
-            # max contrast against colored legos in dataset frames.
             GroundPlane(
                 prim_path="/World/defaultGroundPlane",
                 z_position=0.0,
-                size=5000,
-                color=np.array([0.0, 0.0, 0.0]),
+                size=GROUND_PLANE_SIZE_M,
+                color=np.array(GROUND_PLANE_COLOR),
             )
             # GroundPlane authors a UsdPreviewSurface shader at
             # /World/Looks/visual_material/shader with only diffuseColor
-            # set. Default roughness=0.5 makes the surface visibly shiny
-            # under the dome light, which shows up as bright reflections
-            # in the workspace camera frames. Force a fully matte surface
-            # for clean dataset images.
+            # set. Default roughness=0.5 leaves the surface visibly
+            # shiny; force fully matte for clean camera frames.
             shader = stage.GetPrimAtPath(
                 "/World/Looks/visual_material/shader")
             if shader and shader.IsValid():
                 shader.CreateAttribute(
                     "inputs:roughness", Sdf.ValueTypeNames.Float
-                ).Set(1.0)
+                ).Set(GROUND_PLANE_ROUGHNESS)
                 shader.CreateAttribute(
                     "inputs:metallic", Sdf.ValueTypeNames.Float
                 ).Set(0.0)
-            print("Added ground plane (black, matte)")
+            print(
+                f"Added ground plane (color={GROUND_PLANE_COLOR}, "
+                f"matte)")
+
+        # Workspace ground tile (visual overlay, no collision).
+        self._create_workspace_ground_tile(stage)
 
         # Add default dome light if no lights exist
         from pxr import UsdLux
@@ -1622,6 +1746,39 @@ class DigitalTwin(omni.ext.IExt):
         print(f"Viewport rendering {state}")
         if self._viewport_toggle_btn:
             self._viewport_toggle_btn.text = "Disable Viewport" if self._viewport_rendering_enabled else "Enable Viewport"
+
+    def _cmd_apply_workspace_ground(self):
+        """Read the 4 extent fields from the Workspace Ground UI panel
+        and re-author the workspace ground tile. Validates min < max
+        on each axis; complains in the log and returns on bad input.
+        """
+        x_min = self._wsg_x_min_model.as_float
+        x_max = self._wsg_x_max_model.as_float
+        y_min = self._wsg_y_min_model.as_float
+        y_max = self._wsg_y_max_model.as_float
+        if not (x_min < x_max and y_min < y_max):
+            print(
+                f"[workspace_ground] Invalid extents: "
+                f"X=({x_min}, {x_max}), Y=({y_min}, {y_max}) — "
+                f"min must be < max on each axis"
+            )
+            return
+        stage = omni.usd.get_context().get_stage()
+        self._create_workspace_ground_tile(
+            stage,
+            x_range=(x_min, x_max),
+            y_range=(y_min, y_max),
+        )
+
+    def _cmd_reset_workspace_ground(self):
+        """Snap the 4 extent fields back to WORKSPACE_GROUND_X_RANGE /
+        WORKSPACE_GROUND_Y_RANGE module defaults and re-author the tile.
+        """
+        self._wsg_x_min_model.set_value(WORKSPACE_GROUND_X_RANGE[0])
+        self._wsg_x_max_model.set_value(WORKSPACE_GROUND_X_RANGE[1])
+        self._wsg_y_min_model.set_value(WORKSPACE_GROUND_Y_RANGE[0])
+        self._wsg_y_max_model.set_value(WORKSPACE_GROUND_Y_RANGE[1])
+        self._cmd_apply_workspace_ground()
 
     async def quick_start(self):
         """Quick start: load scene, SO-ARM101, joint action graph, camera mount, lego objects, publishers.
@@ -1688,7 +1845,13 @@ class DigitalTwin(omni.ext.IExt):
         self.setup_bbox_publisher()
         await app.next_update_async()
 
-        # 8. Add cups with ArUco markers
+        # 8. Add cups with ArUco markers. Apply real-world calibration
+        # (CUP_LAYOUT_REAL_WORLD overrides) BEFORE add_cups so the
+        # placement uses calibrated offset + gap on first creation.
+        # reposition=False because cups don't exist yet — add_cups
+        # below reads CUP_LAYOUT directly.
+        print("--- Matching real-world cup calibration ---")
+        self._cmd_match_real_world(reposition=False)
         print("--- Adding cups ---")
         self.add_cups()
         await app.next_update_async()
@@ -1713,9 +1876,13 @@ class DigitalTwin(omni.ext.IExt):
             print(f"Workspace camera already exists at {ws_prim_path}, skipping creation.")
         else:
             ws_width, ws_height = 640, 480
-            ws_position = (0.6980338662434342, -0.3958419458255837, 0.45249457626357603)
-            # Hand-tuned for SO-ARM101 — overhead-front view of robot + cup arc
-            ws_quat_xyzw = (0.4306700623322567, 0.2612220733325859, 0.4480130626995852, 0.7386275255262917)
+            # Hand-tuned for SO-ARM101 — captured from the live workspace
+            # camera in a positioned session. To re-capture: orbit the
+            # Persp (or workspace) view to the desired pose, then read
+            # translate + orient via
+            # UsdGeom.Xformable(p).ComputeLocalToWorldTransform(0).
+            ws_position = (0.3336, 0.3111, 0.3533)
+            ws_quat_xyzw = (0.072761, 0.480595, 0.864072, 0.130818)
 
             ws_camera_prim = UsdGeom.Camera.Define(ws_stage, ws_prim_path)
             if ws_camera_prim:
@@ -2955,6 +3122,90 @@ class DigitalTwin(omni.ext.IExt):
                     if attr:
                         attr.Set(rgb)
 
+    def _create_workspace_ground_tile(self, stage, x_range=None, y_range=None):
+        """Author (or re-author) the workspace ground tile — a
+        visual-only quad that overlays /World/defaultGroundPlane in
+        the pick-place area.
+
+        Authored as a UsdGeom.Mesh with 4 vertices + 1 quad face (no
+        collision applied — the main ground plane handles physics).
+        Sits at z = WORKSPACE_GROUND_Z_OFFSET_M to avoid z-fighting.
+        Material is a UsdPreviewSurface bound to color/roughness from
+        the WORKSPACE_GROUND_* constants.
+
+        x_range / y_range: optional (min, max) tuples in world frame.
+        When omitted, falls back to the WORKSPACE_GROUND_X_RANGE /
+        WORKSPACE_GROUND_Y_RANGE module constants. The UI's Apply
+        callback passes new ranges here to re-author the tile in place.
+
+        No-op when the resolved x_range is None (lets the UI / a
+        constant flip disable the tile entirely).
+        """
+        x_range = x_range if x_range is not None else WORKSPACE_GROUND_X_RANGE
+        y_range = y_range if y_range is not None else WORKSPACE_GROUND_Y_RANGE
+        if x_range is None or y_range is None:
+            # Disabled: ensure no stale tile remains
+            existing = stage.GetPrimAtPath("/World/workspace_ground")
+            if existing and existing.IsValid():
+                stage.RemovePrim("/World/workspace_ground")
+            return
+
+        plane_path = "/World/workspace_ground"
+        # Always re-author so the UI can resize an existing tile in place.
+        existing = stage.GetPrimAtPath(plane_path)
+        if existing and existing.IsValid():
+            stage.RemovePrim(plane_path)
+
+        x_min, x_max = float(x_range[0]), float(x_range[1])
+        y_min, y_max = float(y_range[0]), float(y_range[1])
+        z = WORKSPACE_GROUND_Z_OFFSET_M
+
+        mesh = UsdGeom.Mesh.Define(stage, plane_path)
+        mesh.CreatePointsAttr([
+            Gf.Vec3f(x_min, y_min, z),
+            Gf.Vec3f(x_max, y_min, z),
+            Gf.Vec3f(x_max, y_max, z),
+            Gf.Vec3f(x_min, y_max, z),
+        ])
+        mesh.CreateFaceVertexCountsAttr([4])
+        mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
+        mesh.CreateExtentAttr([
+            Gf.Vec3f(x_min, y_min, z),
+            Gf.Vec3f(x_max, y_max, z),
+        ])
+        mesh.CreateNormalsAttr([Gf.Vec3f(0, 0, 1)] * 4)
+        mesh.SetNormalsInterpolation(UsdGeom.Tokens.faceVarying)
+
+        # Material — UsdPreviewSurface matte (created once, reused on
+        # subsequent re-authors).
+        looks_path = "/World/Looks"
+        UsdGeom.Scope.Define(stage, looks_path)
+        mat_path = f"{looks_path}/workspace_ground_matte"
+        if not stage.GetPrimAtPath(mat_path).IsValid():
+            mat = UsdShade.Material.Define(stage, mat_path)
+            shader = UsdShade.Shader.Define(stage, mat_path + "/shader")
+            shader.CreateIdAttr("UsdPreviewSurface")
+            shader.CreateInput(
+                "diffuseColor", Sdf.ValueTypeNames.Color3f
+            ).Set(Gf.Vec3f(*WORKSPACE_GROUND_COLOR))
+            shader.CreateInput(
+                "roughness", Sdf.ValueTypeNames.Float
+            ).Set(WORKSPACE_GROUND_ROUGHNESS)
+            shader.CreateInput(
+                "metallic", Sdf.ValueTypeNames.Float
+            ).Set(0.0)
+            mat.CreateSurfaceOutput().ConnectToSource(
+                shader.ConnectableAPI(), "surface")
+        material = UsdShade.Material(stage.GetPrimAtPath(mat_path))
+        UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim())
+        UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
+
+        print(
+            f"Authored workspace ground tile: "
+            f"X=({x_min:.3f}, {x_max:.3f}) m, "
+            f"Y=({y_min:.3f}, {y_max:.3f}) m"
+        )
+
     def _create_omnipbr_matte(self, mat_path, diffuse_rgb, roughness=0.8):
         """Create (or return existing) OmniPBR matte material at mat_path.
 
@@ -3415,10 +3666,20 @@ class DigitalTwin(omni.ext.IExt):
         CUP_LAYOUT["radius"] = self._cup_radius_slider.model.as_float
         CUP_LAYOUT["gap"] = self._cup_gap_slider.model.as_float
         CUP_LAYOUT["face_origin"] = self._cup_face_origin_cb.model.get_value_as_bool()
+        # Cluster offsets only present once the UI panel is built — guard
+        # so the function survives early calls from other layout edits.
+        if hasattr(self, "_cup_offset_x_slider"):
+            CUP_LAYOUT["cluster_offset_x"] = self._cup_offset_x_slider.model.as_float
+            CUP_LAYOUT["cluster_offset_y"] = self._cup_offset_y_slider.model.as_float
 
         self._cup_angle_label.text = f"{CUP_LAYOUT['angle_deg']:.0f}°"
         self._cup_radius_label.text = f"{CUP_LAYOUT['radius']:.2f}m"
         self._cup_gap_label.text = f"{CUP_LAYOUT['gap']*100:.0f}cm"
+        if hasattr(self, "_cup_offset_x_label"):
+            self._cup_offset_x_label.text = (
+                f"{CUP_LAYOUT.get('cluster_offset_x', 0.0)*100:.0f}cm")
+            self._cup_offset_y_label.text = (
+                f"{CUP_LAYOUT.get('cluster_offset_y', 0.0)*100:.0f}cm")
 
     def _reset_cup_defaults(self):
         """Reset cup layout sliders to defaults (deferred to next frame)."""
@@ -3434,9 +3695,66 @@ class DigitalTwin(omni.ext.IExt):
             self._cup_radius_label.text = f"{CUP_LAYOUT['radius']:.2f}m"
             self._cup_gap_label.text = f"{CUP_LAYOUT['gap']*100:.0f}cm"
             self._cup_face_origin_cb.model.set_value(CUP_LAYOUT.get("face_origin", True))
+            if hasattr(self, "_cup_offset_x_slider"):
+                self._cup_offset_x_slider.model.set_value(
+                    float(CUP_LAYOUT.get("cluster_offset_x", 0.0)))
+                self._cup_offset_y_slider.model.set_value(
+                    float(CUP_LAYOUT.get("cluster_offset_y", 0.0)))
+                self._cup_offset_x_label.text = (
+                    f"{CUP_LAYOUT.get('cluster_offset_x', 0.0)*100:.0f}cm")
+                self._cup_offset_y_label.text = (
+                    f"{CUP_LAYOUT.get('cluster_offset_y', 0.0)*100:.0f}cm")
             self._cup_updating = False
             print("[cups] Reset to defaults")
         asyncio.ensure_future(_do_reset())
+
+    def _cmd_match_real_world(self, reposition=True):
+        """Apply CUP_LAYOUT_REAL_WORLD overrides to CUP_LAYOUT and the
+        Containers UI sliders.
+
+        Only the keys present in CUP_LAYOUT_REAL_WORLD are touched
+        (currently cluster_offset_x, cluster_offset_y, gap) — the rest
+        of CUP_LAYOUT (mode, radius, angle_deg, color_order, etc.) is
+        preserved. Auto-called from quick_start, also bound to the
+        "Match Real World" button.
+
+        reposition: if True and cups already exist, re-place them via
+        _add_cups_from_ui so the real-world values take immediate
+        effect. Quick_start passes False because add_cups will run
+        AFTER this and pick up the live CUP_LAYOUT itself.
+        """
+        for key, value in CUP_LAYOUT_REAL_WORLD.items():
+            CUP_LAYOUT[key] = value
+        # Mirror to UI sliders (guard for early calls before UI exists).
+        self._cup_updating = True
+        try:
+            if hasattr(self, "_cup_offset_x_slider"):
+                self._cup_offset_x_slider.model.set_value(
+                    float(CUP_LAYOUT["cluster_offset_x"]))
+                self._cup_offset_y_slider.model.set_value(
+                    float(CUP_LAYOUT["cluster_offset_y"]))
+                self._cup_offset_x_label.text = (
+                    f"{CUP_LAYOUT['cluster_offset_x']*100:.0f}cm")
+                self._cup_offset_y_label.text = (
+                    f"{CUP_LAYOUT['cluster_offset_y']*100:.0f}cm")
+            if hasattr(self, "_cup_gap_slider"):
+                self._cup_gap_slider.model.set_value(
+                    float(CUP_LAYOUT["gap"]))
+                self._cup_gap_label.text = (
+                    f"{CUP_LAYOUT['gap']*100:.0f}cm")
+        finally:
+            self._cup_updating = False
+        print(
+            f"[cups] Matched real world: "
+            f"offset=({CUP_LAYOUT['cluster_offset_x']:.3f}, "
+            f"{CUP_LAYOUT['cluster_offset_y']:.3f}) m, "
+            f"gap={CUP_LAYOUT['gap']:.3f} m"
+        )
+        if reposition:
+            # If cups already exist, re-snap them via the standard path.
+            stage = omni.usd.get_context().get_stage()
+            if stage and stage.GetPrimAtPath("/World/Containers/cup_red").IsValid():
+                self._add_cups_from_ui()
 
     def _add_cups_from_ui(self):
         """Reposition existing cups with current UI settings.
@@ -3497,6 +3815,7 @@ class DigitalTwin(omni.ext.IExt):
             positions = _cup_positions_line(cup_widths)
         else:
             positions = _cup_positions_arc()
+        positions = _apply_cup_cluster_offset(positions)
 
         pan_xy = _get_pan_axis_xy()
         ground_z = getattr(self, "_ground_plane_z", 0.0)
@@ -3760,6 +4079,9 @@ class DigitalTwin(omni.ext.IExt):
                 else:
                     cup_widths = {c: 0.078 for c in sample_order}
                     positions = _cup_positions_line(cup_widths)
+                # Apply cluster offset BEFORE validation so the
+                # lego/robot-AABB checks see the actual placement.
+                positions = _apply_cup_cluster_offset(positions)
 
                 if _layout_valid(positions):
                     chosen_params = {
@@ -3899,6 +4221,7 @@ class DigitalTwin(omni.ext.IExt):
             positions = _cup_positions_line(cup_widths)
         else:
             positions = _cup_positions_arc()
+        positions = _apply_cup_cluster_offset(positions)
 
         # --- Second pass: apply transforms, collision, physics ---
         # Anchor cups around the shoulder pan axis, not world origin
