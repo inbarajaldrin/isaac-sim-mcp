@@ -463,22 +463,19 @@ def _get_usb_camera_usd_path():
     return "file://" + os.path.abspath(_local)
 
 
-# Each color maps to a list of (block_name, usd_filename) tuples — one per
-# block instance. Block name is the unique identifier used for the
-# /objects_poses_sim child_frame_id and the prim path under /World/Objects;
-# usd_filename is the source asset (multiple instances may reference the
-# same USD via different block names).
+# Each color maps to a list of unique USD filenames — one per block instance.
+# Each USD has a uniquely-named body prim matching its filename (e.g. red_2x2).
 #
-# Current scene contract: 2 of each color, all 2x3. Distractor legos
-# (non-target colors) remain so the policy must learn color discrimination
-# rather than picking by position.
+# We tried duplicating USD references for "2 of each color × 2x3 only" but
+# PhysX hangs in friction-patch generation when two rigid bodies share an
+# inner prim name (verified 2026-04-27 — quick_start hung after the 32-patch
+# limit warning). Going back to one-USD-per-instance with unique inner prim
+# names avoids the issue. Until we either rename inner prims post-reference
+# or generate per-instance USDs, the count is 3 sizes × 3 colors = 9 legos.
 LEGO_USDS = {
-    "red":    [("red_2x3_a", "lego_red_2x3.usd"),
-               ("red_2x3_b", "lego_red_2x3.usd")],
-    "green":  [("green_2x3_a", "lego_green_2x3.usd"),
-               ("green_2x3_b", "lego_green_2x3.usd")],
-    "blue":   [("blue_2x3_a", "lego_blue_2x3.usd"),
-               ("blue_2x3_b", "lego_blue_2x3.usd")],
+    "red":    ["lego_red_2x2.usd", "lego_red_2x3.usd", "lego_red_2x4.usd"],
+    "green":  ["lego_green_2x2.usd", "lego_green_2x3.usd", "lego_green_2x4.usd"],
+    "blue":   ["lego_blue_2x2.usd", "lego_blue_2x3.usd", "lego_blue_2x4.usd"],
 }
 
 # =============================================================================
@@ -4813,8 +4810,10 @@ class DigitalTwin(omni.ext.IExt):
             if not usds:
                 print(f"Warning: No USD files configured for color '{color_name}'")
                 continue
-            for block_name, usd_file in usds:
+            for usd_file in usds:
                 usd_path = _get_lego_folder() + usd_file
+                # Block name = USD body name (e.g. lego_red_2x2.usd -> red_2x2)
+                block_name = usd_file.replace('.usd', '').replace('lego_', '')
                 blocks.append((block_name, color_name, usd_path))
 
         # Check if all blocks already exist
