@@ -582,7 +582,7 @@ WORKSPACE_GROUND_ROUGHNESS = 1.0            # fully diffuse
 # joins at x=WORKSPACE_GROUND_X_RANGE[0] and extends 1.0m further in -X.
 WORKSPACE_EXT_TILE_X_RANGE = (-1.04, -0.04)
 WORKSPACE_EXT_TILE_Y_RANGE = WORKSPACE_GROUND_Y_RANGE   # same Y span (visually continuous)
-WORKSPACE_EXT_TILE_COLOR = (0.0889, 0.0332, 0.0238)      # warm dark brown — picker-tuned via sim-color-matcher (ratio apply)
+WORKSPACE_EXT_TILE_COLOR = (0.18941, 0.08416, 0.06668)   # warm brown — picker-tuned (re-take after restart) via sim-color-matcher
 WORKSPACE_EXT_TILE_ROUGHNESS = 1.0
 
 # "Interior daylight — robot on a table near two windows"
