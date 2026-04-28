@@ -148,6 +148,11 @@ Registered in `MCP_TOOL_REGISTRY` at the top of `exts/soarm101-dt/so_arm101_dt/e
 - **State**: `save_scene_state`, `restore_scene_state`, `sync_real_poses`
 - **Escape hatch**: `execute_python_code` (runs arbitrary code in Kit's Python context; set a `result` variable to return data)
 
+## Skills available
+
+- **`isaac-sim-extension-dev`** (`~/.claude/skills/`): provides `isaacsim_launch.sh` + port mappings — referenced throughout the bring-up sequence above.
+- **`sim-color-matcher`** (`.claude/skills/sim-color-matcher/`, project-local): pixel-level color matching from a real-world reference photo to sim materials. Browser-based drag-box picker → computes sRGB→linear ratio → applies to live `inputs:diffuseColor` via MCP. Two view modes (side-by-side, overlay), live ROS topic refresh, responsive layout. Use when tuning material colors against a photo — replaces eyeballed RGB guessing or vision-LLM color suggestions. Note: `.claude/` is gitignored at this repo root, so the skill is local-only unless an exception is added.
+
 ## Gotchas
 
 - **CUDA 999 on Isaac Sim startup** (`Failed to create any GPU devices`): reload UVM — `sudo rmmod nvidia_uvm && sudo modprobe nvidia_uvm`. Safe; doesn't touch display modules. Verify with `~/env_isaaclab/bin/python3 -c "import ctypes; print(ctypes.CDLL('libcuda.so.1').cuInit(0))"` — expect `0`.
@@ -165,14 +170,17 @@ Registered in `MCP_TOOL_REGISTRY` at the top of `exts/soarm101-dt/so_arm101_dt/e
 - **Cup collision padding is ROS-side only**: `_CUP_COLLISION_PADDING` (default 5% = 1.05) lives in `vla_SO-ARM101/.../control_gui.py` and only enlarges cups in MoveIt's planning scene. Isaac Sim's USD cup mesh is unchanged — physics contact telemetry (e.g. omni.physx contact-report subscription) stays honest. If you want padding-aware physics evaluation, that's a separate change in `soarm101-dt`'s scene-build path.
 - **Deterministic planner lives ROS-side**: vla_SO-ARM101 routes every arm motion through tier-1 linear → tier-2 retract-pan-settle → OMPL fallback (opt-in per primitive; `_cmd_grasp_home` opts OUT). End-to-end test scripts at `vla_SO-ARM101/scripts/{test_qs_cycle,sim_reset,test_pick_all}.sh`. Isaac Sim is the physics backend; the planner has zero awareness of physics state beyond `/joint_states` feedback. Planner-collision verdicts (planning-scene) and physics-contact verdicts (PhysX) intentionally don't agree — padding makes the planner conservative on top of physics ground-truth.
 - **`_attached_lego_tcp_offset` populated at attach time**: when `_cmd_gripper_close_for_object` succeeds, the held block's pose-in-tcp_link is captured and used by `_cmd_drop_sweep` to position the block (not tcp_link) over the cup center. Isaac Sim physics decides where the block actually settles after grasp_close — off-center attaches (typical: ~−12 mm in TCP X) are normal and the planner compensates. If physics changes (different lego mass/inertia, new gripper material), the typical offset magnitude can shift; verify with `Attach OK:` log line.
+- **Asyncio + `execute_python_code` deadlock**: NEVER use `asyncio.run_until_complete(...)` or `await app.next_update_async()` inside MCP `execute_python_code`. The handler runs on Kit's main thread; awaiting a future fulfilled by that same thread is an unrecoverable same-thread deadlock. Symptoms: socket stops responding, all viewport/replicator publishers stop emitting frames (their `on_frame` callbacks share the thread), even SIGTERM/SIGINT are ignored — only SIGKILL recovers (with the X11 caveat above). Same root cause as the existing `capture_viewport_to_file` warning. Pattern: set state and return immediately, let Kit advance naturally; if you need to wait for frames, do it from a separate process (e.g. via the ROS topic).
+- **`start_viewport_publisher` arg names**: the MCP tool takes `camera_prim_path` (NOT `camera_path`) and `topic_name` + optional `frame_id`. Passing `camera_path` returns `got an unexpected keyword argument 'camera_path'`.
+- **`/workspace_camera_sim` follows the active viewport**: `_ViewportCameraPublisher` captures whatever the *active main viewport* is rendering at any given moment, not the prim it was started against. If anything switches the active camera (`_set_active_viewport_camera`, a GUI camera-switch, or Replicator's render-product creation that pulls focus), the topic silently starts publishing the new view. To capture a specific camera deterministically: set the active viewport to it first AND don't await frame settlement (see deadlock gotcha). Compare to `/wrist_camera_rgb_sim` which uses `_ReplicatorCameraPublisher` with a dedicated render product — view-stable regardless of active viewport.
 
 ## Robot Facts (SO-ARM101)
 
 - 5-DOF arm: `shoulder_pan`, `shoulder_lift`, `elbow_flex`, `wrist_flex`, `wrist_roll` + `gripper_joint`.
 - Forward axis = `+X`, joint drives: stiffness=15, damping=0.15, maxForce=3.
 - **Drop motion is IK-planned, not a pure kinematic sweep** (despite the original design intent). Implemented in `vla_SO-ARM101/.../control_gui.py:_cmd_drop_sweep` — IK targets a wrist_flex ~55° pose using the MEASURED attach offset (`_attached_lego_tcp_offset`) and locks `shoulder_pan` to drop_point's value. drop_point itself is a pure pan rotation (only `shoulder_pan` and `wrist_roll` change). Cups anchored to shoulder pan axis (not world origin).
-- ArUco markers on cups: red=ID 0, green=1, blue=2 (DICT_4X4_50).
-- Wrist camera: OV9732 (640×480). Workspace camera: `/World/workspace_camera_sim` (created by Phase 13 workflows, pose mirrors ur5e-dt's).
+- ArUco markers on cups: red=ID 3, green=2, blue=1 (DICT_4X4_50). Remapped from the original 0/1/2 in Phase 10.2 commit `a3bd4aa` — mirrored across all 3 repos: `CUP_ARUCO_CONFIG` (soarm101-dt), `DROP_ID_LABELS` + `REAL_COLOR_TO_CUP` (control_gui), `aruco_config.json` (localizer).
+- Wrist camera: OV9732 (640×480). Workspace camera **prim**: `/World/workspace_camera`. **Topic**: `/workspace_camera_sim` (note the `_sim` suffix is on the topic name, NOT the prim path). When calling `start_viewport_publisher` the kwargs are `camera_prim_path=/World/workspace_camera`, `topic_name=workspace_camera_sim`.
 
 <!-- GSD:profile-start -->
 ## Developer Profile
