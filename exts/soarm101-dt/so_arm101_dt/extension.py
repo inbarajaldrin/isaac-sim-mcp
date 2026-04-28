@@ -562,7 +562,7 @@ BLOCK_RANDOM_LATERAL = (-0.10, 0.10)
 # Color + roughness control the "outdoors" look beyond the workspace
 # tile defined below.
 GROUND_PLANE_SIZE_M = 5000               # square edge length in meters
-GROUND_PLANE_COLOR = (0.45, 0.45, 0.45)  # neutral gray
+GROUND_PLANE_COLOR = (0.647, 0.648, 0.497)  # warm tan wall — picker-tuned via sim-color-matcher (ratio apply)
 GROUND_PLANE_ROUGHNESS = 1.0             # fully diffuse
 
 # Workspace ground tile — visual-only black quad that sits on top of
@@ -574,8 +574,16 @@ GROUND_PLANE_ROUGHNESS = 1.0             # fully diffuse
 WORKSPACE_GROUND_X_RANGE = (-0.04, 0.70)    # (x_min, x_max) world-frame X (forward), meters
 WORKSPACE_GROUND_Y_RANGE = (-0.35, 0.30)    # (y_min, y_max) world-frame Y (lateral), meters
 WORKSPACE_GROUND_Z_OFFSET_M = 0.002         # lift above main ground (z-fight avoidance)
-WORKSPACE_GROUND_COLOR = (0.10, 0.10, 0.10) # dark matte grey (matches real-world table reference)
+WORKSPACE_GROUND_COLOR = (0.035, 0.058, 0.077) # dark slate table — picker-tuned via sim-color-matcher (ratio apply)
 WORKSPACE_GROUND_ROUGHNESS = 1.0            # fully diffuse
+
+# Extension tile — visual-only floor patch joining the main workspace tile on its
+# -X edge. Independent material so it can be color-matched separately. The tile
+# joins at x=WORKSPACE_GROUND_X_RANGE[0] and extends 1.0m further in -X.
+WORKSPACE_EXT_TILE_X_RANGE = (-1.04, -0.04)
+WORKSPACE_EXT_TILE_Y_RANGE = WORKSPACE_GROUND_Y_RANGE   # same Y span (visually continuous)
+WORKSPACE_EXT_TILE_COLOR = (0.0889, 0.0332, 0.0238)      # warm dark brown — picker-tuned via sim-color-matcher (ratio apply)
+WORKSPACE_EXT_TILE_ROUGHNESS = 1.0
 
 # "Interior daylight — robot on a table near two windows"
 # Designed to match a real-world reference (warm interior, cream wall, soft window
@@ -585,16 +593,23 @@ WORKSPACE_GROUND_ROUGHNESS = 1.0            # fully diffuse
 #   - RectLight emits along local -Z; quaternions rotate -Z to face into the room
 #   - normalize=False (default) means larger area = more total flux at same intensity
 INTERIOR_DAYLIGHT_PRESET = (
-    # Key window: upper-left, large + soft, slightly cool window-light tint
-    {"kind": "RectLight", "name": "Window_Key", "intensity": 4500.0,
-     "width": 2.5, "height": 2.0, "color": (1.00, 0.97, 0.92),
-     "translate": (0.4, -1.2, 1.3),
+    # Key window: positioned high + far on -Y so its falloff doesn't streak the floor.
+    # Size widened to 4x3m for soft coverage. Intensity tuned with broad overhead fill.
+    {"kind": "RectLight", "name": "Window_Key", "intensity": 2500.0,
+     "width": 4.0, "height": 3.0, "color": (1.00, 0.97, 0.92),
+     "translate": (0.4, -2.5, 2.5),
      "quat_xyzw": (0.70711, 0.0, 0.0, 0.70711)},   # face +Y (into room)
     # Fill: opposite side, smaller + warmer (mimics warm interior bounce)
     {"kind": "RectLight", "name": "Fill_Right", "intensity": 1500.0,
      "width": 1.5, "height": 1.5, "color": (1.00, 0.92, 0.82),
      "translate": (0.4,  1.2, 1.0),
      "quat_xyzw": (-0.70711, 0.0, 0.0, 0.70711)},  # face -Y (into room)
+    # Top fill: large overhead RectLight that flattens floor color front-to-back.
+    # Eliminates the streak gradient the side-key would otherwise leave on the floor.
+    {"kind": "RectLight", "name": "Top_Fill", "intensity": 1000.0,
+     "width": 6.0, "height": 6.0, "color": (1.00, 0.98, 0.95),
+     "translate": (0.5, 0.0, 4.0),
+     "quat_xyzw": (0.0, 0.0, 0.0, 1.0)},   # identity — RectLight emits along -Z (down)
     # Heavy ambient bounce dome — warm cream (sim of white walls + warm furniture).
     # Provides the "everything is visible" effect of a real interior.
     {"kind": "DomeLight", "name": "Bounce", "intensity": 1000.0,
@@ -645,7 +660,7 @@ CUP_LAYOUT = dict(CUP_LAYOUT_DEFAULTS)
 # set in CUP_LAYOUT_DEFAULTS or the live UI.
 CUP_LAYOUT_REAL_WORLD = {
     "cluster_offset_x": 0.12,
-    "cluster_offset_y": 0.06,
+    "cluster_offset_y": 0.04,   # was 0.06 — re-calibrated against real rig
     "gap": 0.02,
 }
 
@@ -1274,6 +1289,30 @@ class DigitalTwin(omni.ext.IExt):
                         ui.Button("Reset to Defaults", width=140, height=30,
                                   clicked_fn=self._cmd_reset_workspace_ground)
 
+            with ui.CollapsableFrame(title="Workspace Ground Extension (-X)", collapsed=True, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    # Mirror layout of Workspace Ground panel — independent
+                    # tile joining the main one on its -X edge.
+                    self._wsg_ext_x_min_model = ui.SimpleFloatModel(WORKSPACE_EXT_TILE_X_RANGE[0])
+                    self._wsg_ext_x_max_model = ui.SimpleFloatModel(WORKSPACE_EXT_TILE_X_RANGE[1])
+                    self._wsg_ext_y_min_model = ui.SimpleFloatModel(WORKSPACE_EXT_TILE_Y_RANGE[0])
+                    self._wsg_ext_y_max_model = ui.SimpleFloatModel(WORKSPACE_EXT_TILE_Y_RANGE[1])
+                    with ui.HStack(spacing=5, height=0):
+                        ui.Label("X (forward) min:", width=120)
+                        ui.FloatField(model=self._wsg_ext_x_min_model, width=70)
+                        ui.Label("max:", width=40)
+                        ui.FloatField(model=self._wsg_ext_x_max_model, width=70)
+                    with ui.HStack(spacing=5, height=0):
+                        ui.Label("Y (lateral) min:", width=120)
+                        ui.FloatField(model=self._wsg_ext_y_min_model, width=70)
+                        ui.Label("max:", width=40)
+                        ui.FloatField(model=self._wsg_ext_y_max_model, width=70)
+                    with ui.HStack(spacing=5, height=0):
+                        ui.Button("Apply", width=80, height=30,
+                                  clicked_fn=self._cmd_apply_workspace_ext_tile)
+                        ui.Button("Reset to Defaults", width=140, height=30,
+                                  clicked_fn=self._cmd_reset_workspace_ext_tile)
+
             with ui.CollapsableFrame(title="SO-ARM101 Control", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
                     with ui.HStack(spacing=5):
@@ -1728,6 +1767,8 @@ class DigitalTwin(omni.ext.IExt):
 
         # Workspace ground tile (visual overlay, no collision).
         self._create_workspace_ground_tile(stage)
+        # Extension tile joining the main one on its -X edge (independent material).
+        self._create_workspace_ext_tile(stage)
 
         # Default lighting: interior daylight (key window + warm fill + bounce dome).
         # Matches the real-world reference scene; hides any pre-existing default lights
@@ -1815,6 +1856,26 @@ class DigitalTwin(omni.ext.IExt):
         self._wsg_y_min_model.set_value(WORKSPACE_GROUND_Y_RANGE[0])
         self._wsg_y_max_model.set_value(WORKSPACE_GROUND_Y_RANGE[1])
         self._cmd_apply_workspace_ground()
+
+    def _cmd_apply_workspace_ext_tile(self):
+        """Re-author the -X extension tile with the values from the UI fields."""
+        x_min = self._wsg_ext_x_min_model.as_float
+        x_max = self._wsg_ext_x_max_model.as_float
+        y_min = self._wsg_ext_y_min_model.as_float
+        y_max = self._wsg_ext_y_max_model.as_float
+        if not (x_min < x_max and y_min < y_max):
+            print(f"[ext_tile] Invalid extents: X=({x_min}, {x_max}), Y=({y_min}, {y_max})")
+            return
+        stage = omni.usd.get_context().get_stage()
+        self._create_workspace_ext_tile(stage, x_range=(x_min, x_max), y_range=(y_min, y_max))
+
+    def _cmd_reset_workspace_ext_tile(self):
+        """Reset ext-tile fields to module defaults and re-author."""
+        self._wsg_ext_x_min_model.set_value(WORKSPACE_EXT_TILE_X_RANGE[0])
+        self._wsg_ext_x_max_model.set_value(WORKSPACE_EXT_TILE_X_RANGE[1])
+        self._wsg_ext_y_min_model.set_value(WORKSPACE_EXT_TILE_Y_RANGE[0])
+        self._wsg_ext_y_max_model.set_value(WORKSPACE_EXT_TILE_Y_RANGE[1])
+        self._cmd_apply_workspace_ext_tile()
 
     _INTERIOR_DAYLIGHT_PREFIX = "/World/Lights/Interior_"
 
@@ -1969,8 +2030,8 @@ class DigitalTwin(omni.ext.IExt):
             # Persp (or workspace) view to the desired pose, then read
             # translate + orient via
             # UsdGeom.Xformable(p).ComputeLocalToWorldTransform(0).
-            ws_position = (0.3386, 0.3193, 0.3567)
-            ws_quat_xyzw = (0.069989, 0.443333, 0.882689, 0.139349)
+            ws_position = (0.36, 0.355, 0.34973)
+            ws_quat_xyzw = (0.095726, 0.481244, 0.861477, 0.130760)  # rotateXYZ(-57.187°, 16.905°, 172.0°)
 
             ws_camera_prim = UsdGeom.Camera.Define(ws_stage, ws_prim_path)
             if ws_camera_prim:
@@ -3317,8 +3378,9 @@ class DigitalTwin(omni.ext.IExt):
         mesh.CreateNormalsAttr([Gf.Vec3f(0, 0, 1)] * 4)
         mesh.SetNormalsInterpolation(UsdGeom.Tokens.faceVarying)
 
-        # Material — UsdPreviewSurface matte (created once, reused on
-        # subsequent re-authors).
+        # Material — UsdPreviewSurface matte. Created once and re-asserted on every
+        # call so changes to WORKSPACE_GROUND_COLOR / WORKSPACE_GROUND_ROUGHNESS
+        # propagate without needing a fresh stage.
         looks_path = "/World/Looks"
         UsdGeom.Scope.Define(stage, looks_path)
         mat_path = f"{looks_path}/workspace_ground_matte"
@@ -3326,17 +3388,19 @@ class DigitalTwin(omni.ext.IExt):
             mat = UsdShade.Material.Define(stage, mat_path)
             shader = UsdShade.Shader.Define(stage, mat_path + "/shader")
             shader.CreateIdAttr("UsdPreviewSurface")
-            shader.CreateInput(
-                "diffuseColor", Sdf.ValueTypeNames.Color3f
-            ).Set(Gf.Vec3f(*WORKSPACE_GROUND_COLOR))
-            shader.CreateInput(
-                "roughness", Sdf.ValueTypeNames.Float
-            ).Set(WORKSPACE_GROUND_ROUGHNESS)
-            shader.CreateInput(
-                "metallic", Sdf.ValueTypeNames.Float
-            ).Set(0.0)
+            shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f)
+            shader.CreateInput("roughness", Sdf.ValueTypeNames.Float)
+            shader.CreateInput("metallic", Sdf.ValueTypeNames.Float)
             mat.CreateSurfaceOutput().ConnectToSource(
                 shader.ConnectableAPI(), "surface")
+        # Re-assert (or initially set) the inputs every call
+        shader_prim = stage.GetPrimAtPath(mat_path + "/shader")
+        if shader_prim and shader_prim.IsValid():
+            shader_prim.GetAttribute("inputs:diffuseColor").Set(
+                Gf.Vec3f(*WORKSPACE_GROUND_COLOR))
+            shader_prim.GetAttribute("inputs:roughness").Set(
+                WORKSPACE_GROUND_ROUGHNESS)
+            shader_prim.GetAttribute("inputs:metallic").Set(0.0)
         material = UsdShade.Material(stage.GetPrimAtPath(mat_path))
         UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim())
         UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
@@ -3345,6 +3409,70 @@ class DigitalTwin(omni.ext.IExt):
             f"Authored workspace ground tile: "
             f"X=({x_min:.3f}, {x_max:.3f}) m, "
             f"Y=({y_min:.3f}, {y_max:.3f}) m"
+        )
+
+    def _create_workspace_ext_tile(self, stage, x_range=None, y_range=None):
+        """Author (or re-author) the -X extension tile joining the main workspace
+        tile at its -X edge. Visual-only quad with its own UsdPreviewSurface
+        material so it can be color-tuned independently.
+
+        Reads WORKSPACE_EXT_TILE_* module constants by default; pass
+        x_range / y_range to override (used by the UI Apply button).
+        Material inputs are re-asserted on every call so constants propagate."""
+        plane_path = "/World/workspace_ground_ext"
+        existing = stage.GetPrimAtPath(plane_path)
+        if existing and existing.IsValid():
+            stage.RemovePrim(plane_path)
+
+        xr = x_range if x_range is not None else WORKSPACE_EXT_TILE_X_RANGE
+        yr = y_range if y_range is not None else WORKSPACE_EXT_TILE_Y_RANGE
+        x_min, x_max = float(xr[0]), float(xr[1])
+        y_min, y_max = float(yr[0]), float(yr[1])
+        z = WORKSPACE_GROUND_Z_OFFSET_M
+
+        mesh = UsdGeom.Mesh.Define(stage, plane_path)
+        mesh.CreatePointsAttr([
+            Gf.Vec3f(x_min, y_min, z),
+            Gf.Vec3f(x_max, y_min, z),
+            Gf.Vec3f(x_max, y_max, z),
+            Gf.Vec3f(x_min, y_max, z),
+        ])
+        mesh.CreateFaceVertexCountsAttr([4])
+        mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
+        mesh.CreateExtentAttr([
+            Gf.Vec3f(x_min, y_min, z),
+            Gf.Vec3f(x_max, y_max, z),
+        ])
+        mesh.CreateNormalsAttr([Gf.Vec3f(0, 0, 1)] * 4)
+        mesh.SetNormalsInterpolation(UsdGeom.Tokens.faceVarying)
+
+        # Independent material — separate from workspace_ground_matte
+        looks_path = "/World/Looks"
+        UsdGeom.Scope.Define(stage, looks_path)
+        mat_path = f"{looks_path}/workspace_ground_ext_matte"
+        if not stage.GetPrimAtPath(mat_path).IsValid():
+            mat = UsdShade.Material.Define(stage, mat_path)
+            shader = UsdShade.Shader.Define(stage, mat_path + "/shader")
+            shader.CreateIdAttr("UsdPreviewSurface")
+            shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f)
+            shader.CreateInput("roughness", Sdf.ValueTypeNames.Float)
+            shader.CreateInput("metallic", Sdf.ValueTypeNames.Float)
+            mat.CreateSurfaceOutput().ConnectToSource(
+                shader.ConnectableAPI(), "surface")
+        # Re-assert inputs every call so constants changes propagate
+        sh = stage.GetPrimAtPath(mat_path + "/shader")
+        if sh and sh.IsValid():
+            sh.GetAttribute("inputs:diffuseColor").Set(Gf.Vec3f(*WORKSPACE_EXT_TILE_COLOR))
+            sh.GetAttribute("inputs:roughness").Set(WORKSPACE_EXT_TILE_ROUGHNESS)
+            sh.GetAttribute("inputs:metallic").Set(0.0)
+        material = UsdShade.Material(stage.GetPrimAtPath(mat_path))
+        UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim())
+        UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
+
+        print(
+            f"Authored workspace ext tile: "
+            f"X=({x_min:.3f}, {x_max:.3f}) m, "
+            f"Y=({y_min:.3f}, {y_max:.3f}) m (joins main tile at -X edge)"
         )
 
     def _create_omnipbr_matte(self, mat_path, diffuse_rgb, roughness=0.8):
