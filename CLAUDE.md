@@ -120,6 +120,22 @@ Interpret:
 
 Shutdown: `bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh close` (graceful SIGTERM). For the ROS2 stack: `pkill -SIGINT -f "ros2.*launch.*control.launch"` — SIGINT propagates to children, SIGTERM does not.
 
+### Recording stack (lerobot dataset capture on Linux)
+
+Once steps 1-3 above are up, the recording layer adds:
+
+7. **Mirror** (system Humble): `python3 -u ~/Projects/Exploring-VLAs/linux-env/scripts/joint_states_to_commands.py &` — mirrors `/joint_states` → `/joint_commands_lerobot` so lerobot has an action-column source.
+8. **Record Sim tab** (preferred path): in control_gui, press `▶ Start` on the Record Sim tab. Spawns lerobot-record + dedups mirror, runs N pick-place episodes, finalizes dataset on Stop. Driveable from CLI:
+   ```bash
+   ros2 service call /so_arm101_control_gui/rec_start std_srvs/srv/Trigger
+   ros2 service call /so_arm101_control_gui/rec_stop  std_srvs/srv/Trigger
+   ```
+   Configure via `set_widget_value` (Episodes spinbox, Block color combobox, action checkboxes — see `~/Projects/Exploring-VLAs/linux-env/CLAUDE.md`).
+
+9. **Manual lerobot-record** (alternative): `bash ~/Projects/Exploring-VLAs/linux-env/scripts/record_sim_isaac.sh --dataset.repo_id=local/<name> ...` — runs in pixi-Jazzy via the bash wrapper. Dataset lands at `~/.cache/huggingface/lerobot/local/<name>/`.
+
+Datasets viewable in rerun: `pixi run --manifest-path ~/Projects/Exploring-VLAs/linux-env/pixi.toml lerobot-dataset-viz --repo-id local/<name> --root <path> --episode-index 0 --mode local` (push into a running rerun on `localhost:9876`).
+
 ## MCP Tools (soarm101-dt extension.py)
 
 Registered in `MCP_TOOL_REGISTRY` at the top of `exts/soarm101-dt/so_arm101_dt/extension.py`. Socket protocol: `{"type": "<tool_name>", "params": {...}}` on `localhost:8767`.
@@ -138,7 +154,10 @@ Registered in `MCP_TOOL_REGISTRY` at the top of `exts/soarm101-dt/so_arm101_dt/e
 - **rclpy in Isaac Sim**: requires the Python 3.11 build at `/home/aaugus11/IsaacSim-ros_workspaces/build_ws/humble/humble_ws/install/local/lib/python3.11/dist-packages`. soarm101-dt's extension.py prepends this to `sys.path` at module load time — do not remove or rclpy node creation fails with `AttributeError: module 'rclpy' has no attribute 'impl'` followed by `rosidl_typesupport_c` not found.
 - **Hot-reload scope**: `touch exts/soarm101-dt/so_arm101_dt/extension.py` re-executes module-level code (classes, dicts, constants, imports). Full restart needed only for `extension.toml` changes or adding new `.py` files.
 - **Dedicated hidden viewports cost ~0.32 RTF each** (measured Phase 13). `_ViewportCameraPublisher.start()` supports active-viewport reuse only for this reason. For simultaneous multi-camera publishing, keep the action-graph path.
-- **Wrist camera uses an action graph** (`/Graph/ActionGraph_WristCamera`), not a viewport publisher. Don't "migrate" it — the action graph is already near-zero RTF cost and produces `/wrist_camera_rgb_sim` + `/wrist_camera_info` together.
+- **Wrist camera now uses `_ReplicatorCameraPublisher`** (hidden viewport, ~0.05 RTF), not the action graph. Kit 107.3 / isaacsim.ros2.bridge 4.9.3 silently fails to register the DDS publisher from `ROS2CameraHelper`. The class lives at `extension.py` near the top; quick_start wires it to `/World/SO_ARM101/.../wrist_camera`. The `setup_wrist_camera_action_graph` MCP tool still creates the graph (forward-compat) but the actual publisher is replicator-based. **Defensive camera_path re-bind**: `start()` sets `viewport.camera_path` immediately, but Kit drops the assignment when the viewport_api isn't fully constructed yet — the `on_frame` callback re-asserts it for the first 10 frames, otherwise the wrist topic renders `/OmniverseKit_Persp` instead of the wrist prim.
+- **Workspace camera uses `_ViewportCameraPublisher`** (active main-viewport reuse, ~0 RTF). Auto-created in `quick_start` at `/World/workspace_camera`. **Aspect-ratio fix**: `vfov` is derived from `hfov × H/W` (square-pixel formula); previously hardcoded RealSense 16:9 vfov (42.5°) on a 4:3 buffer caused a center-cropped "zoomed" frame.
+- **PhysX inner-prim collision hang**: if two rigid-body USD references resolve to the same inner prim name (e.g. spawning `/World/Objects/red_a/red_2x3` and `/World/Objects/red_b/red_2x3` from the same source USD), PhysX explodes during friction-patch generation and quick_start hangs after logging "Dropping contacts in solver because we exceeded limit of 32 friction patches." Keep `LEGO_USDS` at one unique USD per instance with unique inner body prim names. Multi-instance from a single USD requires either per-instance USD copies or a post-reference inner-prim rename.
+- **Don't `touch extension.py` mid-session**: Kit's hot-reload watcher re-executes module-level code, but if it races with an in-flight `quick_start` (or any MCP call that's spawning prims), the stage half-mutates and Isaac Sim hangs. Edit-then-restart is safer than edit-then-touch when a quick_start has run since launch.
 - **X11 GUI safety**: never `kill -9` Isaac Sim, RViz, or any process owning an X window (causes KWin BadWindow cascades). Use the skill's `close` subcommand or SIGTERM. Details in `~/.claude/CLAUDE.md` global rules.
 - **Ghost ROS2 topics** (publisher count = 0 after deleting an action graph prim): cycle the timeline — `tl.stop(); for _ in range(20): app.update(); tl.play()` — to flush the Kit ROS2 bridge publishers.
 - **Cross-extension stdout contamination**: if both `ur5e-dt` and `soarm101-dt` get loaded in the same Isaac Sim session, ur5e-dt's `LogRedirector` can hijack stdout and crash soarm101-dt's `on_startup` with `AttributeError: 'DigitalTwin' object has no attribute '_ext_log_lines'`. Fix by launching with only one `--enable` at a time via `isaacsim_launch.sh` (handles this).
