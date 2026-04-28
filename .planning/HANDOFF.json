@@ -1,95 +1,61 @@
 {
   "version": "1.0",
-  "timestamp": "2026-04-27T13:08:15-07:00",
+  "timestamp": "2026-04-27T19:00:00-07:00",
   "phase": "10.2",
   "phase_name": "lerobot-data-collection-linux-isaac-sim",
   "phase_dir": ".planning/phases/10.2-lerobot-data-collection-linux-isaac-sim",
   "plan": null,
   "task": null,
   "total_tasks": null,
-  "status": "blocked_pick_place_not_running_during_record",
+  "status": "paused_recording_works_scene_polish_remaining",
   "completed_tasks": [
-    {"id": 1, "name": "Fix .gitmodules junk line in Exploring-VLAs", "status": "done"},
-    {"id": 2, "name": "Init lerobot submodule + checkout ros2-camera-on-main", "status": "done"},
-    {"id": 3, "name": "Inspect lerobot pyproject.toml — Python 3.12+ required", "status": "done"},
-    {"id": 4, "name": "Create linux-env pixi env (robostack-jazzy + lerobot)", "status": "done"},
-    {"id": 5, "name": "Cross-boundary smoke test (system Humble Cyclone ↔ pixi Jazzy Cyclone)", "status": "done", "note": "Required force-overriding CYCLONEDDS_URI to a multicast-enabled config"},
-    {"id": 6, "name": "Bring up Isaac Sim + control stack + verify topics", "status": "done"},
-    {"id": 7, "name": "Write Linux record_sim_isaac.sh", "status": "done"},
-    {"id": 8, "name": "Wrist camera ROS2 publisher fix", "status": "done", "note": "Built _ReplicatorCameraPublisher (hidden viewport + capture_viewport_to_buffer) — bypasses broken Kit ROS2CameraHelper"},
-    {"id": 9, "name": "RGB encoding (alpha strip)", "status": "done", "note": "Done CONSUMER-side in lerobot's _msg_to_ndarray. Doing it in Isaac Sim's render-thread callback throttles RTF to ~1 Hz."},
-    {"id": 10, "name": "Workspace cam resolution change to 640x480", "status": "done_but_zoomed", "note": "Resolution is 640x480 but FOV intrinsics are still authored for 16:9 (HFOV=69.4 VFOV=42.5) — 4:3 viewport center-crops the wider FOV → 'zoomed' look. Wrist cam works because it uses square-pixel formula vfov=hfov*H/W."}
+    {"id": 1, "name": "Diagnose pick-place hang during recording", "status": "done", "commit": "6d9439d", "note": "Root cause was /joint_commands feedback loop via control_gui._ext_cmd_callback firing FollowJointTrajectory action goals at ~60/sec. Fix: mirror publishes to /joint_commands_lerobot."},
+    {"id": 2, "name": "linux-env directory + record_sim_isaac.sh + mirror", "status": "done", "commit": "6d9439d"},
+    {"id": 3, "name": "drop_point uses grasp_home wrist_roll; remove _drop_wrist_roll_sign", "status": "done", "commit": "5d328a4"},
+    {"id": 4, "name": "Record Sim tab in control_gui (closed-loop dataset recording)", "status": "done", "commit": "51b2f35"},
+    {"id": 5, "name": "Record Sim tab cleanup (mirror dedup, post-stop summary)", "status": "done", "commit": "bc5792e"},
+    {"id": 6, "name": "Wrist-cam + workspace-cam fixes (extension.py)", "status": "done", "commit": "64b60c4"},
+    {"id": 7, "name": "Scene cut to 2x3-only attempted, reverted (PhysX hang)", "status": "done", "commit": "07ac09e", "note": "e728e52 → 07ac09e. Duplicate USD references with same inner prim name caused PhysX friction-patch explosion."},
+    {"id": 8, "name": "CLAUDE.md docs updated across all repos with this session's learnings", "status": "done", "commit": "839b10d + 61d10cb"},
+    {"id": 9, "name": "End-to-end recording verified (4 episodes, 10672 frames, 122MB at rec_184236)", "status": "done"}
   ],
   "remaining_tasks": [
-    {"id": 11, "name": "Make pick-place actually run during recording", "status": "blocked", "note": "PRIMARY BLOCKER — robot DID NOT MOVE during 5-episode recording. control_gui's tkinter mainloop is starved under recording load → qs_refresh_all + qs_select services time out → qs_play has no lego selected → arm only moves during initial grasp_home (~3s) then stays still. Mac doesn't hit this because everything runs in one pixi process tree (no DDS cross-boundary contention)."},
-    {"id": 12, "name": "Fix workspace cam aspect ratio (4:3 → square pixels)", "status": "not_started", "note": "Change extension.py:1649 — replace `vfov_deg=42.5` with `vfov_deg = hfov_deg * ws_height / ws_width` (= 52.05° for 4:3 at hfov=69.4°). Mirror the wrist cam pattern at extension.py:2342."},
-    {"id": 13, "name": "Push reference dataset to HF + run verify_parity.py", "status": "not_started"},
-    {"id": 14, "name": "Write LEROBOT_ROS2_LINUX_SETUP.md doc", "status": "not_started"}
+    {"id": 10, "name": "Cut down legos by gating add_objects on a skip-list (don't refactor LEGO_USDS, just don't spawn some)", "status": "not_started", "note": "Try this once before any deeper asset refactor. Avoids PhysX hang from duplicate USDs."},
+    {"id": 11, "name": "Update ArUco marker positions in Isaac Sim to match real-world cup positions", "status": "not_started"},
+    {"id": 12, "name": "Change Isaac Sim ground plane color to black", "status": "not_started"},
+    {"id": 13, "name": "Audit + tune time parameters (duration_s) for grasp_home / drop_point / drop_sweep / grasp_move", "status": "not_started"},
+    {"id": 14, "name": "Episode definition change: 1 episode = 1 lego (was 2 per scene). Re-randomize after each episode. Update REC_LEGOS_BY_COLOR or loop logic.", "status": "not_started", "note": "User explicitly changed direction here."},
+    {"id": 15, "name": "ONE agent entry point in Exploring-VLAs that orchestrates aruco_camera_localizer + isaac-sim-mcp + control stack + recording", "status": "not_started"},
+    {"id": 16, "name": "Verify aruco_camera_localizer + isaac-sim-mcp launchable from the entry point", "status": "not_started"},
+    {"id": 17, "name": "Confirm full end-to-end pipeline ready (bring-up → record → valid dataset → schema parity)", "status": "not_started"},
+    {"id": 18, "name": "Push reference dataset to HF Hub", "status": "not_started", "note": "Pre-existing Phase 10.2 deliverable"},
+    {"id": 19, "name": "Run verify_parity.py against Mac-side reference", "status": "not_started"},
+    {"id": 20, "name": "Write LEROBOT_ROS2_LINUX_SETUP.md user-facing runbook", "status": "partial", "note": "Most content baked into linux-env/CLAUDE.md; still needs user-facing setup doc."}
   ],
   "blockers": [
-    {
-      "description": "Robot does not move during recording — control_gui services time out under DDS+GPU load",
-      "type": "technical",
-      "severity": "blocking",
-      "evidence": "Driver log shows: init grasp_home succeeds, then qs_refresh_all timeout 15s, qs_select timeout 15s, qs_play 'success=True dispatched' (async ack only), TIMEOUT after 90s. Standalone test (no recording) — same QS cycle completed in 30s.",
-      "workaround_options": [
-        "A. Record AFTER offline trajectory replay — run test_pick_all.sh standalone, log to rosbag, then replay+record in two passes",
-        "B. Bypass control_gui entirely — Python driver publishes directly to /arm_controller/joint_trajectory, computes IK from /objects_poses_sim + /drop_poses",
-        "C. Reduce concurrent load — drop one camera or lower fps so control_gui mainloop has CPU budget",
-        "D. Run the entire stack inside a single pixi env (Mac approach) — but Linux Humble doesn't have robostack equivalent for Python 3.12"
-      ]
-    },
-    {
-      "description": "Workspace camera 'zoomed' in rerun despite reporting 640x480",
-      "type": "technical",
-      "severity": "advisory",
-      "evidence": "User: 'workspace camera is zoomed in for some reason though it shows 640x480 wrist cam shows up correctly'. Aspect ratio mismatch: HFOV 69.4° + VFOV 42.5° were authored for 16:9 (1280x720); applying to 4:3 (640x480) center-crops the FOV.",
-      "workaround_options": [
-        "Replace vfov_deg=42.5 with computed vfov_deg = hfov_deg * H/W in extension.py:1649",
-        "OR use ws_width=640, ws_height=360 (16:9) instead of 4:3"
-      ]
-    },
-    {
-      "description": "ROS2 daemon repeatedly enters 'empty node name returned by RMW layer' state under load",
-      "type": "technical",
-      "severity": "advisory",
-      "evidence": "Multiple times during this session, ros2 CLI commands started failing with xmlrpc Fault. Recovery: ros2 daemon stop && start && wait 3s. Cyclonedds shared memory is fine; issue is daemon's xmlrpc layer getting overwhelmed with too many participants.",
-      "workaround_options": [
-        "Always restart daemon before service call sequences",
-        "Use direct rclpy from Python instead of ros2 CLI for all sequences"
-      ]
-    },
-    {
-      "description": "Multiple ros2 launches accumulate without proper teardown",
-      "type": "technical",
-      "severity": "advisory",
-      "evidence": "Saw 3 simultaneous control_gui processes at one point (PIDs 2548725, 2575711, 2621619) competing for the /so_arm101_control_gui name. Service calls would route to a random instance.",
-      "workaround_options": [
-        "Always pkill -SIGINT -f 'ros2.*launch.*control.launch' BEFORE relaunching",
-        "Wait 5+ seconds for full teardown",
-        "Verify with pgrep before relaunch"
-      ]
-    }
+    {"description": "Scene-side LEGO_USDS edits cannot use mid-session hot-reload", "type": "technical", "severity": "advisory", "workaround": "Always restart Isaac Sim cleanly (close + launch) when changing LEGO_USDS; never `touch extension.py` mid-session. Documented in isaac-sim-mcp/CLAUDE.md."},
+    {"description": "Duplicate USD references with same inner prim name → PhysX friction-patch explosion → quick_start hang", "type": "technical", "severity": "advisory", "workaround": "Spawn-skip approach (task 10) avoids this entirely by leaving LEGO_USDS unique. Per-instance USDs or post-reference inner-prim rename also work but are heavier."}
   ],
   "human_actions_pending": [
-    {"action": "Decide which workaround to use for pick-place-during-recording (A/B/C/D in blocker #1)", "context": "Mac approach (D) is structurally cleanest but requires building Linux equivalent. Approach (A) — record-after-replay — is most pragmatic.", "blocking": true},
-    {"action": "Verify rerun viewer actually shows live data when display is available", "context": "rerun process spawns correctly (port 9876, expect-data-soon) but I never confirmed the GUI window actually appeared — was running headless from Bash subshell. User reported workspace cam zoom in rerun — implying they CAN see it, so display works.", "blocking": false}
+    {"action": "Push commits to remotes (5 commits across 2 repos + 1 submodule)", "context": "All work is local. User said no pushes without approval. Branches: isaac-sim-mcp:so-arm101 (839b10d), Exploring-VLAs:main (61d10cb), lerobot:ros2-camera-on-main (9ef886ee).", "blocking": false},
+    {"action": "rm stale test artifact ~/Projects/Exploring-VLAs/vla_SO-ARM101/blue_2x3", "context": "From a misrouted bash test command. Untracked.", "blocking": false}
   ],
   "decisions": [
-    {"decision": "Use pixi + robostack-jazzy for the lerobot env (not system pip)", "rationale": "lerobot pyproject hard-pins Python>=3.12; system Humble is Python 3.10. Jazzy↔Humble IDL works for sensor_msgs/Image and JointState across the version step."},
-    {"decision": "Force CYCLONEDDS_URI to linux-env/cyclonedds.xml (multicast enabled on `lo`)", "rationale": "System default config (~/Documents/ros-mcp-server/cyclonedds_local.xml) has AllowMulticast=false, which blocks cross-process-tree discovery between system Humble and pixi Jazzy."},
-    {"decision": "Don't rename Isaac Sim publisher topics", "rationale": "User direction in this session — keep _sim suffixes. lerobot's BYOH `cameras` config maps any topic name to any feature key, so renaming is unnecessary. Object pose/bbox _sim vs _real are semantically different (USD truth vs ArUco detection) — collapsing them would erase information."},
-    {"decision": "Strip alpha consumer-side (lerobot _msg_to_ndarray patch), not at Isaac Sim publisher", "rationale": "Microbench said numpy alpha-strip was 4.7ms but actual production rate dropped to 1 Hz when stripping at the render-thread callback. Some Kit threshold throttles when callbacks take too long. Consumer-side strip leaves Isaac Sim at 18 Hz."},
-    {"decision": "Use hidden viewport for wrist cam (_ReplicatorCameraPublisher class), not action graph or replicator annotators", "rationale": "Action graph ROS2CameraHelper silently fails to register DDS publisher in Kit 107.3 (confirmed bug, prior session fb450bb8 reached same diagnosis). Replicator annotators + IsaacCamera require rep.orchestrator.step() which is async-only in Kit. Hidden viewport with viewport.updates_enabled=True forced is the only working path."},
-    {"decision": "joint_states_to_commands.py mirror to provide /joint_commands", "rationale": "Sim has no leader/follower split; planner IS the leader. control_gui doesn't publish /joint_commands. drive_base_yaw_sweep.py was a shim. Mirror approximates action ≈ achieved-state for behavioral cloning."},
-    {"decision": "Workspace camera at 640x480 default, matching wrist", "rationale": "User direction. But intrinsics (HFOV/VFOV) authored for 16:9 cause apparent zoom at 4:3 — needs follow-up fix in next session."}
+    {"decision": "Episode = 1 lego pick-place (not 2 per scene). Randomize after each episode.", "rationale": "User explicit direction. Simplifies loop, uniform episode lengths."},
+    {"decision": "Skip-spawn approach for cutting lego count (don't change LEGO_USDS shape)", "rationale": "Duplicate-USD refactor caused PhysX hang. Skip-spawn keeps the unique-USD invariant intact."},
+    {"decision": "/joint_commands_lerobot for recorder action source", "rationale": "Avoids feedback loop through control_gui._ext_cmd_callback. Confirmed via GPT review."},
+    {"decision": "Drop_point uses grasp_home wrist_roll directly (no sign flip)", "rationale": "Real Test's Drop Scan has its own SCAN_WRIST_ROLL_RAD constant. Drop Point in QS doesn't need to flip — saves ~177° wrist swing per cycle."},
+    {"decision": "Module-level constants for new code in control_gui (not class-level)", "rationale": "Class-level constants don't survive _hot_reload_logic — instance's __class__ ref points to the OLD class."},
+    {"decision": "No real pick-place verification (Always PASS criterion)", "rationale": "Q1 from form: trust QS sentinel, no pose check. Verified by user."},
+    {"decision": "Re-randomize on QS halt, retry same lego (max 5 retries)", "rationale": "Q2 from form: maximizes success rate. May want to lower the cap in future."}
   ],
   "uncommitted_files": [
-    "isaac-sim-mcp:exts/soarm101-dt/so_arm101_dt/extension.py — _ReplicatorCameraPublisher class + workspace cam 640x480 + viewport.resolution force + RunOnce gate restored in setup_wrist_camera_action_graph (forward-compat) + post-graph intrinsic re-authoring",
-    "Exploring-VLAs:lerobot/src/lerobot/cameras/ros2/camera_ros2.py — RGBA/BGRA → RGB strip in _msg_to_ndarray",
-    "Exploring-VLAs:linux-env/ — NEW directory: pixi.toml, cyclonedds.xml, scripts/{record_sim_isaac.sh, drive_pick_place.py, drive_pick_place_loop.sh, joint_states_to_commands.py, _lib.sh}, symlink to drive_base_yaw_sweep.py",
-    "Exploring-VLAs:.gitmodules — removed bogus 'url = submodule.lerobot.path' line"
+    "isaac-sim-mcp:mobileclip_blt.ts (untracked, not from this session)",
+    "Exploring-VLAs:dont-read.txt (untracked, not from this session)",
+    "Exploring-VLAs:rviz-ui-controller.skill, stl-mesh-analyzer.skill, x11-window-screenshot.skill (untracked skill artifacts)",
+    "Exploring-VLAs:stl_tools/ (untracked)",
+    "Exploring-VLAs:vla_SO-ARM101/blue_2x3 (untracked stale test artifact, can rm)"
   ],
-  "next_action": "Read .planning/phases/10.2-lerobot-data-collection-linux-isaac-sim/.continue-here.md FULLY before doing anything. Pick a workaround from blocker #1 (recommend option A or B). Test pick-and-place actually runs during recording BEFORE recording another dataset.",
-  "context_notes": "5+ hours of session debugging. Recording infrastructure works perfectly — all topics flow at correct rates (joint_states 50 Hz, wrist 22 Hz, top 22 Hz, joint_commands via mirror 50 Hz). Lerobot writes valid v3 datasets. The remaining blocker is the actual pick-and-place doesn't execute under DDS+GPU load. Standalone (no recording) it works in 30s. Mac doesn't hit this because they run everything in one pixi process tree."
+  "next_action": "Start with task 14 (episode = 1 lego) — it's the smallest behavior change and unblocks the new episode contract for everything downstream. Then task 10 (skip-spawn for fewer legos), then task 12 (black ground), then task 13 (timing audit), then task 11 (ArUco calibration), then tasks 15-17 (entry point + end-to-end verification).",
+  "context_notes": "Recording works end-to-end. The phase 10.2 ORIGINAL blocker (handoff at start of session: 'pick-place doesn't run during recording') is resolved at the architecture level. Remaining work is scene polish (lego count, ground color, marker calibration), motion-quality tuning (durations), one episode-loop semantic change, and packaging the bring-up into a single entry point. The Record Sim tab is the production interface — driven by ros2 service rec_start/rec_stop from CLI, no GUI focus needed. CLAUDE.md docs across all 5 files are updated with this session's learnings, so a fresh Claude can come in with full context."
 }
