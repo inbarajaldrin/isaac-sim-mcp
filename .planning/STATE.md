@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 10.1 COMPLETE (merge pushed) — Phase 10.2 (INSERTED) awaiting /gsd-plan-phase 10.2 (lerobot data collection on Linux + Isaac Sim)
-stopped_at: phase 10.2 inserted, awaiting /gsd-plan-phase or /gsd-discuss-phase 10.2
-last_updated: "2026-04-27T05:23:40.000Z"
+status: Phase 10.2 IN PROGRESS — scene polish complete (3 commits this session), pivoting to motion primitive fix + lerobot recording
+stopped_at: scene polish landed, next session = motion primitive investigation then lerobot E2E recording
+last_updated: "2026-04-28T19:45:17Z"
 progress:
   total_phases: 14
   completed_phases: 4
