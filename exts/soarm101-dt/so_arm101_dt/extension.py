@@ -472,10 +472,25 @@ def _get_usb_camera_usd_path():
 # limit warning). Going back to one-USD-per-instance with unique inner prim
 # names avoids the issue. Until we either rename inner prims post-reference
 # or generate per-instance USDs, the count is 3 sizes × 3 colors = 9 legos.
+# Each color maps to a list of (basename, usd_filename, count) tuples.
+# add_objects spawns `count` instances of each USD, named "{basename}_0",
+# "{basename}_1", ... etc. The first instance is created via AddReference
+# and the rest via isaacsim.core.cloner.Cloner(replicate_physics=True),
+# which registers per-instance PhysX views — avoiding the friction-patch
+# hang from naive multi-reference of the same source USD.
+#
+# Index-suffix naming is required because Cloner's PhysX replicator uses
+# `root_path + str(index)` for per-instance physics view registration.
+# The wrapper prim name and the USD's inner body prim name no longer
+# match for index>0, so _get_prim_path falls back to structural lookup
+# (find first child with UsdPhysics.RigidBodyAPI).
+#
+# Current scene contract: 2 of each color × 2x3 = 6 legos. Recording-side
+# REC_LEGOS_BY_COLOR (control_gui.py) MUST mirror the generated names.
 LEGO_USDS = {
-    "red":    ["lego_red_2x2.usd", "lego_red_2x3.usd", "lego_red_2x4.usd"],
-    "green":  ["lego_green_2x2.usd", "lego_green_2x3.usd", "lego_green_2x4.usd"],
-    "blue":   ["lego_blue_2x2.usd", "lego_blue_2x3.usd", "lego_blue_2x4.usd"],
+    "red":    [("red_2x3", "lego_red_2x3.usd", 2)],
+    "green":  [("green_2x3", "lego_green_2x3.usd", 2)],
+    "blue":   [("blue_2x3", "lego_blue_2x3.usd", 2)],
 }
 
 # =============================================================================
@@ -4803,18 +4818,25 @@ class DigitalTwin(omni.ext.IExt):
         stage = omni.usd.get_context().get_stage()
         target_path = "/World/Objects"
 
-        # Build expected block list — one block per USD file
+        # Build expected block list by expanding each (basename, usd, count)
+        # tuple into `count` named instances. Each instance gets a
+        # generated block_name like "{basename}_{i}" — the index-suffix
+        # naming required by Cloner's PhysX replicator (root_path + index).
+        # Each "spawn group" pairs (basename, usd_path, count) with its
+        # generated block_names so the cloning pass below can find them.
         blocks = []
+        spawn_groups = []  # [(basename, usd_path, [block_name_0, ...])]
         for color_name in BLOCK_COLORS:
-            usds = LEGO_USDS.get(color_name, [])
-            if not usds:
+            entries = LEGO_USDS.get(color_name, [])
+            if not entries:
                 print(f"Warning: No USD files configured for color '{color_name}'")
                 continue
-            for usd_file in usds:
+            for basename, usd_file, count in entries:
                 usd_path = _get_lego_folder() + usd_file
-                # Block name = USD body name (e.g. lego_red_2x2.usd -> red_2x2)
-                block_name = usd_file.replace('.usd', '').replace('lego_', '')
-                blocks.append((block_name, color_name, usd_path))
+                names = [f"{basename}_{i}" for i in range(count)]
+                spawn_groups.append((basename, usd_path, names))
+                for n in names:
+                    blocks.append((n, color_name, usd_path))
 
         # Check if all blocks already exist
         all_exist = stage.GetPrimAtPath(target_path) is not None and stage.GetPrimAtPath(target_path).IsValid()
@@ -4846,21 +4868,40 @@ class DigitalTwin(omni.ext.IExt):
 
         print(f"Adding {len(blocks)} lego blocks from {_get_lego_folder()}")
 
-        # First pass: create reference prims
+        # First pass: per spawn-group, AddReference the index-0 instance
+        # and clone indices 1..count-1 with Cloner(replicate_physics=True).
+        # The Cloner's physics replicator names clones via
+        # `root_path + str(index)`, hence root_path = "{target}/{basename}_".
+        from isaacsim.core.cloner import Cloner
+
+        for basename, usd_path, names in spawn_groups:
+            # Index 0: define + AddReference (the source for cloning)
+            src_block = names[0]
+            src_prim_path = f"{target_path}/{src_block}"
+            if not stage.GetPrimAtPath(src_prim_path).IsValid():
+                src_prim = stage.DefinePrim(src_prim_path)
+                src_prim.GetReferences().AddReference(usd_path)
+
+            # Indices 1..count-1: PhysX-safe Cloner duplication
+            clone_paths = [
+                f"{target_path}/{n}" for n in names[1:]
+                if not stage.GetPrimAtPath(f"{target_path}/{n}").IsValid()
+            ]
+            if clone_paths:
+                cloner = Cloner()
+                cloner.clone(
+                    source_prim_path=src_prim_path,
+                    prim_paths=clone_paths,
+                    replicate_physics=True,
+                    base_env_path=target_path,
+                    root_path=f"{target_path}/{basename}_",
+                )
+
+        # Second pass: ensure convexHull collision and resolve body paths
         body_paths = []
         for block_name, color_name, usd_path in blocks:
-            prim_path = f"{target_path}/{block_name}"
             body_path = self._get_prim_path(block_name, target_path)
             body_paths.append(body_path)
-
-            existing = stage.GetPrimAtPath(prim_path)
-            if existing and existing.IsValid():
-                continue
-
-            prim = stage.DefinePrim(prim_path)
-            prim.GetReferences().AddReference(usd_path)
-
-            # Ensure convexHull collision on the body prim
             body_prim = stage.GetPrimAtPath(body_path)
             if body_prim and body_prim.IsValid():
                 if body_prim.HasAPI(UsdPhysics.CollisionAPI):
@@ -5505,8 +5546,25 @@ class DigitalTwin(omni.ext.IExt):
         return files[-1]
 
     def _get_prim_path(self, object_name: str, folder_path: str = "/World/Objects") -> str:
-        """Get the full nested prim path for an object name (folder/{name}/{name})."""
-        return f"{folder_path}/{object_name}/{object_name}"
+        """Get the full nested prim path for an object's body prim.
+
+        Convention: f"{folder_path}/{object_name}/{object_name}" (legacy
+        single-instance case where wrapper name matches inner body name).
+        Falls back to the first child of the wrapper that has
+        UsdPhysics.RigidBodyAPI applied — needed for the multi-instance
+        case where Cloner produces wrappers like "red_2x3_a" wrapping a
+        USD whose inner body is still "red_2x3".
+        """
+        legacy = f"{folder_path}/{object_name}/{object_name}"
+        stage = omni.usd.get_context().get_stage()
+        if stage and stage.GetPrimAtPath(legacy).IsValid():
+            return legacy
+        wrapper = stage.GetPrimAtPath(f"{folder_path}/{object_name}") if stage else None
+        if wrapper and wrapper.IsValid():
+            for child in wrapper.GetChildren():
+                if child.HasAPI(UsdPhysics.RigidBodyAPI):
+                    return str(child.GetPath())
+        return legacy
 
     def _resolve_output_dir(self, output_dir=None):
         """Update internal output_dir if provided by MCP server."""
