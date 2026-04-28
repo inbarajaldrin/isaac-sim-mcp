@@ -962,6 +962,12 @@ MCP_TOOL_REGISTRY = {
         "description": "Reposition existing cups to match current CUP_LAYOUT settings WITHOUT rebuilding the /drop_poses action graph. Cup prims remain in place; only their xform + velocity are reset. If cups don't yet exist, falls back to delete+add (first-time creation path). Safe to call mid-simulation — /drop_poses keeps publishing throughout.",
         "parameters": {}
     },
+    "match_real_world": {
+        "description": "Reset CUP_LAYOUT to the real-world calibration values (CUP_LAYOUT_REAL_WORLD: cluster_offset_x, cluster_offset_y, gap) and reposition cups accordingly. This is the cup-setup branch of quick_start; call it from a reset script to return cups to the same poses they have on a fresh quick_start, regardless of any slider tweaks made since. Pass reposition=False to update CUP_LAYOUT in-place without moving existing cup prims.",
+        "parameters": {
+            "reposition": {"type": "boolean", "description": "if true (default), re-place cups via add_cups_from_ui so the values take immediate effect. False just updates CUP_LAYOUT.", "default": True}
+        }
+    },
     "randomize_cups": {
         "description": "Randomize cup layout by sampling CUP_LAYOUT params (mode/radius/angle/gap) and delegating placement to the existing _cup_positions_arc / _cup_positions_line generators. Each random sample is a coherent 3-cup layout (proper inter-cup spacing built in) — the function retries with fresh params until the resulting placement clears every lego footprint AND the robot's link AABBs (live-queried, so adaptive to the arm's current pose; call after grasp_home for the home-pose corridor exclusion). Defaults: radius ∈ [0.22, 0.30] m, angle ∈ [-50°, +50°], gap ∈ [0.005, 0.030] m, modes=('arc','line'). Yaw is anchored on the face-origin direction (ArUco markers face camera) with ±15° jitter. Cups teleported via the same Kit-command path as update_cups; /drop_poses wrappers auto-refreshed. After success, CUP_LAYOUT is left at the random params so subsequent 'Update' clicks reproduce the same layout.",
         "parameters": {
@@ -1077,6 +1083,7 @@ MCP_HANDLERS = {
     "delete_cups": "_cmd_delete_cups",
     "sort_into_cups": "_cmd_sort_into_cups",
     "update_cups": "_cmd_update_cups",
+    "match_real_world": "_cmd_match_real_world",
     "randomize_cups": "_cmd_randomize_cups",
     "quick_start": "_cmd_quick_start",
     "new_stage": "_cmd_new_stage",
@@ -4051,11 +4058,23 @@ class DigitalTwin(omni.ext.IExt):
             f"{CUP_LAYOUT['cluster_offset_y']:.3f}) m, "
             f"gap={CUP_LAYOUT['gap']:.3f} m"
         )
+        repositioned = False
         if reposition:
             # If cups already exist, re-snap them via the standard path.
             stage = omni.usd.get_context().get_stage()
             if stage and stage.GetPrimAtPath("/World/Containers/cup_red").IsValid():
                 self._add_cups_from_ui()
+                repositioned = True
+        return {
+            "status": "success",
+            "message": (
+                f"CUP_LAYOUT matched real-world: "
+                f"offset=({CUP_LAYOUT['cluster_offset_x']:.3f},"
+                f"{CUP_LAYOUT['cluster_offset_y']:.3f})m, "
+                f"gap={CUP_LAYOUT['gap']:.3f}m, "
+                f"repositioned={repositioned}"
+            ),
+        }
 
     def _add_cups_from_ui(self):
         """Reposition existing cups with current UI settings.
