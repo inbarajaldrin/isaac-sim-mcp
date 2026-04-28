@@ -4955,11 +4955,106 @@ class DigitalTwin(omni.ext.IExt):
             stage.RemovePrim(bbox_graph_path)
             print(f"Deleted {bbox_graph_path}")
 
-    def add_objects(self):
-        """Import lego blocks (2 per color) using unique pre-colored USDs.
+    def _get_or_make_lego_instance_usd(self, src_usd_path, instance_name):
+        """Generate (or return cached) a per-instance USD copy where the
+        inner body prim is renamed to instance_name.
 
-        Each USD has a uniquely-named body prim with RigidBodyAPI (like FMB).
-        Poses are applied to the body prim via _set_obj_prim_pose.
+        Per-instance USDs let multiple legos reference the SAME source
+        asset without sharing inner-prim names — sidesteps both the
+        PhysX friction-patch hang from duplicate inner names AND the
+        ROS2PublishTransformTree child_frame_id collision (which would
+        publish 'red_2x3' twice for two instances of the same source).
+
+        Returns the path to the instance USD. If the source's inner body
+        is already named instance_name (single-instance / matching name
+        case), returns src_usd_path unchanged.
+        """
+        from pxr import Sdf, Usd
+        # Load source as fresh stage (NOT a reference, so the inner prim
+        # is local to that stage and renamable).
+        src_stage = Usd.Stage.Open(src_usd_path)
+        if not src_stage:
+            print(f"[lego_instance] Failed to open {src_usd_path}")
+            return src_usd_path
+        src_layer = src_stage.GetRootLayer()
+        default_name = src_layer.defaultPrim
+        if not default_name:
+            # Find first rigid-body prim as fallback
+            for p in src_stage.Traverse():
+                if p.HasAPI(UsdPhysics.RigidBodyAPI):
+                    default_name = p.GetName()
+                    break
+        if not default_name:
+            print(f"[lego_instance] No body prim found in {src_usd_path}")
+            return src_usd_path
+        if default_name == instance_name:
+            return src_usd_path  # already correctly named, no copy needed
+
+        # Cached instance dir. _get_lego_folder() returns a file:// URI
+        # (used by AddReference); for filesystem ops we need the bare
+        # path. Recompute the local path directly to avoid URI parsing.
+        ext_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        cache_dir = os.path.join(ext_dir, "assets", "legos", "instances")
+        os.makedirs(cache_dir, exist_ok=True)
+        out_path = os.path.join(cache_dir, f"lego_{instance_name}.usda")
+        if os.path.isfile(out_path):
+            return out_path
+
+        # Copy source layer in memory and rename every prim spec whose
+        # name matches default_name (lego USDs are structured as
+        # Xform "red_2x3" / Mesh "red_2x3" — both need renaming so the
+        # inner mesh resolves at the legacy {wrapper}/{wrapper} body
+        # path AND ROS2PublishTransformTree gets a unique child_frame_id
+        # per instance).
+        new_layer = Sdf.Layer.CreateAnonymous(".usda")
+        new_layer.TransferContent(src_layer)
+
+        def _rename_recursive(prim_spec, old_name, new_name):
+            for child in list(prim_spec.nameChildren):
+                _rename_recursive(child, old_name, new_name)
+                if child.name == old_name:
+                    child.name = new_name
+
+        _rename_recursive(new_layer.pseudoRoot, default_name, instance_name)
+        new_layer.defaultPrim = instance_name
+
+        # Sdf rename doesn't rewrite path references inside relationship
+        # targets or attribute connections (e.g. material:binding =
+        # </red_2x3/green> still points to the pre-rename path).
+        # Patch via USDA text replacement post-export — USDA wraps every
+        # path reference in angle brackets, so a targeted prefix replace
+        # is unambiguous.
+        import re
+        import tempfile
+        with tempfile.NamedTemporaryFile(
+                suffix=".usda", delete=False) as tmp:
+            tmp_path = tmp.name
+        new_layer.Export(tmp_path)
+        with open(tmp_path) as f:
+            text = f.read()
+        os.unlink(tmp_path)
+        # Match </default_name> exactly and </default_name/...>
+        # (followed by '/' or '>') — leaves substrings inside
+        # comments / userProperties strings alone since those aren't
+        # wrapped in <>.
+        pattern = re.compile(
+            r"<(/" + re.escape(default_name) + r")(?=[/>])")
+        text = pattern.sub(f"</{instance_name}", text)
+        with open(out_path, "w") as f:
+            f.write(text)
+        print(f"[lego_instance] Generated {out_path}")
+        return out_path
+
+    def add_objects(self):
+        """Import lego blocks (N per color) using per-instance USD copies.
+
+        For each (basename, src_usd, count) tuple in LEGO_USDS, generates
+        `count` named instances ("{basename}_{i}") with per-instance USDs
+        whose inner body is renamed to match the wrapper. This keeps
+        wrapper name == inner body name (legacy {name}/{name} convention)
+        AND gives every instance a unique inner prim — no PhysX issue,
+        no TF collision in the /objects_poses_sim publisher.
+
         Skips entirely if all expected blocks already exist in the scene.
         """
         stage = omni.usd.get_context().get_stage()
@@ -5015,34 +5110,19 @@ class DigitalTwin(omni.ext.IExt):
 
         print(f"Adding {len(blocks)} lego blocks from {_get_lego_folder()}")
 
-        # First pass: per spawn-group, AddReference the index-0 instance
-        # and clone indices 1..count-1 with Cloner(replicate_physics=True).
-        # The Cloner's physics replicator names clones via
-        # `root_path + str(index)`, hence root_path = "{target}/{basename}_".
-        from isaacsim.core.cloner import Cloner
-
+        # First pass: per spawn-group, generate a per-instance USD per
+        # name and add a plain reference. Per-instance USDs guarantee
+        # unique inner-body prim names — sidesteps both the PhysX
+        # friction-patch hang AND the ROS2 frame_id collision that
+        # multi-reference of one source USD would cause.
         for basename, usd_path, names in spawn_groups:
-            # Index 0: define + AddReference (the source for cloning)
-            src_block = names[0]
-            src_prim_path = f"{target_path}/{src_block}"
-            if not stage.GetPrimAtPath(src_prim_path).IsValid():
-                src_prim = stage.DefinePrim(src_prim_path)
-                src_prim.GetReferences().AddReference(usd_path)
-
-            # Indices 1..count-1: PhysX-safe Cloner duplication
-            clone_paths = [
-                f"{target_path}/{n}" for n in names[1:]
-                if not stage.GetPrimAtPath(f"{target_path}/{n}").IsValid()
-            ]
-            if clone_paths:
-                cloner = Cloner()
-                cloner.clone(
-                    source_prim_path=src_prim_path,
-                    prim_paths=clone_paths,
-                    replicate_physics=True,
-                    base_env_path=target_path,
-                    root_path=f"{target_path}/{basename}_",
-                )
+            for n in names:
+                inst_prim_path = f"{target_path}/{n}"
+                if stage.GetPrimAtPath(inst_prim_path).IsValid():
+                    continue
+                inst_usd = self._get_or_make_lego_instance_usd(usd_path, n)
+                inst_prim = stage.DefinePrim(inst_prim_path)
+                inst_prim.GetReferences().AddReference(inst_usd)
 
         # Second pass: ensure convexHull collision and resolve body paths
         body_paths = []
@@ -5139,8 +5219,11 @@ class DigitalTwin(omni.ext.IExt):
         def get_objects_in_folder(stage, folder_path="/World/Objects"):
             """Scan Objects folder and return body prim paths for pose publishing.
 
-            Each object has two-level nesting: {folder}/{name}/{name}
-            where the inner prim has RigidBodyAPI (like FMB convention).
+            Uses self._get_prim_path which has a structural fallback (find
+            first child with UsdPhysics.RigidBodyAPI) — handles both the
+            legacy single-instance case (wrapper and inner share a name)
+            AND the Cloner multi-instance case (wrapper "red_2x3_0"
+            wrapping a USD whose inner body is still "red_2x3").
             """
             body_paths = []
             objects_prim = stage.GetPrimAtPath(folder_path)
@@ -5152,11 +5235,13 @@ class DigitalTwin(omni.ext.IExt):
                 object_name = child.GetName()
                 if object_name == "PhysicsMaterial":
                     continue
-                body_path = f"{folder_path}/{object_name}/{object_name}"
+                body_path = self._get_prim_path(object_name, folder_path)
                 body_prim = stage.GetPrimAtPath(body_path)
                 if body_prim and body_prim.IsValid():
                     body_paths.append(body_path)
                     print(f"Found: {body_path}")
+                else:
+                    print(f"Warning: no body prim resolved for {object_name}")
 
             return body_paths
 
