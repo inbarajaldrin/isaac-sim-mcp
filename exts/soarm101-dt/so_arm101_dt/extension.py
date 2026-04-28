@@ -1544,9 +1544,33 @@ class DigitalTwin(omni.ext.IExt):
         if ground_prim and ground_prim.IsValid():
             print("Ground plane already exists, skipping")
         else:
+            import numpy as np
             from isaacsim.core.api.objects import GroundPlane
-            GroundPlane(prim_path="/World/defaultGroundPlane", z_position=0.0, size=5000)
-            print("Added ground plane")
+            from pxr import Sdf
+            # color is a per-channel RGB float array in [0, 1]; black for
+            # max contrast against colored legos in dataset frames.
+            GroundPlane(
+                prim_path="/World/defaultGroundPlane",
+                z_position=0.0,
+                size=5000,
+                color=np.array([0.0, 0.0, 0.0]),
+            )
+            # GroundPlane authors a UsdPreviewSurface shader at
+            # /World/Looks/visual_material/shader with only diffuseColor
+            # set. Default roughness=0.5 makes the surface visibly shiny
+            # under the dome light, which shows up as bright reflections
+            # in the workspace camera frames. Force a fully matte surface
+            # for clean dataset images.
+            shader = stage.GetPrimAtPath(
+                "/World/Looks/visual_material/shader")
+            if shader and shader.IsValid():
+                shader.CreateAttribute(
+                    "inputs:roughness", Sdf.ValueTypeNames.Float
+                ).Set(1.0)
+                shader.CreateAttribute(
+                    "inputs:metallic", Sdf.ValueTypeNames.Float
+                ).Set(0.0)
+            print("Added ground plane (black, matte)")
 
         # Add default dome light if no lights exist
         from pxr import UsdLux
@@ -1621,6 +1645,13 @@ class DigitalTwin(omni.ext.IExt):
         await app.next_update_async()
         print("--- Attaching USB camera ---")
         self.attach_usb_camera()
+        await app.next_update_async()
+
+        # 4.5. Override 3D-printed-part materials to matte white plastic
+        # (servos keep their default urdf-imported material). Runs after
+        # the camera mount is attached so it can also be styled white.
+        print("--- Applying plastic-white material to robot prints ---")
+        self._apply_robot_plastic_material()
         await app.next_update_async()
 
         # 5. Setup wrist camera action graph
@@ -2916,6 +2947,112 @@ class DigitalTwin(omni.ext.IExt):
                     attr = desc.GetAttribute(attr_name)
                     if attr:
                         attr.Set(rgb)
+
+    def _create_omnipbr_matte(self, mat_path, diffuse_rgb, roughness=0.8):
+        """Create (or return existing) OmniPBR matte material at mat_path.
+
+        Uses CreateAndBindMdlMaterialFromLibrary then MovePrim to
+        relocate to the chosen Looks scope, then sets diffuse color +
+        roughness + metallic=0 for a matte plastic appearance.
+        """
+        stage = omni.usd.get_context().get_stage()
+        existing = stage.GetPrimAtPath(mat_path)
+        if existing and existing.IsValid():
+            return UsdShade.Material(existing)
+
+        looks_path = mat_path.rsplit("/", 1)[0]
+        UsdGeom.Scope.Define(stage, looks_path)
+        out = []
+        omni.kit.commands.execute(
+            "CreateAndBindMdlMaterialFromLibrary",
+            mdl_name="OmniPBR.mdl",
+            mtl_name="OmniPBR",
+            mtl_created_list=out,
+            select_new_prim=False,
+        )
+        if not out:
+            return None
+        omni.kit.commands.execute(
+            "MovePrim", path_from=out[0], path_to=mat_path
+        )
+        shader = stage.GetPrimAtPath(mat_path + "/Shader")
+        if shader and shader.IsValid():
+            shader.CreateAttribute(
+                "inputs:diffuse_color_constant",
+                Sdf.ValueTypeNames.Color3f,
+            ).Set(Gf.Vec3f(*diffuse_rgb))
+            shader.CreateAttribute(
+                "inputs:reflection_roughness_constant",
+                Sdf.ValueTypeNames.Float,
+            ).Set(roughness)
+            shader.CreateAttribute(
+                "inputs:metallic_constant",
+                Sdf.ValueTypeNames.Float,
+            ).Set(0.0)
+        return UsdShade.Material(stage.GetPrimAtPath(mat_path))
+
+    def _apply_robot_plastic_material(self):
+        """Override visuals of SO-ARM101 3D-printed parts.
+
+        Arm structural parts get matte white; the wrist camera mount
+        gets a distinct light-grey so it visually separates from the arm
+        in dataset frames. Servos (Feetech STS-3215, prim names
+        beginning with 'sts3215_') keep their URDF-imported material so
+        the dark servo body stays visible at each joint.
+
+        Each <link>/visuals Xform is a USD instance from the URDF
+        importer; authoring on instance-proxy children is forbidden, so
+        we de-instance per link first (essentially free with one robot
+        in scene since each "instance" is unique).
+        """
+        stage = omni.usd.get_context().get_stage()
+        if not stage.GetPrimAtPath("/World/SO_ARM101").IsValid():
+            return
+
+        looks_path = "/World/SO_ARM101/Looks"
+        white = self._create_omnipbr_matte(
+            f"{looks_path}/plastic_white_matte",
+            diffuse_rgb=(0.92, 0.92, 0.92),
+        )
+        grey = self._create_omnipbr_matte(
+            f"{looks_path}/plastic_grey_light_matte",
+            diffuse_rgb=(0.55, 0.55, 0.55),
+        )
+        if not white:
+            return
+
+        bound = 0
+        skipped = 0
+        for link in stage.GetPrimAtPath("/World/SO_ARM101").GetChildren():
+            visuals = stage.GetPrimAtPath(f"{link.GetPath()}/visuals")
+            if not visuals or not visuals.IsValid():
+                continue
+            if visuals.IsInstanceable():
+                visuals.SetInstanceable(False)
+            for p in visuals.GetChildren():
+                if p.GetName().startswith("sts3215_"):
+                    skipped += 1
+                    continue
+                UsdShade.MaterialBindingAPI.Apply(p)
+                UsdShade.MaterialBindingAPI(p).Bind(white)
+                bound += 1
+
+        # Wrist camera mount: distinct light-grey so it pops against the
+        # white arm in camera frames. USB camera body next to it stays
+        # at its imported default (it's electronics, not a 3D print).
+        cam_mount = stage.GetPrimAtPath(
+            "/World/SO_ARM101/camera_mount_link/camera_wrist_mount")
+        grey_bound = 0
+        if cam_mount and cam_mount.IsValid() and grey:
+            UsdShade.MaterialBindingAPI.Apply(cam_mount)
+            UsdShade.MaterialBindingAPI(cam_mount).Bind(grey)
+            grey_bound = 1
+
+        print(
+            f"[plastic] Bound matte-white to {bound} parts, "
+            f"matte-grey to {grey_bound} parts, "
+            f"skipped {skipped} servos"
+        )
 
     def _get_blocks_by_color(self, color=None, folder_path="/World/Objects"):
         """Get block names filtered by color. If color is None, return all blocks."""
