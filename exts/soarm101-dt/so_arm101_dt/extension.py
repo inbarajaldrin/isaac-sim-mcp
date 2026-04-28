@@ -413,8 +413,8 @@ OBJECTS_CONFIG = {
 # Shared color palette — cups and legos use the same colors so they visually match.
 # Values are in LINEAR RGB (what USD materials expect).
 OBJECT_COLORS = {
-    "red":    (0.629, 0.108, 0.000),   # reddish orange
-    "green":  (0.255, 0.676, 0.003),   # lime green
+    "red":    (1.000, 0.036, 0.000),   # bright red-orange
+    "green":  (0.182, 0.404, 0.014),   # deep grass green
     "blue":   (0.000, 0.138, 0.487),
     # "yellow": (0.863, 0.765, 0.110),
 }
@@ -574,8 +574,34 @@ GROUND_PLANE_ROUGHNESS = 1.0             # fully diffuse
 WORKSPACE_GROUND_X_RANGE = (-0.04, 0.70)    # (x_min, x_max) world-frame X (forward), meters
 WORKSPACE_GROUND_Y_RANGE = (-0.35, 0.30)    # (y_min, y_max) world-frame Y (lateral), meters
 WORKSPACE_GROUND_Z_OFFSET_M = 0.002         # lift above main ground (z-fight avoidance)
-WORKSPACE_GROUND_COLOR = (0.0, 0.0, 0.0)    # matte black
+WORKSPACE_GROUND_COLOR = (0.10, 0.10, 0.10) # dark matte grey (matches real-world table reference)
 WORKSPACE_GROUND_ROUGHNESS = 1.0            # fully diffuse
+
+# "Interior daylight — robot on a table near two windows"
+# Designed to match a real-world reference (warm interior, cream wall, soft window
+# light from upper-left, no direct sun visible on subject). Verified against UsdLux:
+#   - inputs:intensity is luminance in nits (cd/m²) per LightAPI spec
+#   - RectLight width/height are scene units (meters; metersPerUnit=1)
+#   - RectLight emits along local -Z; quaternions rotate -Z to face into the room
+#   - normalize=False (default) means larger area = more total flux at same intensity
+INTERIOR_DAYLIGHT_PRESET = (
+    # Key window: upper-left, large + soft, slightly cool window-light tint
+    {"kind": "RectLight", "name": "Window_Key", "intensity": 4500.0,
+     "width": 2.5, "height": 2.0, "color": (1.00, 0.97, 0.92),
+     "translate": (0.4, -1.2, 1.3),
+     "quat_xyzw": (0.70711, 0.0, 0.0, 0.70711)},   # face +Y (into room)
+    # Fill: opposite side, smaller + warmer (mimics warm interior bounce)
+    {"kind": "RectLight", "name": "Fill_Right", "intensity": 1500.0,
+     "width": 1.5, "height": 1.5, "color": (1.00, 0.92, 0.82),
+     "translate": (0.4,  1.2, 1.0),
+     "quat_xyzw": (-0.70711, 0.0, 0.0, 0.70711)},  # face -Y (into room)
+    # Heavy ambient bounce dome — warm cream (sim of white walls + warm furniture).
+    # Provides the "everything is visible" effect of a real interior.
+    {"kind": "DomeLight", "name": "Bounce", "intensity": 1000.0,
+     "color": (1.00, 0.96, 0.90),
+     "translate": (0.0, 0.0, 0.0),
+     "quat_xyzw": (0.0, 0.0, 0.0, 1.0)},
+)
 
 # Cup container assets (one per block color)
 CUP_USDS = {
@@ -1703,22 +1729,32 @@ class DigitalTwin(omni.ext.IExt):
         # Workspace ground tile (visual overlay, no collision).
         self._create_workspace_ground_tile(stage)
 
-        # Add default dome light if no lights exist
-        from pxr import UsdLux
-        has_light = False
-        for prim in stage.Traverse():
-            if prim.IsA(UsdLux.DomeLight) or prim.IsA(UsdLux.DistantLight):
-                has_light = True
-                break
-        if not has_light:
-            dome = UsdLux.DomeLight.Define(stage, "/World/defaultDomeLight")
-            dome.CreateIntensityAttr().Set(1000.0)
-            print("Added default dome light at 1000 lux")
+        # Default lighting: interior daylight (key window + warm fill + bounce dome).
+        # Matches the real-world reference scene; hides any pre-existing default lights
+        # non-destructively. Falls back to a plain dome if the preset apply fails.
+        try:
+            self._apply_interior_daylight()
+        except Exception as e:
+            print(f"[load_scene] interior-daylight auto-apply failed: {e} — falling back to default dome")
+            from pxr import UsdLux
+            has_light = any(prim.IsA(UsdLux.DomeLight) or prim.IsA(UsdLux.DistantLight)
+                            for prim in stage.Traverse())
+            if not has_light:
+                dome = UsdLux.DomeLight.Define(stage, "/World/defaultDomeLight")
+                dome.CreateIntensityAttr().Set(1000.0)
+                print("Added default dome light at 1000 lux (fallback)")
 
         # Set minimum frame rate to 60
         settings = carb.settings.get_settings()
         settings.set("/persistent/simulation/minFrameRate", self._min_frame_rate)
         print(f"Set persistent/simulation/minFrameRate to {self._min_frame_rate}")
+
+        # Set the persistent viewport flag that suppresses Kit's auto-generated camera
+        # icons. The actual prim-deactivation runs at the END of quick_start (after cameras
+        # are created — the load_scene step happens BEFORE camera creation, so a SetActive
+        # loop here would find nothing). See _suppress_camera_mesh_decorations.
+        for vid in range(4):
+            settings.set(f"/persistent/app/viewport/Viewport/Viewport{vid}/scene/cameras/visible", False)
 
         # Configure physics scene
         physics_scene_prim = stage.GetPrimAtPath("/physicsScene")
@@ -1779,6 +1815,58 @@ class DigitalTwin(omni.ext.IExt):
         self._wsg_y_min_model.set_value(WORKSPACE_GROUND_Y_RANGE[0])
         self._wsg_y_max_model.set_value(WORKSPACE_GROUND_Y_RANGE[1])
         self._cmd_apply_workspace_ground()
+
+    _INTERIOR_DAYLIGHT_PREFIX = "/World/Lights/Interior_"
+
+    def _apply_interior_daylight(self):
+        """Apply the INTERIOR_DAYLIGHT_PRESET (key window + warm fill + soft dome bounce).
+        Hides any pre-existing lights non-destructively (they remain on stage as
+        invisible prims). See the constant's docstring for the design notes."""
+        from pxr import UsdLux
+        stage = omni.usd.get_context().get_stage()
+
+        # Ensure /World/Lights scope
+        scope = stage.GetPrimAtPath("/World/Lights")
+        if not scope or not scope.IsValid():
+            UsdGeom.Scope.Define(stage, "/World/Lights")
+
+        # Hide every non-preset light (recoverable: just MakeVisible() to restore)
+        hidden = 0
+        for prim in stage.Traverse():
+            if not str(prim.GetTypeName()).endswith("Light"):
+                continue
+            if str(prim.GetPath()).startswith(self._INTERIOR_DAYLIGHT_PREFIX):
+                continue
+            img = UsdGeom.Imageable(prim)
+            if img and img.ComputeVisibility() != UsdGeom.Tokens.invisible:
+                img.MakeInvisible()
+                hidden += 1
+
+        # Author preset lights (idempotent — Define is no-op on existing prims)
+        for spec in INTERIOR_DAYLIGHT_PRESET:
+            path = f"{self._INTERIOR_DAYLIGHT_PREFIX}{spec['name']}"
+            kind = spec["kind"]
+            if kind == "RectLight":
+                light = UsdLux.RectLight.Define(stage, path)
+                light.CreateWidthAttr().Set(spec["width"])
+                light.CreateHeightAttr().Set(spec["height"])
+            elif kind == "DomeLight":
+                light = UsdLux.DomeLight.Define(stage, path)
+            else:
+                continue
+            light.CreateIntensityAttr().Set(spec["intensity"])
+            if "color" in spec:
+                light.CreateColorAttr().Set(Gf.Vec3f(*spec["color"]))
+            UsdGeom.Imageable(light.GetPrim()).MakeVisible()
+
+            xform = UsdGeom.Xform(light.GetPrim())
+            xform.ClearXformOpOrder()
+            tx, ty, tz = spec["translate"]
+            xform.AddTranslateOp().Set(Gf.Vec3d(tx, ty, tz))
+            qx, qy, qz, qw = spec["quat_xyzw"]
+            xform.AddOrientOp().Set(Gf.Quatf(qw, qx, qy, qz))
+        print(f"Applied interior daylight: {len(INTERIOR_DAYLIGHT_PRESET)} lights "
+              f"(hid {hidden} pre-existing).")
 
     async def quick_start(self):
         """Quick start: load scene, SO-ARM101, joint action graph, camera mount, lego objects, publishers.
@@ -1881,8 +1969,8 @@ class DigitalTwin(omni.ext.IExt):
             # Persp (or workspace) view to the desired pose, then read
             # translate + orient via
             # UsdGeom.Xformable(p).ComputeLocalToWorldTransform(0).
-            ws_position = (0.3336, 0.3111, 0.3533)
-            ws_quat_xyzw = (0.072761, 0.480595, 0.864072, 0.130818)
+            ws_position = (0.3386, 0.3193, 0.3567)
+            ws_quat_xyzw = (0.069989, 0.443333, 0.882689, 0.139349)
 
             ws_camera_prim = UsdGeom.Camera.Define(ws_stage, ws_prim_path)
             if ws_camera_prim:
@@ -1977,7 +2065,36 @@ class DigitalTwin(omni.ext.IExt):
         await app.next_update_async()
         self._setup_contact_sensors()
 
+        # Suppress Kit's auto-authored camera icon meshes now that cameras exist.
+        # SetActive(False) beats MakeInvisible here — Kit re-asserts visibility on
+        # decoration prims, but it leaves deactivated prims alone (they're not
+        # visited by stage.Traverse()).
+        self._suppress_camera_mesh_decorations()
+
         print("=== Quick Start Complete ===")
+
+    def _suppress_camera_mesh_decorations(self):
+        """Deactivate every OmniverseKitViewportCameraMesh on the live stage. Called
+        at the end of quick_start once all cameras (workspace + wrist) have been
+        authored and Kit has decorated them. The persistent viewport flag set in
+        load_scene only suppresses FUTURE gizmos; this handles the existing ones.
+        Snapshots paths first to avoid expired-prim errors on a mid-flux stage."""
+        stage = omni.usd.get_context().get_stage()
+        paths = []
+        for prim in stage.Traverse():
+            try:
+                if prim.GetName() == "OmniverseKitViewportCameraMesh":
+                    paths.append(str(prim.GetPath()))
+            except Exception:
+                pass
+        deactivated = 0
+        for path in paths:
+            p = stage.GetPrimAtPath(path)
+            if p and p.IsValid():
+                p.SetActive(False)
+                deactivated += 1
+        if deactivated:
+            print(f"Deactivated {deactivated} OmniverseKitViewportCameraMesh prim(s)")
 
     async def load_robot(self):
         # Local fixed USD only (base_delta and camera mount reference baked in)
@@ -3108,19 +3225,43 @@ class DigitalTwin(omni.ext.IExt):
         return None
 
     def _set_block_material_color(self, prim_path, color_rgb):
-        """Override the color of all shaders under a prim (UsdPreviewSurface + OmniPBR)."""
+        """Override color + plastic look on every shader under a prim. All edits are
+        runtime overrides on the live stage — nothing is baked back into source USDs.
+
+        Tuned against the WhatsApp real-world reference (matte plastic, mild sheen,
+        no waxy/wet look). Doc range for 'glossy molded plastic' was clearcoat 0.1-0.3
+        but our ambient-dominant lighting (DomeLight @ 1000 nits) amplifies it ~2×, so
+        we sit at the low end. Values:
+            roughness         0.45    (matches casual everyday-LEGO look in the photo)
+            specular          0.20    (low — matte injection-molded ABS)
+            clearcoat         0.05    (just enough to read as plastic, no sheen)
+            clearcoatRoughness 0.10   (sharp coat reflection if it does show)
+            metallic          0       (always for plastic)
+        """
         stage = omni.usd.get_context().get_stage()
         prim = stage.GetPrimAtPath(prim_path)
         if not prim or not prim.IsValid():
             return
         rgb = Gf.Vec3f(*color_rgb)
         for desc in Usd.PrimRange(prim):
-            if desc.IsA(UsdShade.Shader):
-                # UsdPreviewSurface
-                for attr_name in ("inputs:diffuseColor", "inputs:diffuse_color_constant"):
-                    attr = desc.GetAttribute(attr_name)
-                    if attr:
-                        attr.Set(rgb)
+            if not desc.IsA(UsdShade.Shader):
+                continue
+            # Diffuse — both UsdPreviewSurface and OmniPBR naming
+            for attr_name in ("inputs:diffuseColor", "inputs:diffuse_color_constant"):
+                attr = desc.GetAttribute(attr_name)
+                if attr:
+                    attr.Set(rgb)
+            # UsdPreviewSurface plastic look (no-ops on OmniPBR shaders)
+            for attr_name, value in (
+                ("inputs:roughness", 0.45),
+                ("inputs:specular", 0.20),
+                ("inputs:clearcoat", 0.05),
+                ("inputs:clearcoatRoughness", 0.10),
+                ("inputs:metallic", 0.0),
+            ):
+                a = desc.GetAttribute(attr_name)
+                if a and a.IsValid():
+                    a.Set(value)
 
     def _create_workspace_ground_tile(self, stage, x_range=None, y_range=None):
         """Author (or re-author) the workspace ground tile — a
@@ -3212,10 +3353,25 @@ class DigitalTwin(omni.ext.IExt):
         Uses CreateAndBindMdlMaterialFromLibrary then MovePrim to
         relocate to the chosen Looks scope, then sets diffuse color +
         roughness + metallic=0 for a matte plastic appearance.
+
+        If the material already exists, re-asserts diffuse/roughness/metallic
+        on its shader so callers can re-tune by changing arguments without
+        having to delete-and-recreate.
         """
         stage = omni.usd.get_context().get_stage()
         existing = stage.GetPrimAtPath(mat_path)
         if existing and existing.IsValid():
+            sh = stage.GetPrimAtPath(mat_path + "/Shader")
+            if sh and sh.IsValid():
+                d = sh.GetAttribute("inputs:diffuse_color_constant")
+                if d and d.IsValid():
+                    d.Set(Gf.Vec3f(*diffuse_rgb))
+                r = sh.GetAttribute("inputs:reflection_roughness_constant")
+                if r and r.IsValid():
+                    r.Set(roughness)
+                m = sh.GetAttribute("inputs:metallic_constant")
+                if m and m.IsValid():
+                    m.Set(0.0)
             return UsdShade.Material(existing)
 
         looks_path = mat_path.rsplit("/", 1)[0]
@@ -3250,18 +3406,16 @@ class DigitalTwin(omni.ext.IExt):
         return UsdShade.Material(stage.GetPrimAtPath(mat_path))
 
     def _apply_robot_plastic_material(self):
-        """Override visuals of SO-ARM101 3D-printed parts.
+        """Override visuals of SO-ARM101 with material-targeted matte plastics.
 
-        Arm structural parts get matte white; the wrist camera mount
-        gets a distinct light-grey so it visually separates from the arm
-        in dataset frames. Servos (Feetech STS-3215, prim names
-        beginning with 'sts3215_') keep their URDF-imported material so
-        the dark servo body stays visible at each joint.
+        Per OpenUSD spec_usdpreviewsurface.html best practices (verified docs):
+          * 3D-printed white plastic (arm structural):  diffuse ~(0.92,0.92,0.92), roughness 0.7, metallic 0
+          * Light-grey matte plastic (wrist mount):     diffuse ~(0.55,0.55,0.55), roughness 0.7
+          * Matte black plastic (Feetech STS-3215 servos): diffuse (0.04,0.04,0.04), roughness 0.75, metallic 0
 
-        Each <link>/visuals Xform is a USD instance from the URDF
-        importer; authoring on instance-proxy children is forbidden, so
-        we de-instance per link first (essentially free with one robot
-        in scene since each "instance" is unique).
+        Each <link>/visuals Xform is a USD instance from the URDF importer;
+        authoring on instance-proxy children is forbidden, so we de-instance
+        per link first (essentially free with one robot per scene).
         """
         stage = omni.usd.get_context().get_stage()
         if not stage.GetPrimAtPath("/World/SO_ARM101").IsValid():
@@ -3271,16 +3425,28 @@ class DigitalTwin(omni.ext.IExt):
         white = self._create_omnipbr_matte(
             f"{looks_path}/plastic_white_matte",
             diffuse_rgb=(0.92, 0.92, 0.92),
+            roughness=0.7,  # 0.6-0.8 doc range, mid-low for less-aggressive matte
         )
         grey = self._create_omnipbr_matte(
             f"{looks_path}/plastic_grey_light_matte",
             diffuse_rgb=(0.55, 0.55, 0.55),
+            roughness=0.7,
         )
-        if not white:
+        black = self._create_omnipbr_matte(
+            f"{looks_path}/plastic_black_matte",
+            diffuse_rgb=(0.04, 0.04, 0.04),
+            roughness=0.75,  # 0.7-0.85 doc range for matte black plastic
+        )
+        if not (white and black):
             return
 
-        bound = 0
-        skipped = 0
+        # IMPORTANT: URDF importer authors direct material:binding on each Mesh child
+        # (e.g. .../sts3215_xx/mesh → Looks/DefaultMaterial). USD picks the most-specific
+        # binding, so a binding on the parent Xform is silently overridden by the mesh's
+        # own. Bind at BOTH levels: the Xform (for any future-added child geometry) AND
+        # every Mesh descendant (to override the URDF default).
+        white_bound = 0
+        black_bound = 0
         for link in stage.GetPrimAtPath("/World/SO_ARM101").GetChildren():
             visuals = stage.GetPrimAtPath(f"{link.GetPath()}/visuals")
             if not visuals or not visuals.IsValid():
@@ -3288,28 +3454,35 @@ class DigitalTwin(omni.ext.IExt):
             if visuals.IsInstanceable():
                 visuals.SetInstanceable(False)
             for p in visuals.GetChildren():
+                target = black if p.GetName().startswith("sts3215_") else white
+                # Bind on the part Xform + every Mesh descendant
+                for d in Usd.PrimRange(p):
+                    if d == p or d.IsA(UsdGeom.Mesh):
+                        UsdShade.MaterialBindingAPI.Apply(d)
+                        UsdShade.MaterialBindingAPI(d).Bind(target)
                 if p.GetName().startswith("sts3215_"):
-                    skipped += 1
-                    continue
-                UsdShade.MaterialBindingAPI.Apply(p)
-                UsdShade.MaterialBindingAPI(p).Bind(white)
-                bound += 1
+                    black_bound += 1
+                else:
+                    white_bound += 1
 
         # Wrist camera mount: distinct light-grey so it pops against the
         # white arm in camera frames. USB camera body next to it stays
         # at its imported default (it's electronics, not a 3D print).
+        # Same Mesh-level rebind as above (URDF default binding override).
         cam_mount = stage.GetPrimAtPath(
             "/World/SO_ARM101/camera_mount_link/camera_wrist_mount")
         grey_bound = 0
         if cam_mount and cam_mount.IsValid() and grey:
-            UsdShade.MaterialBindingAPI.Apply(cam_mount)
-            UsdShade.MaterialBindingAPI(cam_mount).Bind(grey)
+            for d in Usd.PrimRange(cam_mount):
+                if d == cam_mount or d.IsA(UsdGeom.Mesh):
+                    UsdShade.MaterialBindingAPI.Apply(d)
+                    UsdShade.MaterialBindingAPI(d).Bind(grey)
             grey_bound = 1
 
         print(
-            f"[plastic] Bound matte-white to {bound} parts, "
-            f"matte-grey to {grey_bound} parts, "
-            f"skipped {skipped} servos"
+            f"[plastic] Bound matte-white to {white_bound} parts, "
+            f"matte-black to {black_bound} servos, "
+            f"matte-grey to {grey_bound} mount(s)"
         )
 
     def _get_blocks_by_color(self, color=None, folder_path="/World/Objects"):
