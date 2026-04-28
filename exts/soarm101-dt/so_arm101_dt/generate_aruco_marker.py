@@ -45,8 +45,12 @@ def generate_marker_png(
     aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICTS[dictionary])
     marker_img = cv2.aruco.generateImageMarker(aruco_dict, marker_id, size_pixels, borderBits=border_bits)
 
-    # Add white border around the marker (helps with detection)
-    border_px = size_pixels // 8
+    # White quiet zone around the marker. Set to 0 to print the marker
+    # edge-to-edge with no white margin; cv2.copyMakeBorder is a no-op
+    # at width 0 but kept here so the white-zone amount is one constant
+    # to flip if a quiet zone is needed again for ArUco detection
+    # robustness.
+    border_px = 0
     bordered = cv2.copyMakeBorder(
         marker_img, border_px, border_px, border_px, border_px,
         cv2.BORDER_CONSTANT, value=255,

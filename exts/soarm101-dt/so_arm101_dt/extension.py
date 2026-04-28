@@ -588,18 +588,25 @@ CUP_LAYOUT = dict(CUP_LAYOUT_DEFAULTS)
 
 # ArUco markers on cup surfaces — one marker per cup, placed on the side facing the robot.
 # dictionary: ArUco dictionary name
-# marker_size_m: physical marker size in meters (printed area)
+# marker_size_m: physical width of the full printed marker in meters,
+#   matching the standard ArUco convention (the outer black square,
+#   black border bit included). With the white quiet zone disabled in
+#   generate_aruco_marker.py, the PNG is the bare 6x6-cell ArUco marker
+#   (4x4 data bits + 1 black border bit per side). The pure-data-bit
+#   area inside is 4/6 = 66.7% of marker_size_m.
 # height_fraction: how far up the cup side (0=bottom, 1=top rim)
 CUP_ARUCO_CONFIG = {
     "dictionary": "DICT_4X4_50",
-    "marker_size_m": 0.025,       # 25mm marker on ~78mm diameter cup
+    "marker_size_m": 0.035,       # 35mm full marker (incl. black border)
     "marker_png_pixels": 200,     # resolution of generated PNG
-    "height_fraction": 0.45,      # marker center at 45% of cup height
-    "ids": {                      # ArUco ID per cup color
-        "red": 0,
-        "green": 1,
-        "blue": 2,
-    },
+    "height_fraction": 0.5855,    # marker center 40mm below the top rim
+                                  # (cup body height ~96.5mm × 0.5855 ≈ 56.5mm
+                                  # from bottom = 40mm from top)
+    "ids": {                      # ArUco ID per cup color (blue=1, green=2, red=3).
+        "red": 3,                 # /drop_poses publishes drop_1 (blue),
+        "green": 2,               # drop_2 (green), drop_3 (red).
+        "blue": 1,                # Mirrored in vla_SO-ARM101 control_gui.py
+    },                            # and aruco_camera_localizer aruco_config.json.
 }
 
 def _cup_positions_arc():
@@ -4108,13 +4115,16 @@ class DigitalTwin(omni.ext.IExt):
         png_path = os.path.join(aruco_dir, "pngs", f"aruco_4x4_{aruco_id:03d}.png")
         generate_marker_png(cfg["dictionary"], aruco_id, png_path, cfg["marker_png_pixels"])
 
-        # Cup STL path
-        cup_stl = os.path.join(ext_dir, "..", "..", "transfer", "cad", "cup_urdf", "meshes", "cup.stl")
-        if not os.path.isfile(cup_stl):
-            # Try common location
-            cup_stl = os.path.expanduser("~/transfer/cad/cup_urdf/meshes/cup.stl")
-        if not os.path.isfile(cup_stl):
-            print(f"[aruco] Cup STL not found for Blender generation")
+        # Cup STL path. Searched in priority order; first hit wins.
+        cup_stl_candidates = [
+            os.path.join(ext_dir, "..", "..", "transfer", "cad", "cup_urdf", "meshes", "cup.stl"),
+            os.path.expanduser("~/transfer/cad/cup_urdf/meshes/cup.stl"),
+            os.path.expanduser("~/transfer/junk/cad/cup_urdf/meshes/cup.stl"),
+            os.path.expanduser("~/Projects/Exploring-VLAs/vla_SO-ARM101/src/so_arm101_description/meshes/cup/cup.stl"),
+        ]
+        cup_stl = next((p for p in cup_stl_candidates if os.path.isfile(p)), None)
+        if not cup_stl:
+            print(f"[aruco] Cup STL not found for Blender generation. Tried: {cup_stl_candidates}")
             return
 
         script = os.path.join(ext_dir, "scripts", "bake_aruco_on_cup.py")
@@ -6251,7 +6261,7 @@ class DigitalTwin(omni.ext.IExt):
             # Color → aruco_id mapping is kept only for frame-id naming
             # (drop_{aruco_id}) and for aruco_camera_localizer symmetry on
             # the real-world side — the sim reads cup prims directly now.
-            color_to_id = CUP_ARUCO_CONFIG["ids"]  # {red:0, green:1, blue:2}
+            color_to_id = CUP_ARUCO_CONFIG["ids"]  # {red:3, green:2, blue:1}
 
             def _write_wrapper(color, aruco_id, require_wrapper_exists):
                 """Compute cup-body-center world xform and write it onto
