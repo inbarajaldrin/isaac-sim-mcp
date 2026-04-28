@@ -572,7 +572,7 @@ GROUND_PLANE_ROUGHNESS = 1.0             # fully diffuse
 # frame; the UI panel edits these values and re-authors the tile.
 # Set WORKSPACE_GROUND_X_RANGE to None to disable the tile entirely.
 WORKSPACE_GROUND_X_RANGE = (-0.04, 0.70)    # (x_min, x_max) world-frame X (forward), meters
-WORKSPACE_GROUND_Y_RANGE = (-0.35, 0.30)    # (y_min, y_max) world-frame Y (lateral), meters
+WORKSPACE_GROUND_Y_RANGE = (-0.40, 0.30)    # (y_min, y_max) world-frame Y (lateral), meters — propagates to WORKSPACE_EXT_TILE_Y_RANGE below
 WORKSPACE_GROUND_Z_OFFSET_M = 0.002         # lift above main ground (z-fight avoidance)
 WORKSPACE_GROUND_COLOR = (0.035, 0.058, 0.077) # dark slate table — picker-tuned via sim-color-matcher (ratio apply)
 WORKSPACE_GROUND_ROUGHNESS = 1.0            # fully diffuse
