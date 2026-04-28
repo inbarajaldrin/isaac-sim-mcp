@@ -1,61 +1,61 @@
 {
   "version": "1.0",
-  "timestamp": "2026-04-27T19:00:00-07:00",
+  "timestamp": "2026-04-28T02:29:25-07:00",
   "phase": "10.2",
   "phase_name": "lerobot-data-collection-linux-isaac-sim",
   "phase_dir": ".planning/phases/10.2-lerobot-data-collection-linux-isaac-sim",
   "plan": null,
   "task": null,
   "total_tasks": null,
-  "status": "paused_recording_works_scene_polish_remaining",
+  "status": "paused_scene_polish_in_progress_lighting_next",
   "completed_tasks": [
-    {"id": 1, "name": "Diagnose pick-place hang during recording", "status": "done", "commit": "6d9439d", "note": "Root cause was /joint_commands feedback loop via control_gui._ext_cmd_callback firing FollowJointTrajectory action goals at ~60/sec. Fix: mirror publishes to /joint_commands_lerobot."},
-    {"id": 2, "name": "linux-env directory + record_sim_isaac.sh + mirror", "status": "done", "commit": "6d9439d"},
-    {"id": 3, "name": "drop_point uses grasp_home wrist_roll; remove _drop_wrist_roll_sign", "status": "done", "commit": "5d328a4"},
-    {"id": 4, "name": "Record Sim tab in control_gui (closed-loop dataset recording)", "status": "done", "commit": "51b2f35"},
-    {"id": 5, "name": "Record Sim tab cleanup (mirror dedup, post-stop summary)", "status": "done", "commit": "bc5792e"},
-    {"id": 6, "name": "Wrist-cam + workspace-cam fixes (extension.py)", "status": "done", "commit": "64b60c4"},
-    {"id": 7, "name": "Scene cut to 2x3-only attempted, reverted (PhysX hang)", "status": "done", "commit": "07ac09e", "note": "e728e52 → 07ac09e. Duplicate USD references with same inner prim name caused PhysX friction-patch explosion."},
-    {"id": 8, "name": "CLAUDE.md docs updated across all repos with this session's learnings", "status": "done", "commit": "839b10d + 61d10cb"},
-    {"id": 9, "name": "End-to-end recording verified (4 episodes, 10672 frames, 122MB at rec_184236)", "status": "done"}
+    {"id": "session-prior-work", "name": "Recording works end-to-end (4 episodes, 10672 frames)", "status": "done", "commit": "8cf54c3"},
+    {"id": 14, "name": "Episode = 1 lego, re-randomize after each episode", "status": "done", "commit": "771e564 + 1f4d25a"},
+    {"id": "10b", "name": "6 legos in scene (2 per color x 2x3)", "status": "done", "commit": "771e564 + c03cdf0", "note": "Pivoted from Cloner to per-instance USD copies (Cloner left inner-prim-name collisions; per-instance USDs with renamed inner prims solve PhysX + ROS2 frame_id cleanly). _get_or_make_lego_instance_usd helper writes USDA, recursive PrimSpec rename + regex path-rewrite for material:binding."},
+    {"id": 12, "name": "Black ground + white/grey plastic robot + matte material", "status": "done", "commit": "61bc74a", "note": "Two OmniPBR matte materials (white_matte for arm, grey_light_matte for wrist mount). De-instance per-link visuals/ Xform to bind. Servos (sts3215_*) keep URDF-imported material."},
+    {"id": 11, "name": "ArUco marker resize/reposition/ID remap (cross-repo)", "status": "done", "commit": "a3bd4aa + 7da74d8 + 4ea203b", "note": "35mm full marker, 40mm below top rim (height_fraction=0.5855), white quiet zone disabled (border_px=0 in generate_aruco_marker.py). IDs flipped: red=3, green=2, blue=1. Mirrored across 3 repos: soarm101-dt CUP_ARUCO_CONFIG, vla_SO-ARM101 control_gui DROP_ID_LABELS+REAL_COLOR_TO_CUP+mtc_pick_place_node.cpp, aruco_camera_localizer aruco_config.json+merged_localization_aruco.py MARKER_SIZE."},
+    {"id": "refresh-bug", "name": "Refresh button - legos missing + drop topics stale", "status": "done", "commit": "c03cdf0 + 4f06008", "note": "/objects_poses_sim publisher had 0 publishers - get_objects_in_folder used legacy {name}/{name} body-path convention. Switched to _get_prim_path structural fallback. _cmd_drop_refresh now clears _drop_data on refresh (sheds stale drop_0 from before the ID remap). Listbox heights bumped 2 -> 6/3 (effective after gui restart only - tk widget creation-time)."},
+    {"id": "workspace-ground", "name": "Configurable workspace ground tile + UI", "status": "done", "commit": "7c29922", "note": "Black matte UsdGeom.Mesh quad on top of gray defaultGroundPlane. Per-side X/Y extents in WORKSPACE_GROUND_X_RANGE/Y_RANGE constants. New 'Workspace Ground' UI panel with 4 FloatField inputs + Apply/Reset. Baked defaults: X=(-0.04, 0.70), Y=(-0.35, 0.30) m."},
+    {"id": "cup-cluster-offset", "name": "Cup cluster_offset_x/y in CUP_LAYOUT + UI sliders", "status": "done", "commit": "7c29922", "note": "_apply_cup_cluster_offset helper applied BEFORE _to_world (so randomize_cups validation sees the shift). 2 FloatSliders (+-0.20m) in Containers panel with live _on_cup_layout_changed. World->robot-relative conversion respects ROBOT_FORWARD_AXIS."},
+    {"id": "match-real-world", "name": "Match Real World button + auto-call during quick_start", "status": "done", "commit": "7c29922", "note": "CUP_LAYOUT_REAL_WORLD module constant (offset_x=0.12, offset_y=0.06, gap=0.02). Button copies into CUP_LAYOUT, mirrors to UI sliders, optionally re-places. quick_start auto-invokes BEFORE add_cups so first-creation uses calibrated values. Workspace camera default pose also baked: translate=(0.3336, 0.3111, 0.3533), quat_xyzw=(0.0728, 0.4806, 0.8641, 0.1308)."}
   ],
   "remaining_tasks": [
-    {"id": 10, "name": "Cut down legos by gating add_objects on a skip-list (don't refactor LEGO_USDS, just don't spawn some)", "status": "not_started", "note": "Try this once before any deeper asset refactor. Avoids PhysX hang from duplicate USDs."},
-    {"id": 11, "name": "Update ArUco marker positions in Isaac Sim to match real-world cup positions", "status": "not_started"},
-    {"id": 12, "name": "Change Isaac Sim ground plane color to black", "status": "not_started"},
-    {"id": 13, "name": "Audit + tune time parameters (duration_s) for grasp_home / drop_point / drop_sweep / grasp_move", "status": "not_started"},
-    {"id": 14, "name": "Episode definition change: 1 episode = 1 lego (was 2 per scene). Re-randomize after each episode. Update REC_LEGOS_BY_COLOR or loop logic.", "status": "not_started", "note": "User explicitly changed direction here."},
-    {"id": 15, "name": "ONE agent entry point in Exploring-VLAs that orchestrates aruco_camera_localizer + isaac-sim-mcp + control stack + recording", "status": "not_started"},
+    {"id": "lighting", "name": "Port Lighting Preset panel from ur5e-dt to soarm101-dt", "status": "design_surveyed", "note": "ur5e-dt extension.py:721-732 has the Lighting & Environment panel with 6 presets (Default Dome, Studio 3-Point, Dramatic Sun+Fill, Soft Diffuse, HDRI Photo Studio, HDRI Stormy Sky). Plan: port JUST the Lighting Preset sub-panel + _apply_lighting_preset / _clear_all_lights / _ensure_lights_scope methods (~80 lines). Source ref: exts/ur5e-dt/ur5e_dt/extension.py:1114-1230. Skip the manual sliders / HDRI environments / ground swap sub-panels for now - defer to a fresh session."},
+    {"id": "lighting-bake", "name": "Bake selected lighting preset as default", "status": "not_started", "note": "After porting, user picks a preset in-session, then update load_scene to apply it on quick_start (or set LIGHTING_PRESET_DEFAULT module constant)."},
+    {"id": 13, "name": "Audit/tune duration_s for grasp_home / drop_point / drop_sweep / grasp_move", "status": "not_started"},
+    {"id": 15, "name": "ONE agent entry point in Exploring-VLAs orchestrating aruco + isaac-sim-mcp + control + recording", "status": "not_started"},
     {"id": 16, "name": "Verify aruco_camera_localizer + isaac-sim-mcp launchable from the entry point", "status": "not_started"},
-    {"id": 17, "name": "Confirm full end-to-end pipeline ready (bring-up → record → valid dataset → schema parity)", "status": "not_started"},
-    {"id": 18, "name": "Push reference dataset to HF Hub", "status": "not_started", "note": "Pre-existing Phase 10.2 deliverable"},
+    {"id": 17, "name": "Confirm full E2E pipeline (bring-up -> record -> valid dataset -> schema parity)", "status": "not_started"},
+    {"id": 18, "name": "Push reference dataset to HF Hub", "status": "not_started"},
     {"id": 19, "name": "Run verify_parity.py against Mac-side reference", "status": "not_started"},
-    {"id": 20, "name": "Write LEROBOT_ROS2_LINUX_SETUP.md user-facing runbook", "status": "partial", "note": "Most content baked into linux-env/CLAUDE.md; still needs user-facing setup doc."}
+    {"id": 20, "name": "Write LEROBOT_ROS2_LINUX_SETUP.md user-facing runbook", "status": "partial", "note": "Most content is in linux-env/CLAUDE.md; still needs user-facing setup doc."}
   ],
   "blockers": [
-    {"description": "Scene-side LEGO_USDS edits cannot use mid-session hot-reload", "type": "technical", "severity": "advisory", "workaround": "Always restart Isaac Sim cleanly (close + launch) when changing LEGO_USDS; never `touch extension.py` mid-session. Documented in isaac-sim-mcp/CLAUDE.md."},
-    {"description": "Duplicate USD references with same inner prim name → PhysX friction-patch explosion → quick_start hang", "type": "technical", "severity": "advisory", "workaround": "Spawn-skip approach (task 10) avoids this entirely by leaving LEGO_USDS unique. Per-instance USDs or post-reference inner-prim rename also work but are heavier."}
+    {"description": "Listbox height changes don't apply via /so_arm101_control_gui/hot_reload - tk widget creation-time setting", "type": "technical", "severity": "advisory", "workaround": "User restarts the control_gui process to see height=6 obj_listbox / height=3 drop_listbox."},
+    {"description": "Fresh Isaac Sim launch race: stage is None on first quick_start after launch, throws AttributeError in load_scene at stage.GetPrimAtPath('/physicsScene')", "type": "technical", "severity": "advisory", "workaround": "Always call new_stage before quick_start on a fresh launch."}
   ],
   "human_actions_pending": [
-    {"action": "Push commits to remotes (5 commits across 2 repos + 1 submodule)", "context": "All work is local. User said no pushes without approval. Branches: isaac-sim-mcp:so-arm101 (839b10d), Exploring-VLAs:main (61d10cb), lerobot:ros2-camera-on-main (9ef886ee).", "blocking": false},
-    {"action": "rm stale test artifact ~/Projects/Exploring-VLAs/vla_SO-ARM101/blue_2x3", "context": "From a misrouted bash test command. Untracked.", "blocking": false}
+    {"action": "Push commits across 3 repos", "context": "All work is local. isaac-sim-mcp:so-arm101 (771e564, 61bc74a, a3bd4aa, c03cdf0, 7c29922 - 5 commits), Exploring-VLAs:main (1f4d25a, 7da74d8, 4f06008 - 3 commits), aruco_camera_localizer:robosort (4ea203b - 1 commit). User said no pushes without approval.", "blocking": false},
+    {"action": "Restart control_gui to pick up listbox height changes", "context": "tk Listbox height is creation-time only. Hot-reload re-binds methods but doesn't recreate widgets. User won't see all 6 legos in the obj_listbox until restart.", "blocking": false},
+    {"action": "Tune lighting once Lighting Preset panel is ported, then bake selected preset as default", "context": "Workflow: pick preset in UI -> tell next-session Claude to bake it as load_scene default.", "blocking": false}
   ],
   "decisions": [
-    {"decision": "Episode = 1 lego pick-place (not 2 per scene). Randomize after each episode.", "rationale": "User explicit direction. Simplifies loop, uniform episode lengths."},
-    {"decision": "Skip-spawn approach for cutting lego count (don't change LEGO_USDS shape)", "rationale": "Duplicate-USD refactor caused PhysX hang. Skip-spawn keeps the unique-USD invariant intact."},
-    {"decision": "/joint_commands_lerobot for recorder action source", "rationale": "Avoids feedback loop through control_gui._ext_cmd_callback. Confirmed via GPT review."},
-    {"decision": "Drop_point uses grasp_home wrist_roll directly (no sign flip)", "rationale": "Real Test's Drop Scan has its own SCAN_WRIST_ROLL_RAD constant. Drop Point in QS doesn't need to flip — saves ~177° wrist swing per cycle."},
-    {"decision": "Module-level constants for new code in control_gui (not class-level)", "rationale": "Class-level constants don't survive _hot_reload_logic — instance's __class__ ref points to the OLD class."},
-    {"decision": "No real pick-place verification (Always PASS criterion)", "rationale": "Q1 from form: trust QS sentinel, no pose check. Verified by user."},
-    {"decision": "Re-randomize on QS halt, retry same lego (max 5 retries)", "rationale": "Q2 from form: maximizes success rate. May want to lower the cap in future."}
+    {"decision": "Per-instance lego USDs over Cloner replicate_physics", "rationale": "Cloner solved PhysX side but left ROS2PublishTransformTree publishing duplicate child_frame_ids (it then disambiguated with ugly path-prefixed names like World_Objects_red_2x3_1_red_2x3 - unusable by name-based recording loop). Per-instance USDs give truly unique inner prims, restore legacy {name}/{name} convention, PhysX is happy."},
+    {"decision": "Cup cluster_offset applied BEFORE _to_world via _apply_cup_cluster_offset helper", "rationale": "randomize_cups validates positions in robot-relative space against lego/robot AABBs. Post-_to_world offset would let validation pass on positions that overlap legos after the cluster shifts. Pre-_to_world keeps validation honest."},
+    {"decision": "ROS2PublishTransformTree publisher uses structural _get_prim_path (not legacy {name}/{name})", "rationale": "After multi-instance Cloner attempt, the legacy convention silently produced empty target lists, killing the publisher. Structural fallback (find first child with UsdPhysics.RigidBodyAPI) handles both single-instance and multi-instance assets."},
+    {"decision": "ArUco IDs: red=3, green=2, blue=1 (not red=0/green=1/blue=2)", "rationale": "User's chosen convention. Drop wrappers auto-rename to drop_1/2/3 via /World/Containers/drop_{aruco_id}. Mirrored in vla_SO-ARM101 control_gui (DROP_ID_LABELS, REAL_COLOR_TO_CUP, etc.) and aruco_camera_localizer config + MARKER_SIZE."},
+    {"decision": "Workspace ground tile = visual-only mesh quad over collision-only main plane", "rationale": "Two-layer split: main /World/defaultGroundPlane keeps neutral gray + collision; small /World/workspace_ground UsdGeom.Mesh on top in pick-place area is matte black for camera contrast. Objects outside workspace area still rest on floor."},
+    {"decision": "CUP_LAYOUT_REAL_WORLD as separate constant from CUP_LAYOUT_DEFAULTS", "rationale": "Two distinct intents: 'reset to factory baseline' (DEFAULTS) vs 'snap to physical-rig calibration' (REAL_WORLD). Match Real World button is a partial override (only offset+gap), preserves user's mode/radius/angle/color_order choices."},
+    {"decision": "Match Real World auto-called BEFORE add_cups in quick_start", "rationale": "Cups don't exist yet - calling before ensures CUP_LAYOUT has calibrated values when add_cups reads it. reposition=True (default) is for in-session re-application via the button."}
   ],
   "uncommitted_files": [
     "isaac-sim-mcp:mobileclip_blt.ts (untracked, not from this session)",
+    "isaac-sim-mcp:exts/soarm101-dt/assets/aruco_markers/meshes/ (untracked dir, *.usda gitignored)",
     "Exploring-VLAs:dont-read.txt (untracked, not from this session)",
     "Exploring-VLAs:rviz-ui-controller.skill, stl-mesh-analyzer.skill, x11-window-screenshot.skill (untracked skill artifacts)",
     "Exploring-VLAs:stl_tools/ (untracked)",
-    "Exploring-VLAs:vla_SO-ARM101/blue_2x3 (untracked stale test artifact, can rm)"
+    "Exploring-VLAs:vla_SO-ARM101/blue_2x3 (stale test artifact, can rm)"
   ],
-  "next_action": "Start with task 14 (episode = 1 lego) — it's the smallest behavior change and unblocks the new episode contract for everything downstream. Then task 10 (skip-spawn for fewer legos), then task 12 (black ground), then task 13 (timing audit), then task 11 (ArUco calibration), then tasks 15-17 (entry point + end-to-end verification).",
-  "context_notes": "Recording works end-to-end. The phase 10.2 ORIGINAL blocker (handoff at start of session: 'pick-place doesn't run during recording') is resolved at the architecture level. Remaining work is scene polish (lego count, ground color, marker calibration), motion-quality tuning (durations), one episode-loop semantic change, and packaging the bring-up into a single entry point. The Record Sim tab is the production interface — driven by ros2 service rec_start/rec_stop from CLI, no GUI focus needed. CLAUDE.md docs across all 5 files are updated with this session's learnings, so a fresh Claude can come in with full context."
+  "next_action": "Port Lighting Preset panel from ur5e-dt: copy the Lighting Preset sub-panel UI (extension.py:721-732 in ur5e-dt) + _apply_lighting_preset / _clear_all_lights / _ensure_lights_scope methods (extension.py:1114-1230 in ur5e-dt) into soarm101-dt. Skip the manual sliders / HDRI environments / ground swap sub-panels (defer). Add a single CollapsableFrame near the existing 'Workspace Ground' panel. After porting, user picks a preset in-session, then bake it as default in load_scene.",
+  "context_notes": "Dense scene-polish session. Recording was already working at start (commit 8cf54c3). Five new commits on so-arm101 add: 1-episode loop + 6 legos via per-instance USDs (771e564), black ground + matte plastic materials (61bc74a), ArUco resize/reposition/ID remap (a3bd4aa), per-instance USD generator + structural body lookup (c03cdf0), workspace ground tile + cup cluster offset + Match Real World (7c29922). Three commits on vla_SO-ARM101 main (1f4d25a, 7da74d8, 4f06008) mirror the cross-repo changes. One commit on aruco_camera_localizer robosort (4ea203b) mirrors marker geometry + ID remap. Context budget at 78% when paused. Next session: small port of Lighting Preset panel from ur5e-dt - design surveyed but no code copied yet. Then Task 13 (motion duration_s tuning). Plus Tasks 15-20 from original Phase 10.2 plan still standing."
 }
