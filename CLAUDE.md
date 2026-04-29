@@ -134,7 +134,13 @@ Once steps 1-3 above are up, the recording layer adds:
 
 9. **Manual lerobot-record** (alternative): `bash ~/Projects/Exploring-VLAs/linux-env/scripts/record_sim_isaac.sh --dataset.repo_id=local/<name> ...` — runs in pixi-Jazzy via the bash wrapper. Dataset lands at `~/.cache/huggingface/lerobot/local/<name>/`.
 
-Datasets viewable in rerun: `pixi run --manifest-path ~/Projects/Exploring-VLAs/linux-env/pixi.toml lerobot-dataset-viz --repo-id local/<name> --root <path> --episode-index 0 --mode local` (push into a running rerun on `localhost:9876`).
+Datasets viewable in rerun via the canonical command — **don't write a custom rerun loader, the official tool already exists**:
+```
+pixi run --manifest-path ~/Projects/Exploring-VLAs/linux-env/pixi.toml \
+  lerobot-dataset-viz --repo-id local/<name> --root <path> \
+  --episode-index 0 --mode local
+```
+Re-invoke with a different `--episode-index` while the viewer is alive on `:9876` to attach more episodes to the recordings dropdown — no need to kill/restart. Custom rerun scripts using `rr.AssetVideo` will fail on Ubuntu 22.04 because system ffmpeg 4.4.2 is below rerun's 5.1 requirement; `lerobot-dataset-viz` decodes via pyav inside pixi-Jazzy and avoids that. See `~/Projects/Exploring-VLAs/linux-env/CLAUDE.md` Gotchas section.
 
 ## MCP Tools (soarm101-dt extension.py)
 
