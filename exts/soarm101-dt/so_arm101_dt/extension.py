@@ -862,11 +862,23 @@ MCP_TOOL_REGISTRY = {
         }
     },
     "randomize_object_poses": {
-        "description": "Randomize lego block positions. Optionally filter by color to only randomize that color.",
+        "description": "Randomize lego block positions. Optionally filter by color to only randomize that color, and/or require N legos of a chosen color land inside the workspace camera's view (for VLA-style recordings where the target object must be visible to the policy).",
         "parameters": {
             "color": {
                 "type": "string",
-                "description": "Optional color to randomize ('red', 'green', 'blue'). If omitted, randomizes all."
+                "description": "Optional color whose blocks get NEW positions ('red', 'green', 'blue'). If omitted, randomizes all."
+            },
+            "required_visible_color": {
+                "type": "string",
+                "description": "Optional color ('red', 'green', 'blue') that MUST be in workspace-camera FOV after randomization. Sampler retries until satisfied or its retry budget is exhausted."
+            },
+            "required_visible_count": {
+                "type": "integer",
+                "description": "How many legos of required_visible_color must be in frame (default 1, capped at the count of that-color legos present)."
+            },
+            "camera_fov_margin_px": {
+                "type": "integer",
+                "description": "Pixels of headroom from any image edge for must-be-visible legos (default 30 on a 640x480 frame)."
             }
         }
     },
@@ -1401,9 +1413,25 @@ class DigitalTwin(omni.ext.IExt):
                             with ui.HStack(spacing=5):
                                 ui.Button("Add Objects", width=150, height=35, clicked_fn=self.add_objects)
                                 ui.Button("Delete Objects", width=150, height=35, clicked_fn=self.delete_objects)
+                            # Randomize row + visibility constraint controls.
+                            # The combobox lets the user demand that at least
+                            # `Min visible` legos of the chosen color land in
+                            # the workspace camera's FOV after Randomize. Used
+                            # for VLA-style recordings where the target object
+                            # MUST be observable in the camera feed.
                             with ui.HStack(spacing=5):
-                                ui.Button("Randomize", width=150, height=35, clicked_fn=self.randomize_object_poses)
+                                ui.Button("Randomize", width=150, height=35,
+                                          clicked_fn=self._on_randomize_clicked)
                                 ui.Button("Sort", width=150, height=35, clicked_fn=self.sort_objects)
+                            with ui.HStack(spacing=5):
+                                ui.Label("Lock color in view:", width=130,
+                                         alignment=ui.Alignment.LEFT_CENTER)
+                                self._visible_color_combo = ui.ComboBox(
+                                    0, "(none)", "red", "green", "blue", width=110)
+                                ui.Label("Min visible:", width=80,
+                                         alignment=ui.Alignment.LEFT_CENTER)
+                                self._visible_count_model = ui.SimpleIntModel(1)
+                                ui.IntField(model=self._visible_count_model, width=40)
                             with ui.HStack(spacing=5):
                                 ui.Button("Add ArUco Markers", width=180, height=35, clicked_fn=self.add_aruco_markers)
                                 ui.Button("Setup Pose Publisher", width=180, height=35, clicked_fn=self.create_pose_publisher)
@@ -3150,6 +3178,66 @@ class DigitalTwin(omni.ext.IExt):
                     graph_suffix
                 )
 
+    def _project_world_to_camera(self, world_xyz, camera_prim_path="/World/workspace_camera",
+                                  width=640, height=480, hfov_deg=69.4):
+        """Project a world-space point through the workspace camera to image pixels.
+
+        USD camera convention: camera looks down -Z in its local frame, +X right,
+        +Y up. Image convention is +X right, +Y down — we flip the v sign to match.
+
+        Args:
+            world_xyz: (x, y, z) in world meters.
+            camera_prim_path: defaults to the workspace camera the recorder uses.
+            width / height / hfov_deg: must match the publisher's intrinsics.
+                vfov is derived (square-pixel formula) — same as
+                _ViewportCameraPublisher uses. Don't change unless the recording
+                pipeline changes too.
+
+        Returns:
+            (u_px, v_px, depth_m) on success, or None if the point is behind the
+            camera or the camera prim is missing.
+        """
+        stage = omni.usd.get_context().get_stage()
+        cam_prim = stage.GetPrimAtPath(camera_prim_path)
+        if not cam_prim or not cam_prim.IsValid():
+            return None
+        cam_xform = UsdGeom.Xformable(cam_prim).ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default())
+        view = cam_xform.GetInverse()
+        p_cam = view.Transform(Gf.Vec3d(float(world_xyz[0]),
+                                         float(world_xyz[1]),
+                                         float(world_xyz[2])))
+        # Camera looks down -Z. Visible only if z is negative.
+        if p_cam[2] >= 0:
+            return None
+        depth = -p_cam[2]
+        # Square-pixel intrinsics derived from HFOV (matches publisher path).
+        fx = width / (2.0 * np.tan(np.deg2rad(hfov_deg / 2.0)))
+        vfov_deg = hfov_deg * height / width
+        fy = height / (2.0 * np.tan(np.deg2rad(vfov_deg / 2.0)))
+        u = fx * p_cam[0] / depth + width / 2.0
+        # Flip v: USD Y-up → image Y-down.
+        v = -fy * p_cam[1] / depth + height / 2.0
+        return (u, v, depth)
+
+    def _is_in_camera_view(self, world_xyz, margin_px=30,
+                           camera_prim_path="/World/workspace_camera",
+                           width=640, height=480, hfov_deg=69.4):
+        """True iff `world_xyz` projects to within (margin_px) of the camera frame.
+
+        Margin is for both u and v. With the default 30 px on a 640×480 frame,
+        an in-view point sits ≥30 px from any edge — enough headroom that a
+        20 mm lego (≈25-40 px wide at the workspace camera's typical depth)
+        is fully visible, not clipped at the rim.
+        """
+        proj = self._project_world_to_camera(
+            world_xyz, camera_prim_path, width, height, hfov_deg)
+        if proj is None:
+            return False
+        u, v, _ = proj
+        return (margin_px <= u <= width - margin_px and
+                margin_px <= v <= height - margin_px)
+
     def _set_active_viewport_camera(self, camera_path: str) -> bool:
         """Switch the active Isaac Sim viewport to render through the given camera prim path.
         Records the previous camera path in self._prev_viewport_cam for potential undo.
@@ -3648,6 +3736,8 @@ class DigitalTwin(omni.ext.IExt):
         max_retries=100,
         radii=None,
         exclusion_zones=None,
+        must_be_visible_indices=None,
+        camera_fov_margin_px=30,
     ):
         """
         Sample non-overlapping object poses in world frame.
@@ -3668,6 +3758,15 @@ class DigitalTwin(omni.ext.IExt):
             radii: Per-object half-extents (half diagonal). When provided,
                    the required separation between objects i and j is
                    radii[i] + radii[j] + gap instead of a flat min_sep.
+            must_be_visible_indices: Optional list of orig_idx values whose
+                   sampled positions must project into the workspace camera's
+                   image (with `camera_fov_margin_px` of headroom from the
+                   frame edges). Used by VLA-style recordings where the
+                   target object has to be visible in the observation feed
+                   for the policy to learn — an out-of-view lego is dataset
+                   noise. Other indices are unconstrained.
+            camera_fov_margin_px: minimum pixel distance from any image edge
+                   that a must-be-visible point must satisfy.
         """
         # Default ranges from module-level config (robot-relative → world)
         if x_range is None or y_range is None:
@@ -3742,11 +3841,22 @@ class DigitalTwin(omni.ext.IExt):
                             valid = False
                             break
 
+                # Pre-compute z so the FOV check below has a 3D point to project.
+                candidate_z = (z_values[orig_idx]
+                               if z_values and orig_idx < len(z_values)
+                               else self._ground_plane_z)
+
+                # Camera-FOV check for the visibility-constrained subset.
+                if valid and must_be_visible_indices and orig_idx in must_be_visible_indices:
+                    if not self._is_in_camera_view(
+                            (candidate_xy[0], candidate_xy[1], candidate_z),
+                            margin_px=camera_fov_margin_px):
+                        valid = False
+
                 if valid:
                     yaw_deg = np.random.uniform(*yaw_range)
-                    z = z_values[orig_idx] if z_values and orig_idx < len(z_values) else self._ground_plane_z
                     placed.append({
-                        "position": np.array([candidate_xy[0], candidate_xy[1], z]),
+                        "position": np.array([candidate_xy[0], candidate_xy[1], candidate_z]),
                         "yaw_deg": yaw_deg
                     })
 
@@ -3921,6 +4031,28 @@ class DigitalTwin(omni.ext.IExt):
         return sorted_count, 0
 
     # ==================== Color Pickers ====================
+
+    def _on_randomize_clicked(self):
+        """UI Randomize button handler. Reads the visibility-constraint widgets
+        (Lock color in view + Min visible) and forwards to randomize_object_poses
+        with the corresponding params."""
+        # ComboBox index → color string. 0 = (none), 1 = red, 2 = green, 3 = blue.
+        idx = 0
+        try:
+            model = self._visible_color_combo.model
+            item = model.get_item_value_model(model.get_item_children()[0])
+            idx = int(item.as_int)
+        except Exception:
+            idx = 0
+        required_visible_color = (None, "red", "green", "blue")[idx] if 0 <= idx <= 3 else None
+        try:
+            count = max(1, int(self._visible_count_model.as_int))
+        except Exception:
+            count = 1
+        self.randomize_object_poses(
+            required_visible_color=required_visible_color,
+            required_visible_count=count,
+        )
 
     def _apply_color_pickers(self):
         """Read colors from UI pickers and defer actual application to next frame.
@@ -4933,13 +5065,29 @@ class DigitalTwin(omni.ext.IExt):
         print(f"[disassemble] Disassembled {len(block_info)} objects")
         return len(block_info)
 
-    def randomize_object_poses(self, color=None, folder_path="/World/Objects"):
+    def randomize_object_poses(self, color=None, folder_path="/World/Objects",
+                                required_visible_color=None,
+                                required_visible_count=1,
+                                camera_fov_margin_px=30):
         """
-        Randomize block poses. Optionally filter by color.
+        Randomize block poses. Optionally filter by color and/or require that
+        N legos of a chosen color land inside the workspace camera's view.
 
         Args:
-            color: Optional color filter ('red', 'green', 'blue'). If None, randomizes all.
+            color: Optional color filter ('red', 'green', 'blue') for which
+                blocks get NEW positions. If None, all are re-randomized.
             folder_path: Parent prim path for objects.
+            required_visible_color: If set, the sampler will reject placements
+                where fewer than `required_visible_count` legos of this color
+                project into the workspace camera's image. Crucial for
+                VLA-style recordings — without it, target legos can land
+                behind the arm or off-camera and the recorded observation
+                doesn't show the object the policy is meant to act on.
+            required_visible_count: How many of `required_visible_color` must
+                be in frame after randomization (default 1). Capped at the
+                number of that-color legos actually present in the scene.
+            camera_fov_margin_px: distance from any image edge that the
+                target legos must clear (default 30 px on a 640x480 frame).
         Returns:
             (randomized_count, 0)
         """
@@ -4999,12 +5147,35 @@ class DigitalTwin(omni.ext.IExt):
             sx, sy, _ = self._get_prim_bbox_size(info["prim_path"])
             radii.append((sx**2 + sy**2) ** 0.5 / 2.0)
 
+        # Build must_be_visible_indices: pick the first N to_randomize entries
+        # whose color matches required_visible_color. The sampler's retry loop
+        # explores different orderings, so any one of them eventually lands.
+        must_be_visible_indices = None
+        if required_visible_color:
+            target_indices = [
+                i for i, info in enumerate(to_randomize)
+                if self._get_block_color(info["name"]) == required_visible_color
+            ]
+            if not target_indices:
+                print(f"[randomize] required_visible_color={required_visible_color!r} "
+                      f"requested but no matching blocks in to_randomize — "
+                      f"FOV constraint dropped")
+            else:
+                n = max(1, min(int(required_visible_count), len(target_indices)))
+                must_be_visible_indices = target_indices[:n]
+                print(f"[randomize] requiring {n} {required_visible_color} lego(s) "
+                      f"in workspace-camera FOV "
+                      f"(indices={must_be_visible_indices}, "
+                      f"margin={camera_fov_margin_px}px)")
+
         poses = self._sample_non_overlapping_objects(
             num_objects=len(to_randomize),
             z_values=z_values,
             fixed_positions=fixed_positions,
             radii=radii,
             exclusion_zones=cup_exclusions,
+            must_be_visible_indices=must_be_visible_indices,
+            camera_fov_margin_px=camera_fov_margin_px,
         )
 
         for obj_info, pose in zip(to_randomize, poses):
@@ -6541,16 +6712,32 @@ class DigitalTwin(omni.ext.IExt):
             traceback.print_exc()
             return {"status": "error", "message": f"Failed to sort objects: {str(e)}"}
 
-    def _cmd_randomize_object_poses(self, color: str = None) -> Dict[str, Any]:
-        """MCP handler for randomizing block poses, optionally filtered by color."""
+    def _cmd_randomize_object_poses(self, color: str = None,
+                                     required_visible_color: str = None,
+                                     required_visible_count: int = 1,
+                                     camera_fov_margin_px: int = 30) -> Dict[str, Any]:
+        """MCP handler for randomizing block poses, optionally filtered by color
+        and/or constrained to keep N target-color legos in workspace-camera FOV."""
         try:
             color = color or None  # normalize empty string from MCP default
+            required_visible_color = required_visible_color or None
             if color and color not in BLOCK_COLORS:
                 return {"status": "error", "message": f"Unknown color '{color}'. Valid: {list(BLOCK_COLORS.keys())}"}
-            randomized, _ = self.randomize_object_poses(color=color)
+            if required_visible_color and required_visible_color not in BLOCK_COLORS:
+                return {"status": "error",
+                        "message": f"Unknown required_visible_color '{required_visible_color}'. "
+                                   f"Valid: {list(BLOCK_COLORS.keys())}"}
+            randomized, _ = self.randomize_object_poses(
+                color=color,
+                required_visible_color=required_visible_color,
+                required_visible_count=int(required_visible_count or 1),
+                camera_fov_margin_px=int(camera_fov_margin_px or 30),
+            )
+            visible_msg = (f", visible={required_visible_count}×{required_visible_color}"
+                           if required_visible_color else "")
             return {
                 "status": "success",
-                "message": f"Randomized {randomized} blocks (color={color or 'all'})"
+                "message": f"Randomized {randomized} blocks (color={color or 'all'}{visible_msg})"
             }
         except Exception as e:
             traceback.print_exc()
