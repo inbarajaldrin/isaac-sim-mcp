@@ -27,7 +27,7 @@ scripts/motion_log.sh status             # expect "supervisor RUNNING"
 ```
 
 If any are down:
-- MCP socket down → `bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch soarm101-dt`
+- MCP socket down → `bash ../linux-env/scripts/isaac/isaacsim_launch.sh launch soarm101-dt`
 - Control stack down → `scripts/restart-control-stack.sh`
 - Logger down → `scripts/motion_log.sh start` (supervisor will keep it alive)
 

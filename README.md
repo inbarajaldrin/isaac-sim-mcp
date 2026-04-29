@@ -2,6 +2,17 @@
 
 MCP Server for NVIDIA Isaac Sim integration, enabling AI assistants to control robotic simulations through the Model Context Protocol.
 
+> **If you arrived here as a submodule of [Exploring-VLAs](https://github.com/inbarajaldrin/Exploring-VLAs):**
+> the standalone "Installation" section below (clone to `~/Documents`, `uv sync`,
+> manual extension-search-path config, MCP-client JSON, etc.) is for the
+> generic stdio-MCP-server use case. The Exploring-VLAs Linux flow does NOT
+> use that path — it talks to the `soarm101-dt` extension over a raw socket
+> on `:8767` (started by `linux-env/scripts/isaac/isaacsim_launch.sh`,
+> wrapped by `linux-env/scripts/stack_start.sh`). For that setup, follow
+> [`../vla_SO-ARM101/docs/ROS2_LINUX_SETUP.md`](../vla_SO-ARM101/docs/ROS2_LINUX_SETUP.md)
+> and [`./CLAUDE.md`](./CLAUDE.md) instead — you don't need `uv sync`,
+> a separate clone, or the MCP client config.
+
 ## Architecture
 
 ```

@@ -72,8 +72,8 @@ Do not make direct repo edits outside a GSD workflow unless the user explicitly 
 
 ## Repos & Layout
 
-- **This repo** (`~/Documents/isaac-sim-mcp`, branch `so-arm101`): Isaac Sim extension `soarm101-dt` at `exts/soarm101-dt/`. MCP socket on port **8767**.
-- **ROS2 control stack**: `~/Projects/Exploring-VLAs/vla_SO-ARM101` — control GUI, MoveIt, geometric IK, drop motion scripts. Launch: `ros2 launch so_arm101_control control.launch.py rviz:=true`
+- **This repo** (this directory, normally a submodule of `Exploring-VLAs`; branch `so-arm101`): Isaac Sim extension `soarm101-dt` at `exts/soarm101-dt/`. MCP socket on port **8767**.
+- **ROS2 control stack**: `../vla_SO-ARM101` (sibling in `Exploring-VLAs`) — control GUI, MoveIt, geometric IK, drop motion scripts. Launch: `ros2 launch so_arm101_control control.launch.py rviz:=true`
 - **aruco_camera_localizer**: `~/Desktop/ros2_ws/src/aruco_camera_localizer` (branch `robosort` — also has a stale duplicate at `~/Projects/RoboSort/aruco_camera_localizer/`; runtime always uses Desktop via colcon `--symlink-install`). Publishes `/aruco_poses_real`, `/drop_poses_real` (ArUco) and `/objects_poses_real`, `/objects_bbox_real` (YOLOE). Per-marker geometry in `config/aruco_config.json`'s `marker_to_object` blocks (function-driven via `marker_geometry.py`); YOLOE prompts in `config/robot_config.yaml`'s `<robot>.detection.yolo` block. **Read that repo's `CLAUDE.md` before editing.**
 
   Launchers (run from your own terminal — cv2.imshow needs D-bus / XDG_SESSION context that Bash subshells lack):
@@ -85,7 +85,21 @@ Branch model: `main` = UR5e extension (`ur5e-dt`), `so-arm101` = this project (`
 
 ## Bring-up Sequence
 
-Use the `isaac-sim-extension-dev` skill (provides `isaacsim_launch.sh` + port mappings).
+**Preferred path** (one command for the whole stack):
+
+```bash
+bash ../linux-env/scripts/stack_start.sh        # Isaac Sim + quick_start + control stack + RViz
+bash ../linux-env/scripts/stack_status.sh       # verify all layers
+bash ../linux-env/scripts/stack_stop.sh         # graceful tear-down
+```
+
+The manual sequence below explains each step the wrapper does — useful for
+debugging or partial bring-ups (e.g. Isaac Sim only, or control stack against
+an already-running Isaac Sim).
+
+The launcher script (`../linux-env/scripts/isaac/isaacsim_launch.sh`) is vendored
+from the maintainer's `~/.claude/skills/isaac-sim-extension-dev/` skill; the
+in-repo copy is what colleagues clone.
 
 ### Preflight — always run first
 
@@ -106,9 +120,9 @@ Interpret:
 
 ### Full launch (nothing running)
 
-1. `bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch soarm101-dt` — blocks until socket ready (~10s warm, ~90s cold, max 120s). **NEVER** set a Bash timeout on this script; it has its own.
+1. `bash ../linux-env/scripts/isaac/isaacsim_launch.sh launch soarm101-dt` — blocks until socket ready (~10s warm, ~90s cold, max 120s). **NEVER** set a Bash timeout on this script; it has its own.
 2. Call `quick_start` via socket 8767 to spawn scene + robot + action graphs + publishers.
-3. Source ROS2 + launch control stack: `source /opt/ros/humble/setup.bash && source ~/Projects/Exploring-VLAs/vla_SO-ARM101/install/setup.bash && ros2 launch so_arm101_control control.launch.py rviz:=true`
+3. Source ROS2 + launch control stack: `source /opt/ros/humble/setup.bash && source ../vla_SO-ARM101/install/setup.bash && ros2 launch so_arm101_control control.launch.py rviz:=true`
 4. **For real-mode work** (Real Test tab, lego/cup detection from camera) — also launch the two detectors **from your own terminal** (NOT a Bash subshell — cv2.imshow needs D-bus / XDG_SESSION):
    - ArUco: `bash scripts/restart_aruco_localizer.sh` → publishes `/aruco_poses_real`, `/drop_poses_real`
    - YOLOE: `bash scripts/restart_yoloe.sh` → publishes `/objects_poses_real`, `/objects_bbox_real` (config-driven prompts from `~/Desktop/ros2_ws/src/aruco_camera_localizer/config/robot_config.yaml`)
@@ -118,29 +132,29 @@ Interpret:
    - + Real-mode: also `/drop_poses_real`, `/aruco_poses_real`, `/objects_poses_real`, `/objects_bbox_real`.
 6. Verify the planning scene (real-mode): `python3 -c "import rclpy; from rclpy.node import Node; from moveit_msgs.srv import GetPlanningScene; from moveit_msgs.msg import PlanningSceneComponents; rclpy.init(); n=Node('check'); c=n.create_client(GetPlanningScene,'/get_planning_scene'); c.wait_for_service(3.0); r=GetPlanningScene.Request(); r.components.components=PlanningSceneComponents.WORLD_OBJECT_NAMES; f=c.call_async(r); rclpy.spin_until_future_complete(n,f,5.0); [print(co.id) for co in f.result().scene.world.collision_objects]; rclpy.shutdown()"
 
-Shutdown: `bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh close` (graceful SIGTERM). For the ROS2 stack: `pkill -SIGINT -f "ros2.*launch.*control.launch"` — SIGINT propagates to children, SIGTERM does not.
+Shutdown: `bash ../linux-env/scripts/isaac/isaacsim_launch.sh close` (graceful SIGTERM). For the ROS2 stack: `pkill -SIGINT -f "ros2.*launch.*control.launch"` — SIGINT propagates to children, SIGTERM does not.
 
 ### Recording stack (lerobot dataset capture on Linux)
 
 Once steps 1-3 above are up, the recording layer adds:
 
-7. **Mirror** (system Humble): `python3 -u ~/Projects/Exploring-VLAs/linux-env/scripts/joint_states_to_commands.py &` — mirrors `/joint_states` → `/joint_commands_lerobot` so lerobot has an action-column source.
+7. **Mirror** (system Humble): `python3 -u ../linux-env/scripts/joint_states_to_commands.py &` — mirrors `/joint_states` → `/joint_commands_lerobot` so lerobot has an action-column source.
 8. **Record Sim tab** (preferred path): in control_gui, press `▶ Start` on the Record Sim tab. Spawns lerobot-record + dedups mirror, runs N pick-place episodes, finalizes dataset on Stop. Driveable from CLI:
    ```bash
    ros2 service call /so_arm101_control_gui/rec_start std_srvs/srv/Trigger
    ros2 service call /so_arm101_control_gui/rec_stop  std_srvs/srv/Trigger
    ```
-   Configure via `set_widget_value` (Episodes spinbox, Block color combobox, action checkboxes — see `~/Projects/Exploring-VLAs/linux-env/CLAUDE.md`).
+   Configure via `set_widget_value` (Episodes spinbox, Block color combobox, action checkboxes — see `../linux-env/CLAUDE.md`).
 
-9. **Manual lerobot-record** (alternative): `bash ~/Projects/Exploring-VLAs/linux-env/scripts/record_sim_isaac.sh --dataset.repo_id=local/<name> ...` — runs in pixi-Jazzy via the bash wrapper. Dataset lands at `~/.cache/huggingface/lerobot/local/<name>/`.
+9. **Manual lerobot-record** (alternative): `bash ../linux-env/scripts/record_sim_isaac.sh --dataset.repo_id=local/<name> ...` — runs in pixi-Jazzy via the bash wrapper. Dataset lands at `~/.cache/huggingface/lerobot/local/<name>/`.
 
 Datasets viewable in rerun via the canonical command — **don't write a custom rerun loader, the official tool already exists**:
 ```
-pixi run --manifest-path ~/Projects/Exploring-VLAs/linux-env/pixi.toml \
+pixi run --manifest-path ../linux-env/pixi.toml \
   lerobot-dataset-viz --repo-id local/<name> --root <path> \
   --episode-index 0 --mode local
 ```
-Re-invoke with a different `--episode-index` while the viewer is alive on `:9876` to attach more episodes to the recordings dropdown — no need to kill/restart. Custom rerun scripts using `rr.AssetVideo` will fail on Ubuntu 22.04 because system ffmpeg 4.4.2 is below rerun's 5.1 requirement; `lerobot-dataset-viz` decodes via pyav inside pixi-Jazzy and avoids that. See `~/Projects/Exploring-VLAs/linux-env/CLAUDE.md` Gotchas section.
+Re-invoke with a different `--episode-index` while the viewer is alive on `:9876` to attach more episodes to the recordings dropdown — no need to kill/restart. Custom rerun scripts using `rr.AssetVideo` will fail on Ubuntu 22.04 because system ffmpeg 4.4.2 is below rerun's 5.1 requirement; `lerobot-dataset-viz` decodes via pyav inside pixi-Jazzy and avoids that. See `../linux-env/CLAUDE.md` Gotchas section.
 
 ## MCP Tools (soarm101-dt extension.py)
 
