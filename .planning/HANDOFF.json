@@ -1,56 +1,72 @@
 {
   "version": "1.0",
-  "timestamp": "2026-04-28T19:45:17Z",
+  "timestamp": "2026-04-29T01:34:22Z",
   "phase": "10.2",
   "phase_name": "lerobot-data-collection-linux-isaac-sim",
   "phase_dir": ".planning/phases/10.2-lerobot-data-collection-linux-isaac-sim",
   "plan": null,
   "task": null,
   "total_tasks": null,
-  "status": "paused_scene_polish_complete_next_motion_primitive_fix_and_lerobot_record",
+  "status": "paused_parity_audit_received_next_session_fixes_audit_items",
+  "session_summary": "Major session — built sim data-collection pipeline equivalent to real-world. Drop_sweep self-contained, calibrated home pose (QS + Record Sim only), cup padding 0%, sim_reset uses new match_real_world MCP tool, Record Sim 1:1 episode contract w/ xdotool key signaling to lerobot, action-mirror swapped from /joint_states to controller_state.reference (BC-portability fix). External parity audit received as ~/transfer/SIM_DATASET_PARITY_REPORT.md — identifies 6 must-fix items remaining for full real-equivalence.",
   "completed_tasks": [
-    {"id": "lighting-port", "name": "Port UR5e-dt Lighting & Environment panel + bake interior daylight preset", "status": "done", "commit": "d3dd788"},
-    {"id": "materials", "name": "Doc-aligned plastic materials (white arm, grey mount, black servos, glossy lego with clearcoat)", "status": "done", "commit": "d3dd788"},
-    {"id": "ext-tile", "name": "Add -X workspace ground extension tile + UI panel + independent material", "status": "done", "commit": "2276e06"},
-    {"id": "color-match-tile", "name": "Color-match workspace tile to WhatsApp dark slate via picker", "status": "done", "commit": "2276e06", "value": "(0.035, 0.058, 0.077)"},
-    {"id": "color-match-ground", "name": "Color-match ground plane to warm tan wall via picker", "status": "done", "commit": "2276e06", "value": "(0.647, 0.648, 0.497)"},
-    {"id": "color-match-ext-tile", "name": "Color-match ext_tile to warm dark brown via picker", "status": "done", "commit": "2276e06", "value": "(0.0889, 0.0332, 0.0238)"},
-    {"id": "cup-calibration", "name": "Update CUP_LAYOUT_REAL_WORLD.cluster_offset_y 0.06 -> 0.04", "status": "done", "commit": "2276e06"},
-    {"id": "ws-cam-pose", "name": "Workspace camera default pose to (0.36, 0.355, 0.34973) + quat from rotateXYZ(-57.187,16.905,172)", "status": "done", "commit": "2276e06"},
-    {"id": "skill-build", "name": "Build sim-color-matcher skill (HTML picker, ROS topic refresh, overlay mode, no-default-radio guard)", "status": "done", "note": "Lives in gitignored .claude/skills/sim-color-matcher/. Add gitignore exception to commit it."},
-    {"id": "claude-md", "name": "CLAUDE.md updates — ArUco IDs, workspace cam paths, asyncio gotcha, viewport publisher kwargs, Skills available section", "status": "done", "commit": "35d0eed"}
+    {"id": "drop-sweep", "name": "drop_sweep self-contained (combined pan+tilt, no drop_point dependency)", "status": "done", "commit": "019331f"},
+    {"id": "match-real-world", "name": "expose match_real_world MCP tool in soarm101-dt", "status": "done", "commit": "ab36f82"},
+    {"id": "sim-reset", "name": "sim_reset.sh uses match_real_world+update_cups for quick_start-equivalent cup poses", "status": "done", "commit": "5b0efa7"},
+    {"id": "padding-zero", "name": "cup collision padding default 2.5% → 0%", "status": "done", "commit": "ddd6fe1"},
+    {"id": "calibrated-home", "name": "_cmd_grasp_home_data calibrated to real-world ep7 frame 277 shoulders+gripper, sim wrist", "status": "done", "commit": "82f8d67"},
+    {"id": "1-to-1-episodes", "name": "Record Sim — 1:1 episode contract via xdotool Right/Left to lerobot, phase-A gate, drain window", "status": "done", "commit": "8503359"},
+    {"id": "action-mirror", "name": "joint_states_to_commands.py rewritten — reads controller_state.reference, not /joint_states (action≠state per frame)", "status": "done", "commit": "4bf98d0"},
+    {"id": "docs-canonical-viz", "name": "CLAUDE.md updates — use lerobot-dataset-viz, never custom rerun loader (ffmpeg 4.4 vs rerun ≥5.1)", "status": "done", "commit": "f99c3e9"},
+    {"id": "v6-recording", "name": "Recorded sim_blue_v6_action_test_175034 (3 episodes, 10/10 success in v5 had been 10) and copied to ~/transfer/", "status": "done"}
   ],
   "remaining_tasks": [
-    {"id": "motion-primitive-fix", "name": "Fix motion primitive (next session priority per user)", "status": "not_started", "context": "User flagged 'fixing the motion primitive' as next work. Likely refers to drop_sweep / pick / grasp primitives in vla_SO-ARM101/.../control_gui.py. Investigate what's broken in the current pipeline before changing anything — the planner is layered (tier-1 linear -> tier-2 retract-pan-settle -> OMPL fallback) so 'broken' could be in any layer."},
-    {"id": "lerobot-record-linux", "name": "Record lerobot data on Linux from Isaac Sim (Phase 10.2 main goal)", "status": "not_started", "context": "Phase 10.2's headline goal — sim-only recording on Linux. Three tracks per the original plan: (1) topic-naming unification across the 3 packages, (2) conda env validation, (3) lerobot-record end-to-end + reference dataset to HF + verify_parity.py PASS + LEROBOT_ROS2_LINUX_SETUP.md. See the prior .continue-here.md for the full track-by-track plan."},
-    {"id": 13, "name": "Audit/tune duration_s for grasp_home / drop_point / drop_sweep / grasp_move (motion timing)", "status": "not_started", "context": "Carried over from earlier scene-polish HANDOFF — relates to motion-primitive-fix"},
-    {"id": 15, "name": "ONE agent entry point in Exploring-VLAs orchestrating aruco + isaac-sim-mcp + control + recording", "status": "not_started"},
-    {"id": 16, "name": "Verify aruco_camera_localizer + isaac-sim-mcp launchable from the entry point", "status": "not_started"},
-    {"id": 17, "name": "Confirm full E2E pipeline (bring-up -> record -> valid dataset -> schema parity)", "status": "not_started"},
-    {"id": 18, "name": "Push reference dataset to HF Hub", "status": "not_started"},
-    {"id": 19, "name": "Run verify_parity.py against Mac-side reference", "status": "not_started"},
-    {"id": 20, "name": "Write LEROBOT_ROS2_LINUX_SETUP.md user-facing runbook", "status": "partial", "note": "Most content is in linux-env/CLAUDE.md; still needs user-facing setup doc."}
+    {"id": "audit-1-task-prompt", "name": "Audit item 1: change task prompt from 'sort blue blocks' to 'Pick a blue lego and place it in blue cup'", "status": "not_started", "effort": "1-line edit to record_sim_isaac.sh:--dataset.single_task=", "priority": "high"},
+    {"id": "audit-2-large-string", "name": "Audit item 2: tasks.parquet.task dtype 'string' → 'large_string'", "status": "not_started", "effort": "investigate lerobot version skew or PyArrow cast", "priority": "medium"},
+    {"id": "audit-4-joint-units", "name": "Audit item 4: joint range / units / calibration alignment (wrist_roll −38° offset, gripper 5× narrower range — units mismatch)", "status": "not_started", "effort": "deep URDF work — gripper joint angle vs jaw-opening units, wrist_roll zero pose to match Feetech", "priority": "high"},
+    {"id": "audit-5-episode-count", "name": "Audit item 5: record ≥40 episodes (target 440)", "status": "not_started", "effort": "configure Episodes widget + run", "priority": "high"},
+    {"id": "audit-6-episode-length", "name": "Audit item 6: episode length 459 frames → ~278 (real)", "status": "not_started", "effort": "split _rec_run_one_qs_cycle into prep+execute, run prep during Phase B (Tier 2 refactor)", "priority": "medium"},
+    {"id": "headless-isaac-sim", "name": "Try headless Isaac Sim to lift camera FPS (workspace 13 Hz, wrist 22 Hz vs target 30 Hz)", "status": "not_started", "effort": "--/app/window/enabled=false on Kit launch + verify cameras/MCP socket still come up", "priority": "medium"}
   ],
   "blockers": [
-    {"description": ".claude/ is gitignored at this repo, so the new sim-color-matcher skill is project-local only. Decision pending: add a gitignore exception or move out of .claude/.", "type": "decision", "severity": "advisory"},
-    {"description": "Workspace camera publisher (_ViewportCameraPublisher) follows the active main viewport — switching to wrist camera silently makes /workspace_camera_sim publish wrist content. Caveat for any future capture/recording flow.", "type": "technical", "severity": "advisory", "workaround": "Set active viewport to /World/workspace_camera before capturing, OR use the dedicated /wrist_camera_rgb_sim (Replicator-backed, view-stable) for wrist. Documented in CLAUDE.md."}
+    {"description": "Gripper joint units mismatch — sim publishes ~6.5° max, real shows 29.4°. Need to confirm whether sim publishes joint angle (moving jaw rotation) vs jaw-opening angle, then align with Feetech's reported convention. URDF inspection needed.", "type": "technical", "severity": "blocking"},
+    {"description": "wrist_roll zero pose — sim convention has wrist_roll near -π/2 at home; real has -49° at home. Either sim URDF needs zero-pose pin to match Feetech, or BC training has to learn the offset (unsupported).", "type": "technical", "severity": "advisory", "workaround": "Sim convention currently used by drop_sweep IK (lock_pan to -π/2 in IK). Changing it requires updating drop_sweep + grasp_move + grasp_home_data simultaneously."}
   ],
   "human_actions_pending": [
-    {"action": "Decide whether to add a .gitignore exception for .claude/skills/sim-color-matcher/ to commit the skill with the repo", "context": "Skill works local-only right now; if other team members or other machines should have access, exception needed.", "blocking": false},
-    {"action": "Push 16 commits across so-arm101 branch to origin", "context": "Branch is 16 commits ahead of origin/so-arm101. User said no pushes without approval.", "blocking": false}
+    {"action": "Decide on the exact task prompt string", "context": "User may want to use different prompts per dataset for training diversity. Default to real-canonical 'Pick a blue lego and place it in blue cup' for parity.", "blocking": false},
+    {"action": "Review whether 40 or 440 episodes is the target for next batch", "context": "440 = full real-side parity. 40 = absolute floor for 25/75 ratio sweeps. Records take ~25s each so 440 = ~3 hours unattended.", "blocking": true}
   ],
   "decisions": [
-    {"decision": "Color-correction math uses sRGB->linear ratio applied to current diffuseColor", "rationale": "Multiplicative correction preserves relative lighting behavior and converges in 1-2 iterations. Direct replacement would ignore the lighting term."},
-    {"decision": "Picker uses no-default-radio + Apply error if unselected", "rationale": "Earlier silent-default-applied to wrong target caused real bugs. Forced selection eliminates that class of mistakes."},
-    {"decision": "Live ROS topic refresh (1.5s) for sim view in picker", "rationale": "Each Apply propagates immediately; user sees the change without rebuild. Eliminates the iterate-rebuild-restart loop."},
-    {"decision": "Use rclpy ROS-topic subscription for viewport capture, not capture_viewport_to_file", "rationale": "execute_python_code runs on Kit's main thread; awaiting a frame future on the same thread deadlocks. Documented in CLAUDE.md."},
-    {"decision": "Independent material for ext_tile (not shared with main tile)", "rationale": "Allows asymmetric tone (e.g. main = dark slate, ext = warm brown). User authored both colors via picker."}
+    {"decision": "drop_sweep is self-contained (no drop_point pre-step) and uses cup-derived pan locked", "rationale": "Combined pan+tilt motion clears cups in tier-1 deterministic path; eliminates need for separate drop_point button auto-call"},
+    {"decision": "Cup padding default 0% (was 5%)", "rationale": "2.5% caused drop_sweep carried-block clip at sub-mm during pan-across, falling through to OMPL RNG fallback. 0% gives tier-1 deterministic clearance for both grasp_move + drop_sweep."},
+    {"decision": "Calibrated home pose for QS + Record Sim ONLY (manual button, IK tab, Real Test tab keep original all-zeros + sim wrist)", "rationale": "Sim recordings should start from the same pose as real captures; other paths use the canonical zero-shoulders home for IK reference."},
+    {"decision": "1:1 episode contract via xdotool key injection to lerobot's pynput global listener", "rationale": "lerobot's keyboard listener catches Right/Left arrow regardless of focus on X11. Wayland-incompatible by design but matches current session model."},
+    {"decision": "action mirror reads controller_state.reference.positions, not /joint_states", "rationale": "Real-world teleop has action leading state by ~tracking lag; mirroring /joint_states made action == state to 14 decimals which is uninformative for BC. Now per-frame action ≠ state at sub-degree level."},
+    {"decision": "Use lerobot-dataset-viz canonically; never write custom rerun loaders", "rationale": "Custom AssetVideo path failed on Ubuntu 22.04 (ffmpeg 4.4 < rerun's 5.1). Official tool decodes via pyav inside pixi-Jazzy and bypasses the issue. Documented in linux-env/CLAUDE.md gotchas."}
   ],
-  "uncommitted_files": [
-    "exts/soarm101-dt/assets/aruco_markers/meshes/ (untracked dir, *.usda gitignored)",
-    "mobileclip_blt.ts (untracked, not from this session)",
-    ".claude/skills/sim-color-matcher/ (gitignored — explicit decision pending)"
-  ],
-  "next_action": "Begin 'fixing the motion primitive' — first investigate which primitive is broken (start with `vla_SO-ARM101/scripts/test_qs_cycle.sh` and `motion_log.sh status`/`scan` to see recent telemetry). Don't change anything until you understand which layer (tier-1 linear / tier-2 retract-pan / OMPL) is failing.",
-  "context_notes": "Long scene-polish session focused on visual fidelity (lighting, materials, colors, tile geometry). Built a new sim-color-matcher skill that turned out to be the pivotal tool — went from vision-LLM color guessing (drift, disagreement) to deterministic pixel-ratio matching that converged in 1-2 iterations per surface. Discovered (the hard way) that asyncio.run_until_complete inside execute_python_code is a same-thread deadlock — required SIGKILL to recover, lost in-session pose tweaks. CLAUDE.md updated with that gotcha + ArUco ID correction (was stale 0/1/2, actually 3/2/1) + workspace camera prim-vs-topic naming clarification. Three commits land all the scene work: d3dd788 (lighting+materials), 2276e06 (ext tile + colors + calibration), 35d0eed (CLAUDE.md). Branch so-arm101 is 16 commits ahead of origin. Next session pivots from visual polish to motion behavior — user explicitly said 'fixing the motion primitive then recording data for linux from sim'."
+  "uncommitted_files": [],
+  "infrastructure_state": {
+    "isaac_sim": "alive at PID ~3334291, MCP socket :8767",
+    "control_gui": "alive (relaunched after _QS_SEQUENCE class-attr change), rviz=true",
+    "joint_states_to_commands_mirror": "alive at PID ~3566950 — running NEW controller-reference version, publishing /joint_commands_lerobot at 30 Hz",
+    "rerun_viewer": "may be alive at :9876 (last spawned by lerobot-dataset-viz on ep0 of v6); state varies",
+    "datasets": [
+      "~/.cache/huggingface/lerobot/local/sim_blue_v6_action_test_175034/ (3 episodes, action mirror NEW version)",
+      "~/transfer/sim_blue_v6_action_test_175034/ (mirror copy for external review)",
+      "~/.cache/huggingface/lerobot/local/sim_blue_v5_171525/ (10 episodes, action mirror OLD version — keep for diff reference)"
+    ]
+  },
+  "next_action": "Read ~/transfer/SIM_DATASET_PARITY_REPORT.md fully. Then fix audit item 1 (task prompt) as warm-up, then tackle item 4 (gripper units) by inspecting the sim URDF gripper joint definition and comparing with Feetech's degree convention. Item 5 (record 40+ episodes) and item 6 (episode length trim via Phase-B prep) are downstream of fixing 1+4. Verify after each fix using the 5-step recipe in the parity report.",
+  "context_notes": "Session was very productive — went from broken 1-cycle pick-place to a working sim recording pipeline that's lerobot-tool-compatible (lerobot-dataset-viz opens it identically to real datasets). User explicitly requested fixing parity in the next session ('the first thing we do is fix the parity and verify they are the exact same as the real world dataset'). The audit report is the canonical punch list. 6 of 6 audit items are well-understood — 3 are 1-line fixes, 1 is a deep URDF/calibration story, 2 are medium refactors. Don't pre-optimize headless or other Tier 2 items until parity is closed.",
+  "parity_report": {
+    "path": "~/transfer/SIM_DATASET_PARITY_REPORT.md",
+    "items": [
+      {"id": 1, "title": "task prompt 'sort blue blocks' → 'Pick a blue lego and place it in blue cup'", "fix_complexity": "1-line"},
+      {"id": 2, "title": "tasks.parquet.task dtype string → large_string", "fix_complexity": "PyArrow cast or lerobot version investigation"},
+      {"id": 3, "title": "action ≠ observation.state per frame", "fix_complexity": "DONE (commit 4bf98d0) per-frame; per-episode min/max still coincide which is acceptable"},
+      {"id": 4, "title": "joint value ranges / units (wrist_roll, gripper)", "fix_complexity": "deep URDF work"},
+      {"id": 5, "title": "episode count 3 → 40 (target 440)", "fix_complexity": "just record more"},
+      {"id": 6, "title": "episode length 459 frames → ~278 frames", "fix_complexity": "orchestrator refactor — qs_refresh+select to Phase B"}
+    ]
+  }
 }
