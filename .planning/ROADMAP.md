@@ -10,23 +10,31 @@ Milestone 1 (Platform Transfer) takes the existing `aic-dt` extension scaffold f
 - Integer phases (1, 2, 3, 4): Planned milestone work
 - Decimal phases (e.g., 2.1): Urgent insertions (marked with INSERTED)
 
-- [ ] **Phase 1: Foundation Parity** - Same UR5e + RG2 + cameras + assets + textures Gazebo loads, same passive ROS topics (`/joint_states`, `/tf`, `/tf_static`), placeholder `_sim`/`_real` topics removed
-- [ ] **Phase 2: Controller Loop & Parametric Scene** - Command-side topics close the loop with `aic_controller`; force/torque + off-limit contacts published; task-board spawn accepts the same component-delta parameters Gazebo does
-- [ ] **Phase 3: Cable Physics & Ground-Truth Pose** - Cable physics strategy chosen (research-driven) and implemented for both cable variants with gripper attach; object TF frames CheatCode reads published into `/tf` and `/scoring/tf`; insertion event fires
+- [ ] **Phase 1: Foundation Parity** - Same UR5e + Robotiq Hand-E + cameras + assets + textures Gazebo loads, same passive ROS topics (`/joint_states`, `/tf`, `/tf_static`), `/fts_broadcaster/wrench` fully matched to live, parametric task-board spawn with component-delta atoms + pose params, full cross-phase parity audit table, atomic+clubbed contract enforced, `_sim`/`_real` removed
+- [ ] **Phase 2: Controller Loop** - Command-side topics close the loop with `aic_controller`; off-limit contacts published; subscribe + state publishers wired
+- [ ] **Phase 3: Cable Physics & Ground-Truth Pose** - Cable physics strategy chosen (research-driven via `nvidia-suite-docs`) and implemented for both cable variants with gripper attach; object TF frames CheatCode reads published into `/tf` and `/scoring/tf`; insertion event fires
 - [ ] **Phase 4: Trial Loader & End-to-End Verification** - Trial YAML loader (MCP atom + UI button) + `ground_truth` flag; `aic_engine` runs every `sample_config.yaml` trial under CheatCode against Isaac Sim with parity-report side-by-side outcomes; Quick Start refactored, CLAUDE.md and README shipped
 
 ## Phase Details
 
 ### Phase 1: Foundation Parity
-**Goal**: Isaac Sim loads the exact same UR5e + RG2 + 3 wrist cameras + task-board + AIC enclosure assets the AIC repo's Gazebo bringup loads, with no missing/broken textures, and publishes the same passive sensor topics (`/joint_states`, `/tf`, `/tf_static`) Gazebo publishes — using the same joint names, frame names, and frame hierarchy. All `_sim` / `_real` topic naming from the placeholder scaffold is removed.
+**Goal**: Isaac Sim loads the exact same UR5e + Robotiq Hand-E + 3 wrist cameras + task-board + AIC enclosure assets the AIC repo's Gazebo bringup loads, with no missing/broken textures, and publishes the same passive sensor topics (`/joint_states`, `/tf`, `/tf_static`, `/fts_broadcaster/wrench`) Gazebo publishes — using the same joint names, frame names, frame hierarchy, message types, and rates. The task-board spawn accepts the same component-delta parameters `spawn_task_board.launch.py` does (mount rails 0/1, sc/sfp/lc port presence + translation + RPY, NIC rails 0-3), and robot/board/cable poses are configurable via the same parameter names Gazebo uses (`robot_x/y/z/roll/pitch/yaw`, `task_board_*`, `cable_*`). The atomic+clubbed contract (every new capability = one `MCP_TOOL_REGISTRY` entry + matching `_cmd_<name>` handler + one UI button) is preserved across all new atoms. A full cross-phase parity audit table lives in `exts/aic-dt/docs/topic-parity-reference.md`. All `_sim`/`_real` topic naming from the placeholder scaffold is removed.
+
+**Pulled forward from Phase 2/3** (per CLAUDE.md "Phase scope is by surface, not capability" rule — these requirements share `extension.py` + `AIC_OBJECTS` + asset tree surfaces with the original Phase 1 work, so combining is cheaper than re-entering): SCENE-01, SCENE-04, PARITY-05, PARITY-12, DX-02.
+
 **Depends on**: Nothing (first phase)
-**Requirements**: PARITY-01, PARITY-02, PARITY-03, PARITY-04, TEX-01, TEX-02, TEX-03, DX-01
+**Requirements**: PARITY-01, PARITY-02, PARITY-03, PARITY-04, PARITY-05, PARITY-12, TEX-01, TEX-02, TEX-03, SCENE-01, SCENE-04, DX-01, DX-02
+**Canonical refs**: `~/.claude/skills/nvidia-suite-docs/SKILL.md` (Isaac Sim 5.0 / OmniGraph / OpenUSD / `isaacsim.ros2.bridge` live docs — for both research and execution-time recovery), `~/.claude/skills/isaac-sim-extension-dev/SKILL.md` (extension lifecycle, cache discipline, MCP socket protocol, project-specific gotchas), `~/Documents/aic/aic_bringup/launch/spawn_task_board.launch.py` (parameter set source for SCENE-01), `~/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro` (robot definition with Robotiq Hand-E gripper).
 **Success Criteria** (what must be TRUE):
-  1. After running the (refactored) Quick Start, `ros2 topic list` shows `/joint_states`, `/tf`, and `/tf_static` and no topic anywhere in the extension carries a `_sim` or `_real` suffix
-  2. `ros2 topic echo /joint_states --once` returns the same six UR5e joint names in the same ordering Gazebo's `/joint_states` publishes
+  1. After running the (refactored) Quick Start, `ros2 topic list` shows `/joint_states`, `/tf`, `/tf_static`, `/fts_broadcaster/wrench` and no topic anywhere in the extension carries a `_sim` or `_real` suffix
+  2. `ros2 topic echo /joint_states --once` returns the same joint names in the same ordering Gazebo's `/joint_states` publishes (live snapshot: 7 joints alphabetical, including `gripper/left_finger_joint`)
   3. `ros2 run tf2_tools view_frames` against Isaac Sim produces a TF tree whose robot + gripper + camera frames match Gazebo's reference TF tree (same names, same parent-child links)
-  4. Loading the full M1 scene in Isaac Sim's viewport shows zero pink/black/missing-texture materials and zero broken-MDL warnings in the console; `exts/aic-dt/docs/` contains a texture-sweep findings + fix log enumerating every asset touched
+  4. Loading the full M1 scene in Isaac Sim's viewport shows zero pink/black/missing-texture materials and zero broken-MDL warnings in the console; `exts/aic-dt/docs/texture-sweep.md` contains a findings + fix log enumerating every asset touched
   5. Grepping the extension source for `objects_poses_sim`, `sync_real_poses`, `_sim`, and `_real` returns no production-topic matches (camera placeholder topics renamed or removed)
+  6. `ros2 topic hz /fts_broadcaster/wrench` shows a steady stream of `WrenchStamped` messages matching Gazebo's frame_id and rate (PARITY-05)
+  7. Calling the per-component spawn atoms with a `sample_config.yaml` `task_board` block (mount rails + sc/sfp/lc/nic occupancy + per-entity translation/RPY + robot/board pose) produces a viewport scene equivalent to the same parameters spawned by `spawn_task_board.launch.py` in Gazebo (SCENE-01, SCENE-04)
+  8. `exts/aic-dt/docs/topic-parity-reference.md` contains a complete cross-phase parity audit table mapping every Gazebo topic to its Isaac Sim equivalent with phase status (implemented / Phase-N-deferred / not-applicable) and proof-of-publish per implemented row (PARITY-12)
+  9. Every new MCP capability lands as one `MCP_TOOL_REGISTRY` entry + matching `_cmd_<name>` handler + one UI button — `MCP_TOOL_REGISTRY` is the only source of tool metadata (DX-02)
 **Plans**: 8 plans
 Plans:
 - [ ] 01-01-PLAN.md — Snapshot infrastructure: live aic_eval Docker capture script + topic-parity-reference.md (D-01, D-14)
@@ -39,10 +47,10 @@ Plans:
 - [ ] 01-08-PLAN.md — quick_start refactor per D-12 + Phase 1 CHANGELOG entry
 **UI hint**: yes
 
-### Phase 2: Controller Loop & Parametric Scene
-**Goal**: The unmodified `aic_controller` (impedance controller plugin) successfully drives the UR5e in Isaac Sim — Isaac Sim subscribes to `/aic_controller/joint_commands` and `/aic_controller/pose_commands` and applies them, publishes `/aic_controller/controller_state` for tare/bookkeeping, publishes `/fts_broadcaster/wrench` for end-effector force/torque, and publishes `/aic/gazebo/contacts/off_limit` for off-limit contact events. The task-board spawn accepts the same component-delta parameters `spawn_task_board.launch.py` does (mount rails 0/1, sc/sfp/lc port presence + translation + RPY, NIC rails 0–3) and reproduces equivalent scene state for any valid Gazebo parameter set, and robot/board poses are configurable via the same parameter names Gazebo uses.
+### Phase 2: Controller Loop
+**Goal**: The unmodified `aic_controller` (impedance controller plugin) successfully drives the UR5e in Isaac Sim — Isaac Sim subscribes to `/aic_controller/joint_commands` and `/aic_controller/pose_commands` and applies them, publishes `/aic_controller/controller_state` for tare/bookkeeping, and publishes `/aic/gazebo/contacts/off_limit` for off-limit contact events. (Parametric task-board spawn, pose parameters, wrench publisher, and atomic+clubbed contract enforcement were pulled forward to Phase 1 per the surface-adjacency rule.)
 **Depends on**: Phase 1
-**Requirements**: PARITY-05, PARITY-06, PARITY-09, PARITY-10, PARITY-11, SCENE-01, SCENE-04, DX-02
+**Requirements**: PARITY-06, PARITY-09, PARITY-10, PARITY-11
 **Success Criteria** (what must be TRUE):
   1. Launching `aic_controller` against Isaac Sim and publishing a `JointMotionUpdate` to `/aic_controller/joint_commands` causes the UR5e in the viewport to move to the commanded configuration; same test against `/aic_controller/pose_commands` moves the end-effector
   2. `ros2 topic hz /fts_broadcaster/wrench` shows a steady stream of `WrenchStamped` messages with the correct end-effector `frame_id`, and intentional contacts visibly affect the force readings
@@ -55,7 +63,7 @@ Plans:
 ### Phase 3: Cable Physics & Ground-Truth Pose
 **Goal**: A cable physics strategy is researched (using the `nvidia-suite-docs` skill) across deformable / articulated chain / rigid-plug-with-visual-hybrid options, justified, and implemented such that both `sfp_sc_cable` and `sfp_sc_cable_reversed` variants spawn correctly with `attach_cable_to_gripper:=true` semantics (plug body attached to RG2 at the same offset Gazebo uses, with `gripper_initial_pos` matching cable type — 0.0073 for sfp_sc_cable, 0.00655 default). The object TF frames CheatCode looks up — `{cable_name}/{plug_name}_link`, port frames against `base_link`, etc. — are published into `/tf` (and cable link poses into `/scoring/tf`) when ground-truth mode is on, and the insertion event fires on `/scoring/insertion_event` when a cable plug enters its target port. The Quick Start grows to club the new atoms cleanly.
 **Depends on**: Phase 2
-**Requirements**: SCENE-02, SCENE-03, SCENE-05, SCENE-06, PARITY-07, PARITY-08, PARITY-12, DX-03
+**Requirements**: SCENE-02, SCENE-03, SCENE-05, SCENE-06, PARITY-07, PARITY-08, DX-03
 **Success Criteria** (what must be TRUE):
   1. A cable-physics design note in `exts/aic-dt/docs/` records which strategy (deformable / articulated chain / rigid+visual hybrid) was chosen, what was tested, and what the trade-offs were — and the chosen strategy is implemented for both `sfp_sc_cable` and `sfp_sc_cable_reversed`
   2. With `attach_cable_to_gripper:=true`, the plug remains rigidly co-moving with the RG2 gripper (verified by visual inspection and by `ros2 run tf2_ros tf2_echo base_link <cable>/<plug>_link` showing pose changes that track gripper motion)
