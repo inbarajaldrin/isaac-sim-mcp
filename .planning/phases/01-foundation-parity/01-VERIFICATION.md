@@ -2,8 +2,9 @@
 phase: 01-foundation-parity
 verified: 2026-05-02T22:00:00Z
 status: gaps_found
-score: 5/9 must-haves verified
+score: 5/10 must-haves verified
 overrides_applied: 0
+revised: 2026-05-02T22:30:00Z (added Gap E — visual viewport regression, surfaced by user during live verify run)
 gaps:
   - truth: "ros2 topic echo /joint_states --once returns the same joint names in the same ordering Gazebo's /joint_states publishes (live snapshot: 7 joints alphabetical, including gripper/left_finger_joint)"
     status: failed
@@ -47,6 +48,22 @@ gaps:
     missing:
       - "Run verify_phase_1.sh step with per-component spawn atoms against a live Kit session."
       - "Visual confirmation that task board renders correctly with sample_config.yaml trial_1 parameters."
+  - truth: "Visual viewport correctness — object scales, sizes, and positions match the prior known-good aic-dt state (which loaded the unified USD with the snake_case assets/objects/ layout and a monolithic add_objects clubbing)"
+    status: failed
+    reason: "USER REPORTED (2026-05-02 during the live verify_phase_1.sh run while Isaac Sim was running on port 8768): 'major mismatch in the object size, quite a lot of things to fix'. Confirmed regression — the prior aic-dt state (pre-Plan-02 vendoring + pre-Plan-09 per-component spawn refactor) was visually correct. The same unified USD (aic_unified_robot_cable_sdf.usd, byte-identical between prior state and now) ran with snake_case per-object USDs at exts/aic-dt/assets/objects/{nic_card, sc_plug, sc_port, nic_card_mount, task_board_base} and rendered at correct shapes, scales, and placements. Plan 02 retired that layout and vendored AIC's IsaacLab-canonical Intrinsic_assets/assets/<Capitalized>/ tree; Plan 09 refactored add_objects into 7 per-component spawn atoms with parameters mirroring spawn_task_board.launch.py. ONE OR BOTH of those changes broke visual fidelity. The verifier's static + log-grep analysis missed this because static analysis cannot reason about scene rendering. Hypothesized root causes (none verified): (a) metersPerUnit mismatch between the unified USD and the AIC IsaacLab per-object USDs, (b) per-component spawn atoms applying transforms differently than the prior monolithic add_objects, (c) GLB→USD scale baked wrong in Plan 09's build_mount_rail_usds.py thin wrappers for LC/SFP/SC Mount, (d) AddReference without explicit xformOp:scale picking up unit drift, (e) cable subtree (SetActive(False)) still influencing bounding boxes. Diagnostic data MUST be gathered (USD layer metersPerUnit, prim worldbox bounds before vs after, Pixar Usd diff against the snake_case branch state) before applying fixes; do NOT guess."
+    artifacts:
+      - path: "exts/aic-dt/assets/assets/"
+        issue: "Vendored AIC IsaacLab tree (NIC Card, NIC Card Mount, SC Plug, SC Port, Task Board Base, LC Mount, SFP Mount, SC Mount) — replaced the prior snake_case objects/ layout. Visually broke something."
+      - path: "exts/aic-dt/aic_dt/extension.py"
+        issue: "AIC_OBJECTS dict + add_objects refactored to use per-component spawn atoms. May apply transforms differently than the prior monolithic codepath."
+      - path: "exts/aic-dt/scripts/build_mount_rail_usds.py"
+        issue: "Plan 09 thin USD wrappers for LC/SFP/SC Mount referencing .glb meshes — scale not explicitly handled per Pixar OpenUSD authoring conventions."
+    missing:
+      - "Diagnostic comparison: git checkout the pre-Plan-02 commit (5dc5b75 or earlier — last commit with snake_case objects/ tree) into a worktree, run quick_start there, capture per-prim worldbox bounds. Then run quick_start on current HEAD, capture same bounds. Diff numerically — which objects shifted/scaled?"
+      - "USD layer metersPerUnit + upAxis audit across exts/aic-dt/assets/{robot/aic_unified_robot_cable_sdf.usd, scene/aic.usd, assets/<Capitalized>/*.usd} — confirm all layers agree."
+      - "Compare per-component spawn atom positioning logic in extension.py with the prior monolithic add_objects — were translation/rotation values copied verbatim, or were units silently changed?"
+      - "Once root cause identified, the fix may be: (a) revert the vendored layout but keep the textures sibling fix, (b) apply explicit xformOp:scale to vendored references, (c) merge the snake_case layout's known-good positions into the new per-component atoms, or (d) re-vendor with corrected metersPerUnit."
+      - "User confirmation that fixed viewport matches the prior known-good visual state."
 deferred:
   - truth: "gripper/left_finger_joint name published in /joint_states (SC #2 partial aspect)"
     addressed_in: "Follow-up plan within Phase 1 or early Phase 2"
