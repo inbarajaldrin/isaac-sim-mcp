@@ -1,0 +1,36 @@
+Type: geometry_msgs/msg/WrenchStamped
+
+Publisher count: 1
+
+Node name: fts_broadcaster
+Node namespace: /
+Topic type: geometry_msgs/msg/WrenchStamped
+Topic type hash: RIHS01_8dc3deaf06b2ab281f9f9a742a8961c328ca7cec16e3fd6586d3a5c83fa78f77
+Endpoint type: PUBLISHER
+GID: 50.18.a9.4e.15.77.4b.9b.c6.da.dd.25.f9.0d.c0.4b
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): KEEP_LAST (42)
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 1
+
+Node name: aic_adapter_node
+Node namespace: /
+Topic type: geometry_msgs/msg/WrenchStamped
+Topic type hash: RIHS01_8dc3deaf06b2ab281f9f9a742a8961c328ca7cec16e3fd6586d3a5c83fa78f77
+Endpoint type: SUBSCRIPTION
+GID: 47.ac.a4.ec.cd.a5.d5.f0.96.9b.d7.09.bd.a3.9f.45
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): KEEP_LAST (5)
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+

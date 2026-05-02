@@ -1,0 +1,51 @@
+Type: sensor_msgs/msg/JointState
+
+Publisher count: 1
+
+Node name: joint_state_broadcaster
+Node namespace: /
+Topic type: sensor_msgs/msg/JointState
+Topic type hash: RIHS01_a13ee3a330e346c9d87b5aa18d24e11690752bd33a0350f11c5882bc9179260e
+Endpoint type: PUBLISHER
+GID: 2e.a3.f4.e9.4d.30.1a.0f.d9.b3.fc.16.bb.93.13.db
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): KEEP_LAST (42)
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 2
+
+Node name: aic_adapter_node
+Node namespace: /
+Topic type: sensor_msgs/msg/JointState
+Topic type hash: RIHS01_a13ee3a330e346c9d87b5aa18d24e11690752bd33a0350f11c5882bc9179260e
+Endpoint type: SUBSCRIPTION
+GID: 18.e9.f8.c5.72.87.5b.ac.2d.73.3c.9e.5c.10.fa.56
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): KEEP_LAST (5)
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: robot_state_publisher
+Node namespace: /
+Topic type: sensor_msgs/msg/JointState
+Topic type hash: RIHS01_a13ee3a330e346c9d87b5aa18d24e11690752bd33a0350f11c5882bc9179260e
+Endpoint type: SUBSCRIPTION
+GID: 0d.9f.6c.01.21.35.13.df.95.19.11.53.67.a4.fa.1b
+QoS profile:
+  Reliability: BEST_EFFORT
+  History (Depth): KEEP_LAST (5)
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+

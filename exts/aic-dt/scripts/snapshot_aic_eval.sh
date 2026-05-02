@@ -36,7 +36,10 @@ echo "Waiting 35s for Gazebo + controllers..."
 sleep 35
 
 # 4. Capture image digest (D-14 — pin upstream supply chain)
-docker inspect --format='{{index .RepoDigests 0}}' aic_eval | tee "$DEST/image_digest.txt"
+#    Note: running containers may have empty .RepoDigests (the field is image metadata,
+#    not container metadata). Inspect the image itself by name.
+docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/intrinsic-dev/aic/aic_eval:latest \
+  | tee "$DEST/image_digest.txt"
 
 # 5. Capture full topic list
 #    The container uses Zenoh as RMW with custom router; need explicit env to probe.
