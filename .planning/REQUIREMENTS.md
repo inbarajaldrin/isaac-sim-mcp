@@ -8,7 +8,7 @@
 ### Asset & Topic Parity
 
 - [ ] **PARITY-01**: Isaac Sim loads the AIC repo's `aic_description` xacro/URDF for the UR5e + RG2 + 3 wrist cameras (no divergent kinematics or geometry from Gazebo)
-- [ ] **PARITY-02**: Isaac Sim loads the AIC repo's `aic_assets` meshes for the task board, ports (sc / sfp / lc / nic), mount rails, cables, and the AIC enclosure (no divergent geometry)
+- [~] **PARITY-02**: Isaac Sim loads the AIC repo's `aic_assets` meshes for the task board, ports (sc / sfp / lc / nic), mount rails, cables, and the AIC enclosure (no divergent geometry) _(disk-layer vendor complete in Plan 01-02 — capitalized AIC tree byte-identical under exts/aic-dt/assets/assets/; code path update lands in Plan 01-04, scene-load verification at Plan 01-06; LC/SFP mount rails + cable assets vendored in Plan 01-09)_
 - [~] **PARITY-03**: Isaac Sim publishes `/joint_states` with the same joint name set + ordering Gazebo publishes _(reference snapshot captured in Plan 01-01; implementation in Plan 01-06)_
 - [~] **PARITY-04**: Isaac Sim publishes `/tf` and `/tf_static` containing the same robot + gripper + camera frames Gazebo publishes (with same parent-child hierarchy and frame names) _(reference snapshot captured in Plan 01-01; implementation in Plan 01-06)_
 - [ ] **PARITY-05**: Isaac Sim publishes `/fts_broadcaster/wrench` (`geometry_msgs/WrenchStamped`) for the UR5e end-effector force/torque, matching Gazebo's topic name and frame_id
@@ -22,8 +22,8 @@
 
 ### Texture & Material Sweep
 
-- [ ] **TEX-01**: Every USD/MDL asset referenced by the M1 spawn path loads in Isaac Sim with no missing-texture warnings, no pink/black materials, and no broken MDL references — verified by loading the full M1 scene and walking the viewport
-- [ ] **TEX-02**: Any GLB-imported PBR maps that lost binding during USD conversion are rebound (or the asset is re-vendored under `exts/aic-dt/assets/` with correct MDL bindings)
+- [~] **TEX-01**: Every USD/MDL asset referenced by the M1 spawn path loads in Isaac Sim with no missing-texture warnings, no pink/black materials, and no broken MDL references — verified by loading the full M1 scene and walking the viewport _(disk-layer root cause fixed in Plan 01-02 — sibling textures/ folders now present for every per-object USD; final viewport verification at Plan 01-06 verify_phase_1.sh after Plan 01-04 updates AIC_OBJECTS paths)_
+- [~] **TEX-02**: Any GLB-imported PBR maps that lost binding during USD conversion are rebound (or the asset is re-vendored under `exts/aic-dt/assets/` with correct MDL bindings) _(disk-layer re-vendor complete in Plan 01-02 — assets now at correct on-disk locations relative to USD's relative texture references; final binding verification at Plan 01-06)_
 - [ ] **TEX-03**: Texture sweep findings + fix log captured under `exts/aic-dt/docs/` (which assets had which problem, what fix was applied) — shipping documentation, not just code
 
 ### Parameterized Scene Spawn
@@ -95,7 +95,7 @@ Populated by roadmapper on 2026-05-01 during ROADMAP.md creation. Every v1 requi
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | PARITY-01 | Phase 1 | Pending |
-| PARITY-02 | Phase 1 | Pending |
+| PARITY-02 | Phase 1 | Disk-layer vendor shipped (01-02); awaiting code path update (01-04) + scene-load verify (01-06); LC/SFP/cable assets in 01-09 |
 | PARITY-03 | Phase 1 | Snapshot reference captured (01-01); awaiting implementation (01-06) |
 | PARITY-04 | Phase 1 | Snapshot reference captured (01-01); awaiting implementation (01-06) |
 | PARITY-05 | Phase 1 | Pending |
@@ -106,8 +106,8 @@ Populated by roadmapper on 2026-05-01 during ROADMAP.md creation. Every v1 requi
 | PARITY-10 | Phase 2 | Pending |
 | PARITY-11 | Phase 2 | Pending |
 | PARITY-12 | Phase 1 | Initial audit table shipped (01-01); proof-of-publish columns fill as Plans 04/06 ship |
-| TEX-01 | Phase 1 | Pending |
-| TEX-02 | Phase 1 | Pending |
+| TEX-01 | Phase 1 | Disk-layer root cause fixed (01-02 — sibling textures/ vendored); final viewport verify at Plan 01-06 |
+| TEX-02 | Phase 1 | Disk-layer re-vendor complete (01-02 — capitalized layout with textures siblings byte-identical to AIC source); final binding verify at Plan 01-06 |
 | TEX-03 | Phase 1 | Pending |
 | SCENE-01 | Phase 1 | Pending |
 | SCENE-02 | Phase 3 | Pending |
@@ -133,4 +133,4 @@ Populated by roadmapper on 2026-05-01 during ROADMAP.md creation. Every v1 requi
 
 ---
 *Requirements defined: 2026-05-01*
-*Last updated: 2026-05-01 after roadmap creation (4 phases mapped)*
+*Last updated: 2026-05-02 after Plan 01-02 (asset vendoring): PARITY-02, TEX-01, TEX-02 advanced to disk-layer-complete*
