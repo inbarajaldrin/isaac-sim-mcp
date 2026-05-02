@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Plan 01-04 complete (extension.py cleanup -- 14 renames + RG2->Hand-E + prim-path bug + AIC_OBJECTS repoint + 8 surface deletions + PARITY-05 frame_id fix; extension.py 2645->2514 lines)
-last_updated: "2026-05-02T12:46:00.000Z"
-last_activity: 2026-05-02 -- Plan 01-04 complete; production-surface (_sim|_real|RG2) at 0; PARITY-05 static reconciliation done; DX-01 closed
+stopped_at: Plan 01-05 complete (pre-graph probes -- USD prim probe verdict PER-FRAME-RAW-OVERRIDE, joint-state probe verdict NAME-INDEXED; both conditional tasks skipped; Plan 06 contracts surfaced)
+last_updated: "2026-05-02T12:56:00.000Z"
+last_activity: 2026-05-02 -- Plan 01-05 complete; PARITY-04 strategy = 17 Raw frame overrides (no sublayer); PARITY-03 verdict = NAME-INDEXED via aic_adapter::ReorderJointState (no reorder bridge); DX-02 probe-script side honored
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 9
-  completed_plans: 4
-  percent: 44
+  completed_plans: 5
+  percent: 56
 ---
 
 # Project State
@@ -26,30 +26,30 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 1 (Foundation Parity) — EXECUTING
-Plan: 5 of 9
-Status: Executing Phase 1 — Plans 01-01, 01-02, 01-03, 01-04 complete
-Last activity: 2026-05-02 -- Plan 01-04 complete; extension.py production-surface clean (zero _sim/_real/RG2); PARITY-05 frame_id reconciled; setup_pose_publisher + sync_real_poses atoms deleted (8 surfaces); joint-path bug fixed
+Plan: 6 of 9
+Status: Executing Phase 1 — Plans 01-01, 01-02, 01-03, 01-04, 01-05 complete
+Last activity: 2026-05-02 -- Plan 01-05 complete; PARITY-04 strategy decided = 17 Raw frame_id overrides via per-frame ROS2PublishRawTransformTree (sublayer rejected: USD prim names cannot contain '/'); PARITY-03 verdict = NAME-INDEXED via aic_adapter joint_sort_order_ map; both conditional Tasks 3+4 skipped; Plan 06 contracts surfaced (TF override list + 1 joint-name override gripper_left_finger_joint -> gripper/left_finger_joint)
 
-Progress: [████░░░░░░] 44%
+Progress: [█████░░░░░] 56%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 4
+- Total plans completed: 5
 - Average duration: 5 min
-- Total execution time: 20 min
+- Total execution time: 25 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| Phase 1 | 4 | 20 min | 5 min |
+| Phase 1 | 5 | 25 min | 5 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min)
-- Trend: heaviest extension.py edit plan in Phase 1 (4 sequential tasks + 1 deviation; 14 renames + 8-surface atom deletion + 2 bug fixes + 1 audit-trail file). 1 auto-fix (Rule 1 — orphan dead code in delete_objects after the atom deletions). All Edit-tool operations atomic; AST parse passed after every task; final extension.py 2645->2514 lines.
+- Last 5 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min)
+- Trend: 01-05 is the lightest plan in Phase 1 by file count (4 files created, 0 modified) but high in upstream-source diligence (cross-package grep into aic_adapter when aic_controller probe returned UNKNOWN, avoiding ~2h over-engineered reorder wrapper). 3 deviations all auto-fixed (Rule 3 interpreter mismatch — env_isaaclab lacks pxr, switched to isaac-sim 4.2 python.sh; Rule 1 over-restrictive plan-snippet filter; Rule 2 missing investigation surface). 2 task commits + 1 metadata commit. Both conditional follow-up tasks (Tasks 3+4) cleanly skipped per probe-driven verdicts.
 
 *Updated after each plan completion*
 
@@ -84,6 +84,11 @@ Decisions are logged in PROJECT.md Key Decisions table. Recent decisions affecti
 - Plan 01-04: quick_start step 7 left as a comment placeholder (NOT reordered) — Plan 07 owns the reorder once Plan 06 lands the new TF/JointState publishers. This plan deliberately ships an interim broken state (consistent with the plan-level note in 01-04-PLAN.md).
 - Plan 01-04: PARITY-05 reconciliation pattern = `# PARITY-XX:` inline marker comment + docstring contract (topic / type / frame_id / source-of-truth file refs / verify recipe) + audit-trail .txt file in phase dir with standardized fields (Live frame_id, Live Type, Action taken, Verification command). Plan 07 verify_phase_1.sh consumes both the docstring recipe and the audit-trail file fields.
 - Plan 01-04: Per-task verify regexes in PLAN.md were over-strict for intermediate states — Task 1's verify asserted `_sim\b|_real\b` returns 0 hits, but `objects_poses_sim/real` (deleted in Task 3, not renamed in Task 1) tripped it. Treated plan-level end-of-plan grep as authoritative gate; flagged in summary "Issues Encountered" for future planners.
+- Plan 01-05: PARITY-04 strategy = PER-FRAME-RAW-OVERRIDE (NOT SUBLAYER-RENAME). USD prim names cannot legally contain `/` (Sdf.Path separator), and ROS2PublishTransformTree reads the prim leaf name not customData metadata — so sublayer rename via `over` blocks or customData:frameId attributes has no effect on published frame_id. Plan 06 must use per-frame ROS2PublishRawTransformTree nodes (or equivalent override-array inputs on TransformTree) for the 16 underscore->slash mismatches + 1 synthesized aic_world edge. Captured in usd_prim_inventory.txt `[Override list for Plan 06 / sublayer]` block (17 entries).
+- Plan 01-05: PARITY-03 verdict = NAME-INDEXED via aic_adapter::ReorderJointState (`~/Documents/aic/aic_adapter/src/aic_adapter.cpp:80-86` for sort-order map; lines 266-279 for the reorder loop). aic_controller is a ros2_control plugin reading hardware-state interfaces, not /joint_states topic — initial probe scope (aic_controller/src) returned UNKNOWN; the actual subscriber lives in a sibling package. Manual probe extension over aic_adapter/src found explicit name-keyed reordering. Plan 06 publishes Isaac Sim's natural articulation order without a reorder bridge.
+- Plan 01-05: One strict contract surfaced for Plan 06: aic_adapter's joint_sort_order_ map at line 86 has the literal key `gripper/left_finger_joint` (with slash). Isaac Sim's USD has the joint at `/World/aic_unified_robot/joints/gripper_left_finger_joint` (with underscore). Plan 06 MUST override the published joint_state name for this single joint, or aic_adapter logs "Ignoring unexpected joint name" and silently drops it from every Observation. This is the JointState analog of the TF frame_id override problem.
+- Plan 01-05: Probe-running interpreter is `~/.local/share/ov/pkg/isaac-sim-4.2.0/python.sh` (cp310 + pxr 0.26.3), NOT `~/env_isaaclab/bin/python` (cp311 from uv, no pxr installed). Future re-runs of probe_unified_usd.py must use isaac-sim's bundled python — env_isaaclab does NOT have the pxr OpenUSD module. (Could install `usd-core` pip package as alternative, but isaac-sim's bundled pxr is the same vendor that powers the runtime.)
+- Plan 01-05: Pre-graph probe pattern proven — cheap minutes-long upstream-source inspection BEFORE wiring OmniGraph nodes that depend on the verdicts. When the auto heuristic returns UNKNOWN (here: aic_controller doesn't subscribe to /joint_states), DON'T re-run with different defaults — append manual extension sections [6]+[7] to the same .txt report so the entire reasoning trail stays in one file. Conditional task pattern (Tasks 3+4 gated on `Strategy:` / `Action:` regex matches) avoids over-engineering when the probe says no fix is needed.
 
 ### Pending Todos
 
@@ -103,6 +108,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-02T12:46:00.000Z
-Stopped at: Plan 01-04 complete — extension.py cleanup (14 renames + RG2->Hand-E + prim-path fix + AIC_OBJECTS repoint + 8-surface atom deletion + PARITY-05 frame_id reconciliation); 5 atomic commits (de0a8d7, e4dca0d, 60c8fc4, 7eb0ba5, adfe09d); extension.py 2645->2514 lines
-Resume file: .planning/phases/01-foundation-parity/01-05-PLAN.md (pre-graph probes — USD prim names → frame-name strategy for PARITY-04 + aic_controller subscriber probe → ordering decision for PARITY-03)
+Last session: 2026-05-02T12:56:00.000Z
+Stopped at: Plan 01-05 complete — pre-graph probes (USD prim probe -> 17 frame_id overrides for Plan 06; joint-state probe -> NAME-INDEXED via aic_adapter); 2 atomic task commits (8a89890, 9221249) + metadata commit pending; both conditional Tasks 3+4 documented-skip per probe-driven verdicts
+Resume file: .planning/phases/01-foundation-parity/01-06-PLAN.md (TF + JointState publishers — setup_tf_publisher and setup_joint_state_publisher MCP atoms with PARITY-04 frame_id overrides + 1 joint-name override gripper_left_finger_joint -> gripper/left_finger_joint; per Plan 05 contracts in 01-05-SUMMARY.md)

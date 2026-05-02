@@ -9,8 +9,8 @@
 
 - [~] **PARITY-01**: Isaac Sim loads the AIC repo's `aic_description` xacro/URDF for the UR5e + Robotiq Hand-E + 3 wrist cameras (no divergent kinematics or geometry from Gazebo) _(doc + code-side gripper-name corrected in Plans 01-03 / 01-04; URDF xacro load path remains unimplemented — final close lands in Plan 01-06 or 01-08)_
 - [~] **PARITY-02**: Isaac Sim loads the AIC repo's `aic_assets` meshes for the task board, ports (sc / sfp / lc / nic), mount rails, cables, and the AIC enclosure (no divergent geometry) _(disk-layer vendor complete in Plan 01-02 — capitalized AIC tree byte-identical under exts/aic-dt/assets/assets/; AIC_OBJECTS code path repointed at vendored layout in Plan 01-04; scene-load verification at Plan 01-06; LC/SFP mount rails + cable assets vendored in Plan 01-09)_
-- [~] **PARITY-03**: Isaac Sim publishes `/joint_states` with the same joint name set + ordering Gazebo publishes _(reference snapshot captured in Plan 01-01; implementation in Plan 01-06)_
-- [~] **PARITY-04**: Isaac Sim publishes `/tf` and `/tf_static` containing the same robot + gripper + camera frames Gazebo publishes (with same parent-child hierarchy and frame names) _(reference snapshot captured in Plan 01-01; implementation in Plan 01-06)_
+- [~] **PARITY-03**: Isaac Sim publishes `/joint_states` with the same joint name set + ordering Gazebo publishes _(reference snapshot captured in Plan 01-01; ordering strategy decided in Plan 01-05 — verdict NAME-INDEXED via aic_adapter::ReorderJointState, NO reorder bridge needed; one strict joint-name override surfaced for Plan 06: gripper_left_finger_joint -> gripper/left_finger_joint; implementation in Plan 01-06)_
+- [~] **PARITY-04**: Isaac Sim publishes `/tf` and `/tf_static` containing the same robot + gripper + camera frames Gazebo publishes (with same parent-child hierarchy and frame names) _(reference snapshot captured in Plan 01-01; frame-name strategy decided in Plan 01-05 — verdict PER-FRAME-RAW-OVERRIDE, 17 explicit frame_id overrides for Plan 06 captured at usd_prim_inventory.txt, sublayer rename rejected as architecturally impossible; implementation in Plan 01-06)_
 - [~] **PARITY-05**: Isaac Sim publishes `/fts_broadcaster/wrench` (`geometry_msgs/WrenchStamped`) for the UR5e end-effector force/torque, matching Gazebo's topic name and frame_id _(static reconciliation complete in Plan 01-04: topic renamed to /fts_broadcaster/wrench, message type WrenchStamped preserved, header.frame_id corrected tool0->ati/tool_link from URDF; runtime ros2 topic info + echo verification deferred to Plan 01-07's verify_phase_1.sh; audit trail at parity_05_wrench_framing.txt)_
 - [ ] **PARITY-06**: Isaac Sim publishes `/aic/gazebo/contacts/off_limit` (`ros_gz_interfaces/Contacts`) for off-limit-item contact events — exact topic name kept even though "gazebo" is in it (zero-rename rule)
 - [ ] **PARITY-07**: Isaac Sim publishes `/scoring/insertion_event` (`std_msgs/String`) when a cable plug-port insertion completes
@@ -46,7 +46,7 @@
 ### Developer Experience & Docs
 
 - [x] **DX-01**: Placeholder `objects_poses_sim` / `sync_real_poses` MCP atoms (and any `_sim`/`_real` topic naming in the current extension) are removed or repurposed — no `_sim`/`_real` suffixes remain on any production topic _(closed Plan 01-04: 8 surfaces deleted across 2 atoms; production grep on extension.py for (_sim|_real|RG2)\b returns zero hits outside allowlisted initialize_simulation_context_async; 33-row rename table from RESEARCH.md applied verbatim)_
-- [~] **DX-02**: `MCP_TOOL_REGISTRY` + `_cmd_<name>` + per-tool UI button pattern is preserved for every new M1 capability (trial loader, parameterized scene spawn, etc.) — no architectural drift _(deletion-side proven in Plan 01-04: 4-surface contract honored when removing setup_pose_publisher + sync_real_poses; addition-side audited cumulatively by Plan 01-08 final-audit table; ongoing as new atoms ship in 01-06 and 01-09)_
+- [~] **DX-02**: `MCP_TOOL_REGISTRY` + `_cmd_<name>` + per-tool UI button pattern is preserved for every new M1 capability (trial loader, parameterized scene spawn, etc.) — no architectural drift _(deletion-side proven in Plan 01-04: 4-surface contract honored when removing setup_pose_publisher + sync_real_poses; probe-script-side honored in Plan 01-05: probe_unified_usd.py and probe_aic_controller_jointstate.sh emit machine-parseable Decision blocks downstream plans grep against — re-runnable, idempotent; addition-side audited cumulatively by Plan 01-08 final-audit table; ongoing as new atoms ship in 01-06 and 01-09)_
 - [ ] **DX-03**: `quick_start` is updated to club the M1 atomic operations into the new common path (load scene → load robot → setup graphs → load AIC enclosure → spawn parametric board → spawn cable → publish object TF → start sim)
 - [ ] **DX-04**: A `CLAUDE.md` is added at the repo root with: how to launch Isaac Sim with this extension, required env vars (`MCP_SERVER_PORT`, `MCP_CLIENT_OUTPUT_DIR` if applicable), MCP port (8768), the cross-repo relationship (this repo = sim-side; `~/Documents/aic` = ROS-side / controller / policies / engine), and where future Claude sessions should look first
 - [ ] **DX-05**: `exts/aic-dt/docs/README.md` is updated to reflect the AIC scope (it currently references "ur5e-dt Extension"); changelog updated for M1
@@ -96,8 +96,8 @@ Populated by roadmapper on 2026-05-01 during ROADMAP.md creation. Every v1 requi
 |-------------|-------|--------|
 | PARITY-01 | Phase 1 | Doc + code-side gripper-name corrected (01-03, 01-04); URDF xacro load path unimplemented — final close in 01-06/01-08 |
 | PARITY-02 | Phase 1 | Disk-layer vendor shipped (01-02); AIC_OBJECTS code path repointed at vendored capitalized layout (01-04); scene-load verify in 01-06; LC/SFP/cable assets in 01-09 |
-| PARITY-03 | Phase 1 | Snapshot reference captured (01-01); awaiting implementation (01-06) |
-| PARITY-04 | Phase 1 | Snapshot reference captured (01-01); awaiting implementation (01-06) |
+| PARITY-03 | Phase 1 | Snapshot (01-01) + ordering strategy decided (01-05): NAME-INDEXED via aic_adapter, no reorder bridge; awaiting implementation (01-06) |
+| PARITY-04 | Phase 1 | Snapshot (01-01) + frame-name strategy decided (01-05): PER-FRAME-RAW-OVERRIDE with 17 explicit overrides; awaiting implementation (01-06) |
 | PARITY-05 | Phase 1 | Static reconciliation complete (01-04): topic /fts_broadcaster/wrench, type WrenchStamped, frame_id ati/tool_link; runtime echo verify deferred to 01-07 |
 | PARITY-06 | Phase 2 | Pending |
 | PARITY-07 | Phase 3 | Pending |
@@ -121,7 +121,7 @@ Populated by roadmapper on 2026-05-01 during ROADMAP.md creation. Every v1 requi
 | TRIAL-04 | Phase 4 | Pending |
 | TRIAL-05 | Phase 4 | Pending |
 | DX-01 | Phase 1 | Closed (01-04): zero _sim/_real/RG2 hits in extension.py production surface |
-| DX-02 | Phase 1 | Deletion-side proven (01-04): 4-surface contract for 2 removed atoms; addition-side audit in 01-08 |
+| DX-02 | Phase 1 | Deletion-side proven (01-04): 4-surface contract for 2 removed atoms; probe-script-side honored (01-05): 2 re-runnable probes with machine-parseable Decision blocks; addition-side audit in 01-08 |
 | DX-03 | Phase 3 | Pending |
 | DX-04 | Phase 4 | Pending |
 | DX-05 | Phase 4 | Pending |
@@ -133,4 +133,4 @@ Populated by roadmapper on 2026-05-01 during ROADMAP.md creation. Every v1 requi
 
 ---
 *Requirements defined: 2026-05-01*
-*Last updated: 2026-05-02 after Plan 01-04 (extension.py cleanup): DX-01 closed; PARITY-01, PARITY-02, PARITY-05, DX-02 advanced; PARITY-05 static reconciliation done; 8 MCP surfaces deleted*
+*Last updated: 2026-05-02 after Plan 01-05 (pre-graph probes): PARITY-03 + PARITY-04 strategy verdicts captured (NAME-INDEXED + PER-FRAME-RAW-OVERRIDE); DX-02 probe-script-side honored*

@@ -41,7 +41,7 @@ Plans:
 - [x] 01-02-PLAN.md — Asset vendoring: capitalized AIC layout with sibling textures/ folders (D-05); retire snake_case objects/
 - [x] 01-03-PLAN.md — Doc-only gripper-name correction (Robotiq Hand-E) across .planning/, CLAUDE.md, exts/aic-dt/docs/README.md, exts/aic-dt/docs/CHANGELOG.md (D-03)
 - [x] 01-04-PLAN.md — extension.py renames (33 _sim/_real cells) + gripper-name correction (Robotiq Hand-E) + prim-path bug fix + AIC_OBJECTS update + delete setup_pose_publisher / sync_real_poses atoms (DX-02 deletion-side) + PARITY-05 wrench full match
-- [ ] 01-05-PLAN.md — Pre-graph probes: USD prim names → frame-name strategy (sublayer rename OR per-frame Raw publisher overrides) for PARITY-04 + aic_controller subscriber probe → ordering decision for PARITY-03 (probe-driven; conditional fixes); DX-02 4-surface for any new reorder atom
+- [x] 01-05-PLAN.md — Pre-graph probes: USD prim probe → verdict PER-FRAME-RAW-OVERRIDE (17 frame_id overrides for Plan 06) for PARITY-04; aic_controller subscriber probe (extended to aic_adapter) → verdict NAME-INDEXED, NO-WRAPPER-NEEDED for PARITY-03; both conditional fixes skipped per probe outputs
 - [ ] 01-06-PLAN.md — Two new MCP atoms: setup_tf_publisher (/tf + /tf_static) + setup_joint_state_publisher (/joint_states) per D-10/D-11; targetPrim binds at /World/UR5e/aic_unified_robot/root_joint per RESEARCH Pattern 1; DX-02 4-surface contract enforced
 - [ ] 01-07-PLAN.md — Verify harness: diff_tf_tree.py (D-08) + sweep_textures.py (D-07; augmented patterns for Isaac Sim asset failures) + verify_phase_1.sh (D-15) + texture-sweep.md (TEX-03)
 - [ ] 01-08-PLAN.md — quick_start refactor per D-12 + Phase 1 CHANGELOG entry + DX-02 final-audit table (presents 9 new atoms × 4 surfaces, 2 deleted atoms × 0 surfaces)
@@ -94,7 +94,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation Parity | 4/9 | In progress | - |
+| 1. Foundation Parity | 5/9 | In progress | - |
 | 2. Controller Loop & Parametric Scene | 0/TBD | Not started | - |
 | 3. Cable Physics & Ground-Truth Pose | 0/TBD | Not started | - |
 | 4. Trial Loader & End-to-End Verification | 0/TBD | Not started | - |
