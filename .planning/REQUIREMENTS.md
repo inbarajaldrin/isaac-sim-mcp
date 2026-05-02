@@ -90,47 +90,47 @@ Deferred to future milestones. Architecture in v1 must keep these reachable via 
 
 ## Traceability
 
-Empty initially — populated by the roadmapper during ROADMAP.md creation.
+Populated by roadmapper on 2026-05-01 during ROADMAP.md creation. Every v1 requirement maps to exactly one phase.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PARITY-01 | TBD | Pending |
-| PARITY-02 | TBD | Pending |
-| PARITY-03 | TBD | Pending |
-| PARITY-04 | TBD | Pending |
-| PARITY-05 | TBD | Pending |
-| PARITY-06 | TBD | Pending |
-| PARITY-07 | TBD | Pending |
-| PARITY-08 | TBD | Pending |
-| PARITY-09 | TBD | Pending |
-| PARITY-10 | TBD | Pending |
-| PARITY-11 | TBD | Pending |
-| PARITY-12 | TBD | Pending |
-| TEX-01 | TBD | Pending |
-| TEX-02 | TBD | Pending |
-| TEX-03 | TBD | Pending |
-| SCENE-01 | TBD | Pending |
-| SCENE-02 | TBD | Pending |
-| SCENE-03 | TBD | Pending |
-| SCENE-04 | TBD | Pending |
-| SCENE-05 | TBD | Pending |
-| SCENE-06 | TBD | Pending |
-| TRIAL-01 | TBD | Pending |
-| TRIAL-02 | TBD | Pending |
-| TRIAL-03 | TBD | Pending |
-| TRIAL-04 | TBD | Pending |
-| TRIAL-05 | TBD | Pending |
-| DX-01 | TBD | Pending |
-| DX-02 | TBD | Pending |
-| DX-03 | TBD | Pending |
-| DX-04 | TBD | Pending |
-| DX-05 | TBD | Pending |
+| PARITY-01 | Phase 1 | Pending |
+| PARITY-02 | Phase 1 | Pending |
+| PARITY-03 | Phase 1 | Pending |
+| PARITY-04 | Phase 1 | Pending |
+| PARITY-05 | Phase 2 | Pending |
+| PARITY-06 | Phase 2 | Pending |
+| PARITY-07 | Phase 3 | Pending |
+| PARITY-08 | Phase 3 | Pending |
+| PARITY-09 | Phase 2 | Pending |
+| PARITY-10 | Phase 2 | Pending |
+| PARITY-11 | Phase 2 | Pending |
+| PARITY-12 | Phase 3 | Pending |
+| TEX-01 | Phase 1 | Pending |
+| TEX-02 | Phase 1 | Pending |
+| TEX-03 | Phase 1 | Pending |
+| SCENE-01 | Phase 2 | Pending |
+| SCENE-02 | Phase 3 | Pending |
+| SCENE-03 | Phase 3 | Pending |
+| SCENE-04 | Phase 2 | Pending |
+| SCENE-05 | Phase 3 | Pending |
+| SCENE-06 | Phase 3 | Pending |
+| TRIAL-01 | Phase 4 | Pending |
+| TRIAL-02 | Phase 4 | Pending |
+| TRIAL-03 | Phase 4 | Pending |
+| TRIAL-04 | Phase 4 | Pending |
+| TRIAL-05 | Phase 4 | Pending |
+| DX-01 | Phase 1 | Pending |
+| DX-02 | Phase 2 | Pending |
+| DX-03 | Phase 3 | Pending |
+| DX-04 | Phase 4 | Pending |
+| DX-05 | Phase 4 | Pending |
 
 **Coverage:**
 - v1 requirements: 31 total
-- Mapped to phases: 0 (will be filled by roadmapper)
-- Unmapped: 31 ⚠️ (expected pre-roadmap)
+- Mapped to phases: 31 ✓
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-05-01*
-*Last updated: 2026-05-01 after initialization*
+*Last updated: 2026-05-01 after roadmap creation (4 phases mapped)*
