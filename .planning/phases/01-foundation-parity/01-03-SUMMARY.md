@@ -70,7 +70,7 @@ Each task was committed atomically:
 1. **Task 1: Replace RG2 → Robotiq Hand-E across .planning/ docs** — `be59b05` (fix)
 2. **Task 2: Replace RG2 → Robotiq Hand-E in CLAUDE.md and exts/aic-dt/docs/README.md** — `397b530` (fix)
 
-**Plan metadata:** `<final commit hash>` (docs: complete plan)
+**Plan metadata:** `0ba8b4c` (docs: complete plan)
 
 ## Files Created/Modified
 
