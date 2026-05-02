@@ -5,7 +5,7 @@ Isaac Sim extension for UR5e Digital Twin with MCP (Model Context Protocol) inte
 ## Features
 
 - **UR5e Robot Control**: Load and configure UR5e robotic arm with action graphs
-- **RG2 Gripper**: Import and attach RG2 gripper to UR5e with force feedback
+- **Robotiq Hand-E Gripper**: Import and attach Robotiq Hand-E gripper to UR5e with force feedback
 - **Intel RealSense Camera**: Attach camera to robot end effector
 - **Object Management**: Add, delete, assemble, and randomize objects in the scene
 - **MCP Integration**: Socket server for remote control via MCP protocol

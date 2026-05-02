@@ -19,7 +19,7 @@ This repo hosts Isaac Sim Kit extensions that expose MCP socket servers for agen
 
 ## Launching the Isaac Sim aic-dt extension
 
-**Port:** 8768 (TCP, localhost). **Robot:** UR5e + RG2 + cable at (-0.18, -0.122, 0). **Window:** "AIC Digital Twin".
+**Port:** 8768 (TCP, localhost). **Robot:** UR5e + Robotiq Hand-E + cable at (-0.18, -0.122, 0). **Window:** "AIC Digital Twin".
 
 ### The two-launcher reality
 
@@ -156,7 +156,7 @@ Each MCP tool name + parameters lives in `MCP_TOOL_REGISTRY` (extension.py top).
 
 - `load_scene` — works, ~0.3s. Initializes physics scene, ground plane, AIC enclosure.
 - `play_scene` / `stop_scene` / `new_stage` — work, instant.
-- `quick_start` — **works in ~5s** when `DerivedDataCache` is populated. Result: 387 prims, sim playing (UR5e + RG2 + enclosure + 4 task-board objects + workspace camera). If it hangs at `load_robot` → see "Cache state matters" above; cache is almost certainly empty.
+- `quick_start` — **works in ~5s** when `DerivedDataCache` is populated. Result: 387 prims, sim playing (UR5e + Robotiq Hand-E + enclosure + 4 task-board objects + workspace camera). If it hangs at `load_robot` → see "Cache state matters" above; cache is almost certainly empty.
 - `execute_python_code` — works. Use `result = <value>` (not `print()`) to return data; arbitrary Omniverse APIs available.
 - Other atomic tools (`load_robot`, `setup_action_graph`, `setup_force_publisher`, `setup_wrist_cameras`, `add_objects`, `setup_pose_publisher`, `randomize_object_poses`, `randomize_lighting`, `save_scene_state`, `restore_scene_state`, `sync_real_poses`) — assume working as part of the `quick_start` chain; verify individually before relying. The current `objects_poses_sim` / `sync_real_poses` pair will be replaced with Gazebo-native topic names in Phase 1.
 
@@ -221,7 +221,7 @@ This repo is **sim-side only**. The matching **ROS-side** repo lives at `~/Docum
 | `aic_controller/` | C++ ROS 2 impedance controller (`aic_controller_plugin.xml`) | Unmodified consumer of `/joint_states`, `/tf`, `/wrench` etc. |
 | `aic_engine/` | C++ trial orchestrator; `config/sample_config.yaml` defines trials | Unmodified — runs against Isaac Sim once topic parity holds |
 | `aic_example_policies/aic_example_policies/ros/` | `CheatCode.py`, `GentleGiant.py`, `RunACT.py`, `SpeedDemon.py`, `WallPresser.py`, `WallToucher.py`, `WaveArm.py` | Unmodified |
-| `aic_description/`, `aic_assets/` | URDFs + meshes for UR5e + RG2 + task board + cables | Same files loaded into Isaac Sim |
+| `aic_description/`, `aic_assets/` | URDFs + meshes for UR5e + Robotiq Hand-E + task board + cables | Same files loaded into Isaac Sim |
 | `aic_bringup/launch/` | Gazebo bringup (`aic_gz_bringup.launch.py`, `spawn_task_board.launch.py`, `spawn_cable.launch.py`) | Mirrored as **outcomes** (scene state + topic surface), not file structure |
 
 **Topic-parity is the architectural law.** Isaac Sim publishes the *exact* topic names the running Gazebo `aic_eval` container publishes — no `_sim`/`_real` discrimination beyond what Gazebo itself uses, no remap nodes, no bridge translators. The same `aic_controller` + `aic_engine` + `CheatCode.py` invocations that work against Gazebo must work against Isaac Sim with zero changes in `~/Documents/aic`.
