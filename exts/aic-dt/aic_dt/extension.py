@@ -967,7 +967,17 @@ class DigitalTwin(omni.ext.IExt):
     # ==================== Quick Start ====================
 
     async def quick_start(self):
-        """Quick start: load scene, UR5e + action graph + force publisher, wrist cameras, objects, play."""
+        """Quick start: load scene → load robot → play → TF/JointState/JointSubscribe graphs → cameras → wrench → objects → workspace cam.
+
+        Per Phase 1 D-12: refactored ordering with TF + JointState publishers (PARITY-03/04)
+        inserted after the early-play step and before the joint-state subscribe graph. Future
+        phases drop new atoms in via this common path:
+          - Phase 2 controller-loop: subscribes between JointState publisher and Force publisher
+          - Phase 3 GT-TF: between objects and workspace cam
+          - Phase 4 trial-loader: replaces the static add_objects with a parametric variant
+
+        The early-play step (2b) is non-negotiable — see comment block below.
+        """
         print("=== Quick Start ===")
         app = omni.kit.app.get_app()
 
@@ -990,14 +1000,29 @@ class DigitalTwin(omni.ext.IExt):
         self._timeline.play()
         await app.next_update_async()
 
-        # 3. Setup UR5e action graph
-        print("--- Setting up UR5e Action Graph ---")
-        await self.setup_action_graph()
+        # 3a. Setup TF publisher (Plan 06 / Phase 1 D-10) — /tf + /tf_static
+        print("--- Setting up TF Publisher (/tf + /tf_static) ---")
+        self.setup_tf_publish_action_graph()
         await app.next_update_async()
 
-        # 4. Setup force publisher
-        print("--- Setting up UR5e Force Publisher ---")
-        self.setup_force_publish_action_graph()
+        # 3b. Setup JointState publisher (Plan 06 / Phase 1 D-11) — /joint_states
+        print("--- Setting up JointState Publisher (/joint_states) ---")
+        self.setup_joint_state_publish_action_graph()
+        await app.next_update_async()
+
+        # 3c. Conditional bridge to reorder /joint_states_isaac_raw → /joint_states alphabetical
+        # (D-11 / PARITY-03). Plan 05 verdict was NO-WRAPPER-NEEDED (aic_adapter reorders by
+        # name, not by index), so this attribute typically does not exist. The hasattr guard
+        # makes the call safely a no-op in that case while leaving room for a future plan to
+        # land a wrapper without re-touching quick_start.
+        if hasattr(self, 'setup_joint_state_reorder'):
+            print("--- Setting up JointState Reorder Bridge ---")
+            self.setup_joint_state_reorder()
+            await app.next_update_async()
+
+        # 4. Setup UR5e action graph (joint-state SUBSCRIBE side for Phase 2 controller-loop)
+        print("--- Setting up UR5e Action Graph ---")
+        await self.setup_action_graph()
         await app.next_update_async()
 
         # 5. Setup wrist cameras
@@ -1005,14 +1030,25 @@ class DigitalTwin(omni.ext.IExt):
         self.setup_wrist_cameras()
         await app.next_update_async()
 
-        # 6. Add task board objects
+        # 6. Setup force publisher (renamed wrench topic per Plan 04 — fts_broadcaster/wrench)
+        print("--- Setting up UR5e Force Publisher ---")
+        self.setup_force_publish_action_graph()
+        await app.next_update_async()
+
+        # 7. Add task board objects (uses capitalized vendored paths from Plan 04 +
+        #    per-component spawn atoms from Plan 09 / SCENE-01)
         print("--- Adding task board objects ---")
         self.add_objects()
         await app.next_update_async()
 
-        # 7. (pose-publisher step retired in Plan 04 — replaced by TF/JointState
-        #     publishers added in Plan 06. Quick_start temporarily skips this gap;
-        #     Plan 07 reorders the sequence to call the new publishers here.)
+        # 7b. Randomize lighting (best-effort — present from earlier work)
+        if hasattr(self, 'randomize_lighting'):
+            print("--- Randomizing Lighting ---")
+            try:
+                self.randomize_lighting()
+            except Exception as e:
+                print(f"[AIC-DT] randomize_lighting skipped: {e}")
+            await app.next_update_async()
 
         # 8. Create workspace camera at 640x480
         print("--- Creating Workspace Camera (640x480) ---")
