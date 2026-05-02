@@ -183,7 +183,7 @@ MCP_TOOL_REGISTRY = {
         "parameters": {}
     },
     "delete_objects": {
-        "description": "Delete all objects from /World/Objects and the associated pose publisher graph.",
+        "description": "Delete all objects from /World/Objects.",
         "parameters": {}
     },
     "randomize_object_poses": {
@@ -1528,11 +1528,10 @@ class DigitalTwin(omni.ext.IExt):
         else:
             print(f"Warning: {folder_path} does not exist")
 
-        pose_graph_path = "/Graph/ActionGraph_objects_poses"
-        pose_graph_prim = stage.GetPrimAtPath(pose_graph_path)
-        if pose_graph_prim and pose_graph_prim.IsValid():
-            stage.RemovePrim(pose_graph_path)
-            print(f"Deleted {pose_graph_path}")
+        # NOTE: pose-publisher cleanup retired alongside create_pose_publisher() in
+        # Plan 04 Task 3 (D-09). The new TF/JointState publisher graphs created in
+        # Plan 06 will own their own teardown; delete_objects no longer needs to
+        # remove the legacy ActionGraph (which is no longer created in Plan 04+).
 
         # Clear cached orientations
         self._initial_orientations.clear()
