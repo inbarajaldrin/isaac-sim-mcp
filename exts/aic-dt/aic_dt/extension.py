@@ -831,9 +831,18 @@ class DigitalTwin(omni.ext.IExt):
         await self.load_scene()
         await app.next_update_async()
 
-        # 2. Import UR5e
+        # 2. Import UR5e (load_robot internally calls timeline.stop() at the end)
         print("--- Importing UR5e ---")
         await self.load_robot()
+        await app.next_update_async()
+
+        # 2b. Play the scene EARLY — before any action graphs / cameras / objects exist.
+        # Bisection on 2026-05-01 showed: doing all setup THEN play() at the end (the
+        # original ordering) wedges the kit main thread because PhysX cooking + many
+        # graphs + ROS2 publishers all kick off simultaneously and lock-contend.
+        # Step-by-step adds with the timeline already playing remain responsive.
+        print("--- Playing scene early (before graphs/objects) ---")
+        self._timeline.play()
         await app.next_update_async()
 
         # 3. Setup UR5e action graph
@@ -913,9 +922,9 @@ class DigitalTwin(omni.ext.IExt):
         )
         await app.next_update_async()
 
-        # 10. Play the scene
-        print("--- Playing scene ---")
-        self._timeline.play()
+        # 10. Already playing from step 2b — no-op the original play() at the end.
+        # (Calling play() again on a playing timeline is harmless but unnecessary.)
+        print("--- Already playing (from step 2b) ---")
 
         print("=== Quick Start Complete ===")
 
@@ -953,6 +962,18 @@ class DigitalTwin(omni.ext.IExt):
         xform.AddTranslateOp().Set(position)
         xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
         print(f"Applied translation {self._robot_position} to {prim_path} (identity orientation)")
+
+        # Cable workaround: even when aic-dt is loaded post-startup (which lets PhysX
+        # cook the cable + Body_005 SDF successfully — cache grows from 0 to ~113 MB),
+        # the live simulation of the 21-segment cable rope chain wedges the kit main
+        # thread shortly after timeline.play(). Until cable is re-authored as a proper
+        # rope (PhysxPhysicsJointInstancer + density-based mass per RigidBodyRopeDemo)
+        # AND the post-play wedge is resolved, deactivate the cable subtree so the
+        # rest of the scene stays responsive.
+        cable_prim = stage.GetPrimAtPath(f"{prim_path}/cable")
+        if cable_prim and cable_prim.IsValid():
+            cable_prim.SetActive(False)
+            print(f"Deactivated {prim_path}/cable (post-play physics wedge — see comment above)")
 
         # Setup Articulation
         self._robot_view = ArticulationView(prim_paths_expr=prim_path, name="ur5e_view")
