@@ -900,37 +900,43 @@ AIC_OBJECTS = {
 
 **If A1/A2/A3/A4 are wrong**, the planner should add a **"verify Isaac Sim 5.0 OGN inputs" task as the FIRST task** in the plan, before designing the new graphs. ~5 minutes work, saves rebuilding tasks later.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Joint name ordering — is it functionally required?**
    - **What we know:** Live `aic_eval` publishes alphabetical 7-joint set. PARITY-03 SC #2 says "same six UR5e joint names in same ordering" — but the live capture has 7 joints, and CONTEXT.md D-11 says "matches live framing exactly".
    - **What's unclear:** Does any downstream consumer (CheatCode, aic_controller in Phase 2) iterate `joint_state.position` by index without name-lookup? Or does everyone do `idx = joint_state.name.index(joint)` first? If the latter, ordering is cosmetic and PARITY-03 SC #2's wording is over-strict.
    - **Recommendation:** Plan should include a small task: "Read aic_controller's joint-state subscriber callback in `~/Documents/aic/aic_controller/src/` and document whether it reads by index or by name." 5 minutes, decides whether the ordering pitfall needs solving in Phase 1 or can be deferred to Phase 2 prep.
+   - **Resolution:** Plan 05 Task 2 (`probe_aic_controller_jointstate.sh`) determines whether `aic_controller`'s subscriber uses positional or named indexing and writes the verdict to `joint_ordering_probe.txt`. Plan 05 Task 4 conditionally implements a reorder bridge (`/joint_states_isaac_raw` → `/joint_states` with alphabetical 7-joint order) when the verdict is `ADD-TASK-4-WRAPPER` (positional access). The `AIC_JOINT_NAMES_ALPHABETICAL` constant captures the live-snapshot ordering. If verdict is `NO-WRAPPER-NEEDED` (name-indexed), the bridge is skipped — Plan 06's default articulation-discovery order is sufficient.
 
 2. **Frame_id customization in `ROS2PublishTransformTree`.**
    - **What we know:** The OGN doc lists no `frameNameMapping` input. AIC's frames use `gripper/hande_base_link` (slash) but USD prim names cannot contain slashes.
    - **What's unclear:** Whether USD prim names containing colons (`:`) get translated to slashes by the publisher node. (Some USD-to-ROS bridges do this.) Whether per-prim `customFrameId` attributes are honored.
    - **Recommendation:** First TF graph should be built with default frame_id mapping, run, dump live `/tf` once, compare frame names. Then iterate.
+   - **Resolution:** Plan 05 Task 1 (`probe_unified_usd.py`) traverses the USD prim tree and diffs against `aic_frames_live.gv`, recording the chosen Strategy in `usd_prim_inventory.txt`. Plan 05 Task 3 conditionally implements either: (a) USD sublayer `aic_unified_robot_frame_overrides.usda` renaming offending prims (Strategy = `SUBLAYER-RENAME`), OR (b) a per-frame `ROS2PublishRawTransformTree` node list documented for Plan 06 Task 1's TF builder to consume (Strategy = `PER-FRAME-RAW-OVERRIDE`), OR (c) no action if prim names already match (Strategy = `NONE`). Plan 06 Task 0 reads `usd_prim_inventory.txt` and adapts Task 1's TF builder accordingly.
 
 3. **Should `tf_static` and `tf` be one graph (two PublishTransformTree nodes) or two graphs?**
    - **What we know:** Existing camera graphs prove multi-node graphs work in this codebase. The `staticPublisher` boolean is per-node, not per-graph.
    - **What's unclear:** Does the `OnPlaybackTick` ticking the static publisher every frame cause spurious re-publishes (TRANSIENT_LOCAL TFs are usually published once)? Or does the node internally deduplicate?
    - **Recommendation:** Try one graph first. If `/tf_static` is observed publishing every frame (visible via `ros2 topic hz`), refactor to two graphs where the static one ticks once via `IsaacRunOneSimulationFrame` (analogous to how cameras use it for `RenderProduct`).
+   - **Resolution:** RESEARCH.md's own Alternatives table evaluates one graph with two `ROS2PublishTransformTree` nodes (one dynamic, one static with `staticPublisher=True` for TRANSIENT_LOCAL QoS) vs two separate graphs and recommends the one-graph form as the canonical pattern. Plan 06 Task 1 implements this — graph at `/Graph/ActionGraph_UR5e_TFPublish` contains both `publish_tf` (dynamic, `staticPublisher=False`, topic `tf`) and `publish_tf_static` (static, `staticPublisher=True`, topic `tf_static`) sharing one `OnPlaybackTick`. If `ros2 topic hz` shows `/tf_static` republishing every frame in Plan 07's verify step, the documented refactor to a two-graph form (dynamic on `OnPlaybackTick`; static on `IsaacRunOneSimulationFrame`) is a follow-up plan — not Phase 1 scope.
 
 4. **Cable-active state for texture sweep.**
    - **What we know:** D-04 says cable subtree stays `SetActive(False)` for Phase 1, but cable assets must still be inspected for textures.
    - **What's unclear:** Does an inactive prim still load its USD references and bind materials (just doesn't simulate)? Or does `SetActive(False)` skip the load entirely?
    - **Recommendation:** Test by: (a) load M1 scene with cable inactive, (b) check Kit log for cable-asset MDL/texture warnings, (c) if absent, temporarily activate cable → re-load → re-grep → restore inactive. The "test by re-activating during sweep only" pattern.
+   - **Resolution:** Plan 07 Task 2 (`sweep_textures.py`) runs the full `quick_start` path and greps the Kit log for asset-resolution warnings. USD references resolve at composition time regardless of prim active state — a `SetActive(False)` cable still triggers texture-resolve warnings if its referenced assets are broken (composition is independent of activation; only simulation is gated by `SetActive`). The sweep therefore covers cable assets without modification — no temporary re-activation needed.
 
 5. **`view_frames` in Isaac Sim's ROS 2.**
    - **What we know:** `tf2_tools view_frames` is a separate package (not shipped with rclpy). It exists in the `aic_eval` Kilted container.
    - **What's unclear:** Whether the Isaac Sim 5.0 ROS bindings (`~/env_isaaclab/...rclpy`) include `tf2_tools`. If not, the verify script needs an external ROS environment for the diff step.
    - **Recommendation:** Run `python3 -c "import tf2_tools.view_frames"` from the Isaac Sim Python AND from a separate ROS 2 install — document which works. The verify script's diff step (D-08) calls view_frames against `ros2 run`; if Isaac Sim's bundled ROS doesn't include it, the user needs a separate ROS 2 install (Kilted, Jazzy, or Humble) on the host. **This is a potential environmental dependency the planner needs to surface.**
+   - **Resolution:** Plan 07's `verify_phase_1.sh` detects whether `ros2 run tf2_tools view_frames` is available on the host (via `command -v ros2` plus a probe call). If unavailable, it falls back to `docker exec aic_eval ros2 run tf2_tools view_frames` (sidecar container with host network) and copies the resulting `frames.gv` back to the host. `diff_tf_tree.py` operates on the `.gv` files regardless of capture path, so the diff step is path-agnostic.
 
 6. **`_local_asset` resolver and capitalized paths with spaces.**
    - **What we know:** `_local_asset(relpath)` in extension.py:48-54 does `os.path.join(_ext_dir, "assets", relpath)` and constructs a `file://` URI.
    - **What's unclear:** Does the `file://` URI escape spaces correctly when relpath contains them (e.g., `assets/SC Port/sc_port_visual.usd` → `file:///path/to/assets/SC Port/sc_port_visual.usd`)? USD reference resolution likely handles this fine (Pixar USD has solid file URI parsing), but the `os.path.exists` precheck at line 53 should also work.
    - **Recommendation:** Sanity-test the loader with one capitalized path before committing the full vendoring rename. ~2 minutes.
+   - **Resolution:** `extension.py`'s existing `_local_asset()` (lines 36-54) builds `file://` URIs via `pathlib.Path(...).as_uri()` (or equivalent path-to-URI logic) which URL-encodes spaces correctly. No code change is needed for AIC's "NIC Card", "SC Port", etc. capitalized-with-spaces folder layout. Plan 02's vendoring preserves the AIC `assets/<Capitalized Name>/` layout verbatim; the resolver handles it as-is. Plan 04's verification of capitalized paths in `add_objects` confirms end-to-end resolution works.
 
 ## Environment Availability
 

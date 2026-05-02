@@ -27,15 +27,16 @@ Milestone 1 (Platform Transfer) takes the existing `aic-dt` extension scaffold f
   3. `ros2 run tf2_tools view_frames` against Isaac Sim produces a TF tree whose robot + gripper + camera frames match Gazebo's reference TF tree (same names, same parent-child links)
   4. Loading the full M1 scene in Isaac Sim's viewport shows zero pink/black/missing-texture materials and zero broken-MDL warnings in the console; `exts/aic-dt/docs/` contains a texture-sweep findings + fix log enumerating every asset touched
   5. Grepping the extension source for `objects_poses_sim`, `sync_real_poses`, `_sim`, and `_real` returns no production-topic matches (camera placeholder topics renamed or removed)
-**Plans**: 7 plans
+**Plans**: 8 plans
 Plans:
 - [ ] 01-01-PLAN.md — Snapshot infrastructure: live aic_eval Docker capture script + topic-parity-reference.md (D-01, D-14)
 - [ ] 01-02-PLAN.md — Asset vendoring: capitalized AIC layout with sibling textures/ folders (D-05); retire snake_case objects/
-- [ ] 01-03-PLAN.md — Doc-only RG2→Robotiq Hand-E correction across .planning/, CLAUDE.md, exts/aic-dt/docs/README.md (D-03)
+- [ ] 01-03-PLAN.md — Doc-only RG2→Robotiq Hand-E correction across .planning/, CLAUDE.md, exts/aic-dt/docs/README.md, exts/aic-dt/docs/CHANGELOG.md (D-03)
 - [ ] 01-04-PLAN.md — extension.py renames (33 _sim/_real cells) + RG2→Hand-E + prim-path bug fix + AIC_OBJECTS update + delete setup_pose_publisher / sync_real_poses atoms
-- [ ] 01-05-PLAN.md — Two new MCP atoms: setup_tf_publisher (/tf + /tf_static) + setup_joint_state_publisher (/joint_states) per D-10/D-11
-- [ ] 01-06-PLAN.md — Verify harness: diff_tf_tree.py (D-08) + sweep_textures.py (D-07) + verify_phase_1.sh (D-15) + texture-sweep.md (TEX-03)
-- [ ] 01-07-PLAN.md — quick_start refactor per D-12 + Phase 1 CHANGELOG entry
+- [ ] 01-05-PLAN.md — Pre-graph probes: USD prim names → frame-name strategy (sublayer rename OR per-frame Raw publisher overrides) for PARITY-04 + aic_controller subscriber probe → ordering decision for PARITY-03 (probe-driven; conditional fixes)
+- [ ] 01-06-PLAN.md — Two new MCP atoms: setup_tf_publisher (/tf + /tf_static) + setup_joint_state_publisher (/joint_states) per D-10/D-11; targetPrim binds at /World/UR5e/aic_unified_robot/root_joint per RESEARCH Pattern 1
+- [ ] 01-07-PLAN.md — Verify harness: diff_tf_tree.py (D-08) + sweep_textures.py (D-07; augmented patterns for Isaac Sim asset failures) + verify_phase_1.sh (D-15) + texture-sweep.md (TEX-03)
+- [ ] 01-08-PLAN.md — quick_start refactor per D-12 + Phase 1 CHANGELOG entry
 **UI hint**: yes
 
 ### Phase 2: Controller Loop & Parametric Scene
