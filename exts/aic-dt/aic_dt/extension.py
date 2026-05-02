@@ -57,22 +57,22 @@ def _local_asset(relpath):
 # AIC task board object definitions (local assets only)
 AIC_OBJECTS = {
     "task_board_base": {
-        "usd": "objects/task_board_base/task_board_rigid.usd",
+        "usd": "assets/Task Board Base/base_visual.usd",
         "position": (0.2837, 0.229, 0.0),
         "rotation": None,  # identity quaternion
     },
     "sc_port_1": {
-        "usd": "objects/sc_port/sc_port.usd",
+        "usd": "assets/SC Port/sc_port_visual.usd",
         "position": (0.2904, 0.1928, 0.005),
         "rotation": (0.73136, 0.0, 0.0, -0.682),  # wxyz
     },
     "sc_port_2": {
-        "usd": "objects/sc_port/sc_port.usd",
+        "usd": "assets/SC Port/sc_port_visual.usd",
         "position": (0.2913, 0.1507, 0.005),
         "rotation": (0.73136, 0.0, 0.0, -0.682),  # wxyz
     },
     "nic_card": {
-        "usd": "objects/nic_card/nic_card.usd",
+        "usd": "assets/NIC Card Mount/nic_card_visual.usd",
         "position": (0.25135, 0.25229, 0.0743),
         "rotation": None,
     },
@@ -367,8 +367,12 @@ class DigitalTwin(omni.ext.IExt):
             "wrist_3_joint",
         ]
 
-        # Robot prim path
+        # Robot prim path (USD reference root)
         self._robot_prim_path = "/World/UR5e"
+
+        # Articulation root prim path (the actual joints live under this — used by
+        # downstream JointState publisher targetPrim relationships in Plan 06)
+        self._articulation_root_prim_path = "/World/UR5e/aic_unified_robot"
 
         # Robot position and orientation (identity - no rotation)
         self._robot_position = (-0.18, -0.122, 0.0)
@@ -984,8 +988,11 @@ class DigitalTwin(omni.ext.IExt):
         self._articulation = Articulation(prim_path)
 
         # Configure joint drives (from Isaac Lab config)
+        # NOTE: joints live under the unified-robot articulation root prim, not directly
+        # under /World/UR5e — the f-string was wrong pre-Plan 04 and produced a 6x
+        # "Joint not found" warning per load_robot in the Kit log. Per RESEARCH Pitfall #2.
         for joint_name in self._joint_names:
-            joint_path = f"{prim_path}/joints/{joint_name}"
+            joint_path = f"{prim_path}/aic_unified_robot/joints/{joint_name}"
             joint_prim = stage.GetPrimAtPath(joint_path)
             if not joint_prim.IsValid():
                 print(f"Warning: Joint not found at {joint_path}")
