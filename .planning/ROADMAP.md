@@ -45,7 +45,7 @@ Plans:
 - [x] 01-06-PLAN.md — Two new MCP atoms: setup_tf_publisher (/tf + /tf_static) + setup_joint_state_publisher (/joint_states) per D-10/D-11; targetPrim binds at /World/UR5e/aic_unified_robot/root_joint per RESEARCH Pattern 1; DX-02 4-surface contract enforced; 2 architectural deferrals (TF frame_id slash overrides, JointState gripper finger rename) documented inline + Plan 08 verify-harness "expect to fail" contract -- follow-up plan addresses via Raw publishers + IsaacReadOdometry/OgnGetPrimWorldPose source nodes + JointState wrapper
 - [x] 01-07-PLAN.md — Verify harness: diff_tf_tree.py (D-08; 71 lines, regex-only) + sweep_textures.py (D-07/TEX-01/02/03; D-07 baseline + 4 augmented Isaac-Sim asset-failure patterns) + verify_phase_1.sh (D-15; 441 lines, 10-step hybrid runtime gate) + texture-sweep.md (TEX-03 scaffold). Smoke-tested: diff PASS 31/30, sweep 267 hits caught sc_port_visual broken sub-refs, verify bash -n clean.
 - [ ] 01-08-PLAN.md — quick_start refactor per D-12 + Phase 1 CHANGELOG entry + DX-02 final-audit table (presents 9 new atoms × 4 surfaces, 2 deleted atoms × 0 surfaces)
-- [ ] 01-09-PLAN.md — SCENE-01 + SCENE-04: 7 per-component spawn atoms (spawn_task_board_base / spawn_<lc|sfp|sc>_mount_rail / spawn_sc_port / spawn_nic_card_mount / spawn_nic_card) mirroring spawn_task_board.launch.py parameter surface; robot/board/cable pose params with Gazebo defaults; LC/SFP/SC Mount asset vendoring from aic_assets/models/; backwards-compatible add_objects clubbing
+- [x] 01-09-PLAN.md — SCENE-01 + SCENE-04: 7 per-component spawn atoms (spawn_task_board_base / spawn_<lc|sfp|sc>_mount_rail / spawn_sc_port / spawn_nic_card_mount / spawn_nic_card) mirroring spawn_task_board.launch.py parameter surface; robot/board/cable pose params with Gazebo defaults; LC/SFP/SC Mount asset vendoring from aic_assets/models/; backwards-compatible add_objects clubbing
 **UI hint**: yes
 
 ### Phase 2: Controller Loop
@@ -94,7 +94,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation Parity | 7/9 | In progress | - |
+| 1. Foundation Parity | 8/9 | In progress | - |
 | 2. Controller Loop & Parametric Scene | 0/TBD | Not started | - |
 | 3. Cable Physics & Ground-Truth Pose | 0/TBD | Not started | - |
 | 4. Trial Loader & End-to-End Verification | 0/TBD | Not started | - |

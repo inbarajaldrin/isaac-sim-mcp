@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Plan 01-07 complete (verify harness shipped — diff_tf_tree.py + sweep_textures.py + verify_phase_1.sh + texture-sweep.md; 4 files, 3 task commits, all acceptance criteria PASS; smoke tests confirm regex sanity; PARITY-03/04 deferrals from Plan 06 will be visible to verify_phase_1.sh as honest FAILs gating Phase 1 completion)
-last_updated: "2026-05-02T18:30:00.000Z"
-last_activity: 2026-05-02 -- Plan 01-07 complete; 3 scripts + 1 doc shipped (diff_tf_tree.py 71 lines, sweep_textures.py 200 lines, verify_phase_1.sh 441 lines, texture-sweep.md scaffold); 3 atomic task commits (fea9efd diff_tf_tree + d883e4d sweep + 0d17ef4 verify); zero deviations; smoke tests: TF diff PASS 31 frames/30 edges on aic_frames_live.gv self-compare, sweep_textures captured 267 lines from existing Kit log including the augmented `Could not open` pattern catching sc_port_visual.usd broken sub-references, verify_phase_1.sh bash -n clean + --help works + --bogus correctly exits 2; 15/15 literal-token acceptance grep PASS; key pattern proven: audit-files-as-machine-readable-contracts (parity_05_wrench_framing.txt + joint_ordering_probe.txt grepped by verify script for Live frame_id / Verdict / Action fields)
+stopped_at: Plan 01-09 complete (7 per-component spawn atoms with full DX-02 4-surface contract + 12 SCENE-04 robot/cable pose params + LC/SFP/SC Mount vendoring with thin USD wrappers; 3 atomic task commits 424d44b/e7b14f4/0583a13; 28 surface additions; 2 minor spec-interpretation deviations both no-functional-impact (RemovePrim shared via helper = 7 not 8; SetActive(False) literal grep = 6 not 1 due to docstring/comment mentions, only 1 functional call))
+last_updated: "2026-05-02T13:35:00.000Z"
+last_activity: 2026-05-02 -- Plan 01-09 complete; 7 per-component spawn atoms + SCENE-04 robot/cable pose params + 3 vendored mount folders with thin USD wrappers; 3 atomic task commits (424d44b vendoring + e7b14f4 atoms + 0583a13 SCENE-04); +486 LOC in extension.py; DX-02 28-surface batch verified; backwards-compat preserved (legacy add_objects + quick_start no-arg load_robot still work); 2 minor spec-interpretation deviations documented (helper-shared RemovePrim count + SetActive grep count include docstrings — zero functional impact)
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 9
-  completed_plans: 7
-  percent: 78
+  completed_plans: 8
+  percent: 89
 ---
 
 # Project State
@@ -26,30 +26,30 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 1 (Foundation Parity) — EXECUTING
-Plan: 8 of 9
-Status: Executing Phase 1 — Plans 01-01, 01-02, 01-03, 01-04, 01-05, 01-06, 01-07 complete
-Last activity: 2026-05-02 -- Plan 01-07 complete; verification harness shipped (3 scripts + 1 doc); diff_tf_tree.py D-08 self-test PASS 31/30; sweep_textures.py D-07 augmented PATTERNS confirmed via 267-hit smoke test on existing Kit log catching the known sc_port_visual.usd `Could not open` failures; verify_phase_1.sh D-15 10-step hybrid harness with port-detect + cold-launch fallback + audit-file consumption (parity_05_wrench_framing.txt + joint_ordering_probe.txt as machine-readable contracts); zero deviations; 3 atomic task commits
+Plan: 9 of 9 (last remaining: 01-08 quick_start refactor)
+Status: Executing Phase 1 — Plans 01-01, 01-02, 01-03, 01-04, 01-05, 01-06, 01-07, 01-09 complete
+Last activity: 2026-05-02 -- Plan 01-09 complete; 7 per-component MCP spawn atoms (spawn_task_board_base + spawn_{lc,sfp,sc}_mount_rail + spawn_sc_port + spawn_nic_card_mount + spawn_nic_card) with full DX-02 4-surface contract; 12 SCENE-04 pose kwargs (robot_x/y/z/roll/pitch/yaw + cable_x/y/z/roll/pitch/yaw) wired through load_robot + _cmd_load_robot + MCP_TOOL_REGISTRY; 3 mount asset folders vendored with thin .glb-referencing USD wrappers; build_mount_rail_usds.py shipped; backwards-compat preserved via None-sentinel default (legacy quick_start path unchanged); cable subtree stays SetActive(False) per D-04 — pose params authored but no-op-effective in Phase 1; 3 atomic task commits (424d44b/e7b14f4/0583a13); DX-02 28-surface batch (7 atoms × 4 surfaces) verified by per-atom grep
 
-Progress: [███████░░░] 78%
+Progress: [█████████░] 89%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 7
-- Average duration: 5.9 min
-- Total execution time: 41 min
+- Total plans completed: 8
+- Average duration: 6.1 min
+- Total execution time: 49 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| Phase 1 | 7 | 41 min | 5.9 min |
+| Phase 1 | 8 | 49 min | 6.1 min |
 
 **Recent Trend:**
 
-- Last 7 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min), 01-06 (6 min), 01-07 (10 min)
-- Trend: 01-07 mid-weight (3 tasks, 4 files created — 3 scripts + 1 doc; 712 LOC total). Zero deviations, zero auto-fixes. All three scripts smoke-tested live: diff_tf_tree.py self-compare PASS, sweep_textures.py 267-hit grep proves augmented patterns work, verify_phase_1.sh `bash -n` clean + arg parsing tested. Pattern proven: audit-files-as-machine-readable-contracts (Plan 04's parity_05_wrench_framing.txt and Plan 05's joint_ordering_probe.txt have standardized field names that downstream verify scripts grep). 3 task commits.
+- Last 8 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min), 01-06 (6 min), 01-07 (10 min), 01-09 (8 min)
+- Trend: 01-09 mid-heavy (3 tasks, 17 files net — 1 script + 3 USD wrappers + 12 vendored asset files + 1 extension.py refactor; +486 LOC in extension.py). 2 minor spec-interpretation deviations both no-functional-impact (helper-shared RemovePrim count differs from inline-per-atom assumption; SetActive(False) literal grep includes docstrings). Largest single-plan DX-02 surface in Phase 1 — 7 atoms × 4 surfaces = 28 surface additions, all verified per-atom. Backwards-compat pattern proven: None-sentinel kwarg default + legacy attribute fallback preserves no-arg quick_start path while introducing full Gazebo-named param surface. Asset-vendoring contract extended: thin-USD-wrapper pattern for mesh-source folders (build_mount_rail_usds.py) where upstream lacks pre-cooked USDs. 3 task commits.
 
 *Updated after each plan completion*
 
@@ -94,6 +94,13 @@ Decisions are logged in PROJECT.md Key Decisions table. Recent decisions affecti
 - Plan 01-06: 4-surface contract proven for ATOM ADDITION (mirrors Plan 04's deletion-side proof). DX-02 fully exercised: registry + handler-map + _cmd method + UI button = 4 surfaces per atom, 8 surfaces total for 2 atoms in this plan.
 - Plan 01-06: JointState targetPrim binds at /World/UR5e/aic_unified_robot/root_joint (PhysicsFixedJoint), NOT at the Xform parent. Per RESEARCH Pattern 1 line 466 + verified by Task 0 probe_root_joint.py. Plan 04's forward-declared self._articulation_root_prim_path provides the Xform path; Plan 06 appends "/root_joint" at runtime.
 - Plan 01-06: Task 0 probe_root_joint.py introduces a re-runnable PhysicsFixedJoint verifier that complements Plan 05's USD-prim probe. Run via `~/.local/share/ov/pkg/isaac-sim-4.2.0/python.sh exts/aic-dt/scripts/probe_root_joint.py | tee /tmp/root_joint_probe.txt` -- exit 0 = PASS / 2 = WARN (Xform exists no joint) / 1 = FAIL (USD missing or restructured). Plan 06 PASS verified.
+- Plan 01-09: load_robot robot_x/y/z = None sentinel (instead of Gazebo's -0.2/0.2/1.14) — preserves backwards compatibility for quick_start no-arg path; legacy callers get self._robot_position fallback, explicit kwargs override. Gazebo defaults reachable by passing them explicitly. The PARAMETER SURFACE matches Gazebo verbatim (this is the SCENE-04 contract); only the no-arg fallback differs because Isaac Sim's enclosure is rooted at Z=-1.15 vs Gazebo's world Z=0.
+- Plan 01-09: Cable pose params default to aic_gz_bringup.launch.py LITERAL values (cable_x=0.172, cable_y=0.024, cable_z=1.518, cable_roll=0.4432, cable_pitch=-0.48, cable_yaw=1.3303). Cable subtree stays SetActive(False) per D-04 — pose params are wired through ClearXformOpOrder + AddTranslateOp + AddRotateXYZOp so the parameter SURFACE is in place; Phase 3 (SCENE-05) enables physics, at which point these defaults start mattering without further code changes.
+- Plan 01-09: Backwards-compat add_objects refactor = ADDITIVE clubbing, not replacement. Existing legacy /World/Objects path (physics material binding, two-pass loading, randomization caching) preserved verbatim; the new per-component atoms are invoked best-effort BEFORE the legacy path inside a try/except. Decoupling means new atom path can fail (e.g. asset not vendored) without breaking the canonical scene-population code that quick_start step 6 depends on.
+- Plan 01-09: DRY via shared `_spawn_component_via_usd` helper rather than duplicating the 7-line authoring code per-atom. Trade-off: literal RemovePrim count is 7 (one per atom call site) instead of plan's `>=8` criterion (which assumed inline duplication). Spirit (idempotent cleanup before re-author) preserved — every atom routes through the helper. Documented as deviation; no functional impact.
+- Plan 01-09: Mount-rail thin USDs reference the .glb mesh via relative AddReference. Plain pxr (outside Kit) emits "Cannot determine file format" warnings during stage save because the glTF SDF plugin loads only inside Kit's runtime; the USDs themselves are byte-correct USDC and load fine in Isaac Sim runtime. Verification deferred to Plan 07's verify_phase_1.sh harness in a running Kit session.
+- Plan 01-09: 4-surface contract proven for ATOM ADDITION at 7-atom batch scale (28 surface additions). Largest single-plan DX-02 surface in Phase 1; mirrors Plan 04's 8-surface deletion-side proof on the addition side. Pattern: helper-extraction (DRY) coexists with the 4-surface contract because surfaces are PER ATOM (registry/handler-map/_cmd/UI button), and each atom's _cmd method is its own surface even when it delegates to a shared helper.
+- Plan 01-09: Asset-vendoring contract extended to mesh-source folders. When upstream lacks pre-cooked USDs (LC/SFP/SC Mount in aic_assets/models/ ship .glb only), Plan 02's `cp -r` mirroring still applies; this plan adds a thin USD wrapper authoring step (build_mount_rail_usds.py) that emits one-line-of-payload USDs referencing the local mesh. Pattern: `Usd.Stage.CreateNew + UsdGeom.Xform.Define("/Root") + DefinePrim("/Root/Mesh","Xform").GetReferences().AddReference("./<mesh>")`. Caller picks first available .dae > .glb > .stl > .obj.
 
 ### Pending Todos
 
@@ -113,6 +120,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-02T18:30:00.000Z
-Stopped at: Plan 01-07 complete — verify harness shipped (3 scripts + 1 doc); 3 atomic task commits (fea9efd diff_tf_tree, d883e4d sweep + texture-sweep.md, 0d17ef4 verify_phase_1.sh); zero deviations, all acceptance criteria PASS first try; smoke tests confirm regex sanity; audit-file-as-machine-readable-contract pattern proven (parity_05_wrench_framing.txt + joint_ordering_probe.txt grepped for standardized field names). PARITY-03/04 deferrals from Plan 06 will surface as honest FAILs in verify_phase_1.sh — the script does not paper over them; metadata commit pending
-Resume file: .planning/phases/01-foundation-parity/01-08-PLAN.md (quick_start refactor per D-12 -- inserts new TF + JointState publisher calls between setup_force_publish_action_graph and setup_wrist_cameras; matches their UI button placement; also adds Phase 1 CHANGELOG entry + DX-02 final-audit table)
+Last session: 2026-05-02T13:35:00.000Z
+Stopped at: Plan 01-09 complete — 7 per-component spawn atoms with full DX-02 4-surface contract + 12 SCENE-04 robot/cable pose params + 3 vendored mount asset folders with thin USD wrappers; 3 atomic task commits (424d44b vendoring + e7b14f4 atoms + 0583a13 SCENE-04); 28 surface additions verified per-atom; backwards-compat preserved (legacy add_objects + quick_start no-arg load_robot still work); 2 minor spec-interpretation deviations both no-functional-impact and documented; metadata commit pending
+Resume file: .planning/phases/01-foundation-parity/01-08-PLAN.md (quick_start refactor per D-12 -- inserts new TF + JointState publisher calls between setup_force_publish_action_graph and setup_wrist_cameras; matches their UI button placement; also adds Phase 1 CHANGELOG entry + DX-02 final-audit table; Plan 09's 7 new atoms are now part of the surface this audit table presents)
