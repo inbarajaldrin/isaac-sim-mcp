@@ -1056,7 +1056,31 @@ class DigitalTwin(omni.ext.IExt):
     # ==================== Force Publisher ====================
 
     def setup_force_publish_action_graph(self):
-        """Setup force publishing as geometry_msgs/WrenchStamped on /fts_broadcaster/wrench."""
+        """Setup force publishing as geometry_msgs/WrenchStamped on /fts_broadcaster/wrench.
+
+        PARITY-05 contract (Plan 04 Task 4 — Phase 1 ship):
+          Topic name:     /fts_broadcaster/wrench
+          Message type:   geometry_msgs/msg/WrenchStamped
+          frame_id:       ati/tool_link
+          Source of truth: ~/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro
+                          line 233-243 (AtiForceTorqueSensor → frame_id=ati/tool_link)
+          Snapshot:       .planning/phases/01-foundation-parity/snapshot/
+                          topic_info_fts_broadcaster_wrench.txt (Plan 01 Task 2)
+
+        Pre-Plan-04 state: builder published WrenchStamped on the correct topic
+        AFTER Task 1 rename, but with frame_id="tool0" (UR5e tool flange) which
+        does NOT match the live Gazebo aic_eval container's "ati/tool_link" frame
+        (the actual ATI force/torque sensor mount frame in the URDF). Task 4
+        rewrites frame_id to "ati/tool_link" — Case A reconciliation per PLAN.md.
+
+        PARITY-05 verify (Plan 07 / verify_phase_1.sh executes once Isaac Sim is
+        running):
+            ros2 topic info /fts_broadcaster/wrench --verbose
+              -> Type: geometry_msgs/msg/WrenchStamped
+              -> Publisher count: >= 1
+            ros2 topic echo /fts_broadcaster/wrench --once
+              -> header.frame_id: ati/tool_link
+        """
         import omni.physx
 
         print("Setting up UR5e Force Publisher (WrenchStamped)...")
@@ -1104,7 +1128,8 @@ class DigitalTwin(omni.ext.IExt):
         self._force_graph_path = graph_path
         self._force_pub_node = nodes[2]  # publisher node
 
-        og.Controller.attribute("inputs:header:frame_id", self._force_pub_node).set("tool0")
+        # PARITY-05: frame_id matches live aic_eval — see method docstring for source of truth.
+        og.Controller.attribute("inputs:header:frame_id", self._force_pub_node).set("ati/tool_link")
 
         self._force_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
             self._on_physics_step_force

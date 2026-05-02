@@ -1,0 +1,71 @@
+PARITY-05 Wrench Framing Audit (Plan 01-04 Task 4)
+====================================================
+Generated: 2026-05-02
+Plan: 01-foundation-parity / 01-04
+Requirement: PARITY-05 — Isaac Sim publishes /fts_broadcaster/wrench
+             (geometry_msgs/WrenchStamped) for UR5e end-effector force/torque,
+             matching Gazebo's topic name AND frame_id.
+
+Live framing (source: aic_eval Gazebo container, captured 2026-05-01 by Plan 01)
+--------------------------------------------------------------------------------
+Snapshot file:    .planning/phases/01-foundation-parity/snapshot/topic_info_fts_broadcaster_wrench.txt
+Live frame_id:    ati/tool_link
+Live Type:        geometry_msgs/msg/WrenchStamped
+Live QoS:         Reliability=RELIABLE, History=KEEP_LAST(42), Durability=VOLATILE,
+                  Lifespan=Infinite, Deadline=Infinite, Liveliness=AUTOMATIC
+Source of truth:  ~/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro
+                  (AtiForceTorqueSensor sensor block, line 233-243; param
+                   name="frame_id" -> ati/tool_link)
+Topic info hash:  RIHS01_8dc3deaf06b2ab281f9f9a742a8961c328ca7cec16e3fd6586d3a5c83fa78f77
+
+Note: live `topic_info` output does not directly print header.frame_id; the value
+above is taken from the URDF that Gazebo's ros2_control loads. Runtime confirmation
+via `ros2 topic echo /fts_broadcaster/wrench --once` is the Plan 07 verification step.
+
+Isaac Sim builder pre-fix state
+-------------------------------
+Method:           DigitalTwin.setup_force_publish_action_graph (extension.py:~1064)
+Case:             Case A (publishes WrenchStamped on correct topic post-Task-1
+                  rename, but frame_id is hardcoded to a wrong literal)
+Pre-fix frame_id: "tool0"   (UR5e tool flange — NOT the ATI sensor mount frame)
+Topic (post-T1):  fts_broadcaster/wrench   (correct)
+Message type:     geometry_msgs/WrenchStamped (correct, via ROS2Publisher node
+                  inputs:messagePackage="geometry_msgs", inputs:messageName=
+                  "WrenchStamped")
+Publisher node:   isaacsim.ros2.bridge.ROS2Publisher (generic, configured at runtime)
+
+Action taken (Task 4)
+---------------------
+1. Replaced the og.Controller.attribute("inputs:header:frame_id", ...).set("tool0")
+   call with .set("ati/tool_link"). Single-line change at extension.py:~1108.
+2. Updated setup_force_publish_action_graph() docstring with the PARITY-05 contract,
+   source-of-truth reference (URDF + snapshot files), and the runtime verify recipe
+   that Plan 07's verify_phase_1.sh consumes.
+3. Inline comment marker `# PARITY-05:` placed adjacent to the frame_id setter so
+   future maintainers see the requirement ID without docstring archaeology.
+
+Verification command (executed in Plan 07 / verify_phase_1.sh)
+--------------------------------------------------------------
+    ros2 topic info /fts_broadcaster/wrench --verbose
+        Expected:  Type: geometry_msgs/msg/WrenchStamped
+                   Publisher count: >= 1
+    ros2 topic echo /fts_broadcaster/wrench --once
+        Expected:  header.frame_id == "ati/tool_link"
+                   wrench.{force,torque}.{x,y,z} are finite floats
+
+DX-02 4-surface contract (setup_force_publisher atom — kept, modified)
+---------------------------------------------------------------------
+This task does NOT add or delete an atom; it modifies an existing one in place.
+All 4 surfaces remain present:
+  - Registry entry:     "setup_force_publisher" in MCP_TOOL_REGISTRY (extension.py:174)
+  - Handler-map entry:  "setup_force_publisher": "_cmd_setup_force_publisher"
+  - _cmd_ method:       _cmd_setup_force_publisher (extension.py:~2370)
+  - UI button:          "Setup Force Publisher" (extension.py:~434)
+Consumed by:            quick_start (existing call to self.setup_force_publish_action_graph)
+
+Audit-trail purpose
+-------------------
+Plan 01 Task 4 (PARITY-12 audit) and Plan 07 (verify harness) consume this file as
+proof that PARITY-05 framing was reconciled. PARITY-05 in REQUIREMENTS.md should
+remain `[ ]` until Plan 07 demonstrates the runtime ros2 topic echo output matches
+the expectations above.
