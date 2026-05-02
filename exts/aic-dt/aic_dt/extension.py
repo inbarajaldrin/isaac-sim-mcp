@@ -187,8 +187,86 @@ MCP_TOOL_REGISTRY = {
         "parameters": {}
     },
     "add_objects": {
-        "description": "Add AIC task board objects (base, SC ports, NIC card) to the scene at their default positions.",
+        "description": "Add AIC task board objects (base, SC ports, NIC card) to the scene at their default positions. Backwards-compatible clubbing — invokes the per-component spawn atoms (spawn_task_board_base, spawn_sc_port, spawn_nic_card) with AIC_OBJECTS defaults.",
         "parameters": {}
+    },
+    # SCENE-01 / DX-02 — Per-component spawn atoms (parameter names mirror
+    # ~/Documents/aic/aic_bringup/launch/spawn_task_board.launch.py 1:1).
+    "spawn_task_board_base": {
+        "description": "Spawn the task board base prim at /World/TaskBoard with the given pose. Mirrors spawn_task_board.launch.py task_board_x/y/z/roll/pitch/yaw arguments. Idempotent: removes prior /World/TaskBoard before recreate.",
+        "parameters": {
+            "x": {"type": "float", "description": "Base X position (meters). Default 0.25 per spawn_task_board.launch.py."},
+            "y": {"type": "float", "description": "Base Y position (meters). Default 0.0."},
+            "z": {"type": "float", "description": "Base Z position (meters). Default 1.14."},
+            "roll": {"type": "float", "description": "Base roll (radians). Default 0.0."},
+            "pitch": {"type": "float", "description": "Base pitch (radians). Default 0.0."},
+            "yaw": {"type": "float", "description": "Base yaw (radians). Default 0.0."},
+        },
+    },
+    "spawn_lc_mount_rail": {
+        "description": "Spawn an LC Mount Rail (index 0 or 1) under /World/TaskBoard. Mirrors spawn_task_board.launch.py lc_mount_rail_<index>_present/translation/roll/pitch/yaw.",
+        "parameters": {
+            "index": {"type": "integer", "description": "Rail index (0 = left, 1 = right). Required."},
+            "present": {"type": "boolean", "description": "Whether the rail is present. Default false (matches launch.py)."},
+            "translation": {"type": "float", "description": "Translation along rail Y axis (meters, valid range [-0.09625, 0.09625]). Default 0.0."},
+            "roll": {"type": "float", "description": "Rail roll (radians). Default 0.0."},
+            "pitch": {"type": "float", "description": "Rail pitch (radians). Default 0.0."},
+            "yaw": {"type": "float", "description": "Rail yaw (radians). Default 0.0."},
+        },
+    },
+    "spawn_sfp_mount_rail": {
+        "description": "Spawn an SFP Mount Rail (index 0 or 1) under /World/TaskBoard. Mirrors spawn_task_board.launch.py sfp_mount_rail_<index>_*.",
+        "parameters": {
+            "index": {"type": "integer", "description": "Rail index (0 = left, 1 = right). Required."},
+            "present": {"type": "boolean", "description": "Whether the rail is present. Default false."},
+            "translation": {"type": "float", "description": "Translation along rail Y axis. Default 0.0."},
+            "roll": {"type": "float", "description": "Rail roll. Default 0.0."},
+            "pitch": {"type": "float", "description": "Rail pitch. Default 0.0."},
+            "yaw": {"type": "float", "description": "Rail yaw. Default 0.0."},
+        },
+    },
+    "spawn_sc_mount_rail": {
+        "description": "Spawn an SC Mount Rail (index 0 or 1) under /World/TaskBoard. Mirrors spawn_task_board.launch.py sc_mount_rail_<index>_*.",
+        "parameters": {
+            "index": {"type": "integer", "description": "Rail index (0 = left, 1 = right). Required."},
+            "present": {"type": "boolean", "description": "Whether the rail is present. Default false."},
+            "translation": {"type": "float", "description": "Translation along rail Y axis. Default 0.0."},
+            "roll": {"type": "float", "description": "Rail roll. Default 0.0."},
+            "pitch": {"type": "float", "description": "Rail pitch. Default 0.0."},
+            "yaw": {"type": "float", "description": "Rail yaw. Default 0.0."},
+        },
+    },
+    "spawn_sc_port": {
+        "description": "Spawn an SC Port (index 0 or 1) under /World/TaskBoard. Mirrors spawn_task_board.launch.py sc_port_<index>_present/translation/roll/pitch/yaw.",
+        "parameters": {
+            "index": {"type": "integer", "description": "Port index (0 or 1). Required."},
+            "present": {"type": "boolean", "description": "Whether the port is present. Default false."},
+            "translation": {"type": "float", "description": "Translation along rail. Default 0.0."},
+            "roll": {"type": "float", "description": "Roll (radians). Default 0.0."},
+            "pitch": {"type": "float", "description": "Pitch (radians). Default 0.0."},
+            "yaw": {"type": "float", "description": "Yaw (radians). Default 0.0."},
+        },
+    },
+    "spawn_nic_card_mount": {
+        "description": "Spawn a NIC Card Mount (index 0..4) under /World/TaskBoard. Mirrors spawn_task_board.launch.py nic_card_mount_<index>_present/translation/roll/pitch/yaw — note 5 indices (0..4), not 4.",
+        "parameters": {
+            "index": {"type": "integer", "description": "Mount index (0..4). Required."},
+            "present": {"type": "boolean", "description": "Whether the mount is present. Default false."},
+            "translation": {"type": "float", "description": "Translation along rail. Default 0.0."},
+            "roll": {"type": "float", "description": "Roll. Default 0.0."},
+            "pitch": {"type": "float", "description": "Pitch. Default 0.0."},
+            "yaw": {"type": "float", "description": "Yaw. Default 0.0."},
+        },
+    },
+    "spawn_nic_card": {
+        "description": "Spawn a standalone NIC Card prim under /World/TaskBoard. spawn_task_board.launch.py has no nic_card_* family (only nic_card_mount_*); this atom mirrors the legacy AIC_OBJECTS['nic_card'] entry for parity with prior add_objects behavior.",
+        "parameters": {
+            "present": {"type": "boolean", "description": "Whether the NIC card is present. Default false."},
+            "translation": {"type": "float", "description": "Translation along rail. Default 0.0."},
+            "roll": {"type": "float", "description": "Roll. Default 0.0."},
+            "pitch": {"type": "float", "description": "Pitch. Default 0.0."},
+            "yaw": {"type": "float", "description": "Yaw. Default 0.0."},
+        },
     },
     "delete_objects": {
         "description": "Delete all objects from /World/Objects.",
@@ -261,6 +339,14 @@ MCP_HANDLERS = {
     "setup_joint_state_publisher": "_cmd_setup_joint_state_publisher",
     "setup_wrist_cameras": "_cmd_setup_wrist_cameras",
     "add_objects": "_cmd_add_objects",
+    # SCENE-01 / DX-02 — Per-component spawn atoms
+    "spawn_task_board_base": "_cmd_spawn_task_board_base",
+    "spawn_lc_mount_rail": "_cmd_spawn_lc_mount_rail",
+    "spawn_sfp_mount_rail": "_cmd_spawn_sfp_mount_rail",
+    "spawn_sc_mount_rail": "_cmd_spawn_sc_mount_rail",
+    "spawn_sc_port": "_cmd_spawn_sc_port",
+    "spawn_nic_card_mount": "_cmd_spawn_nic_card_mount",
+    "spawn_nic_card": "_cmd_spawn_nic_card",
     "delete_objects": "_cmd_delete_objects",
     "randomize_object_poses": "_cmd_randomize_object_poses",
     "randomize_single_object": "_cmd_randomize_single_object",
@@ -484,6 +570,49 @@ class DigitalTwin(omni.ext.IExt):
                             with ui.HStack(spacing=5):
                                 ui.Button("Add All Objects", width=150, height=35, clicked_fn=self.add_objects)
                                 ui.Button("Delete Objects", width=150, height=35, clicked_fn=self.delete_objects)
+
+                    # SCENE-01 / DX-02 — Per-component spawn atoms
+                    # (parameter surface mirrors spawn_task_board.launch.py 1:1)
+                    with ui.CollapsableFrame(title="Spawn Atoms", name="subFrame", collapsed=True, height=0):
+                        with ui.VStack(spacing=5, height=0):
+                            with ui.HStack(spacing=5):
+                                ui.Button("Spawn Task Board Base", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_spawn_task_board_base())
+                            with ui.HStack(spacing=5):
+                                ui.Button("Spawn LC Mount Rail 0", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_spawn_lc_mount_rail(index=0, present=True))
+                                ui.Button("Spawn LC Mount Rail 1", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_spawn_lc_mount_rail(index=1, present=True))
+                            with ui.HStack(spacing=5):
+                                ui.Button("Spawn SFP Mount Rail 0", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_spawn_sfp_mount_rail(index=0, present=True))
+                                ui.Button("Spawn SFP Mount Rail 1", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_spawn_sfp_mount_rail(index=1, present=True))
+                            with ui.HStack(spacing=5):
+                                ui.Button("Spawn SC Mount Rail 0", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_spawn_sc_mount_rail(index=0, present=True))
+                                ui.Button("Spawn SC Mount Rail 1", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_spawn_sc_mount_rail(index=1, present=True))
+                            with ui.HStack(spacing=5):
+                                ui.Button("Spawn SC Port 0", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_spawn_sc_port(index=0, present=True))
+                                ui.Button("Spawn SC Port 1", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_spawn_sc_port(index=1, present=True))
+                            with ui.HStack(spacing=5):
+                                ui.Button("Spawn NIC Card Mount 0", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_spawn_nic_card_mount(index=0, present=True))
+                                ui.Button("Spawn NIC Card Mount 1", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_spawn_nic_card_mount(index=1, present=True))
+                            with ui.HStack(spacing=5):
+                                ui.Button("Spawn NIC Card Mount 2", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_spawn_nic_card_mount(index=2, present=True))
+                                ui.Button("Spawn NIC Card Mount 3", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_spawn_nic_card_mount(index=3, present=True))
+                                ui.Button("Spawn NIC Card Mount 4", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_spawn_nic_card_mount(index=4, present=True))
+                            with ui.HStack(spacing=5):
+                                ui.Button("Spawn NIC Card", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_spawn_nic_card(present=True))
 
                     # 6. Task Board Objects > Scene State
                     with ui.CollapsableFrame(title="Scene State", name="subFrame", collapsed=True, height=0):
@@ -2557,6 +2686,210 @@ class DigitalTwin(omni.ext.IExt):
             carb.log_error(f"Error in add_objects: {e}")
             traceback.print_exc()
             return {"status": "error", "message": f"Failed to add objects: {str(e)}"}
+
+    # =============================================================================
+    # SCENE-01 / DX-02 — Per-component spawn atoms
+    # =============================================================================
+    # Each atom mirrors a parameter family from
+    # ~/Documents/aic/aic_bringup/launch/spawn_task_board.launch.py.
+    # 4-surface contract per atom (DX-02):
+    #   1. MCP_TOOL_REGISTRY entry  (top of this file, MCP_TOOL_REGISTRY dict)
+    #   2. MCP_HANDLERS entry       (top of this file, MCP_HANDLERS dict)
+    #   3. _cmd_<name> method       (this section)
+    #   4. UI button                (create_ui CollapsableFrame "Spawn Atoms")
+    # Atoms:
+    #   - spawn_task_board_base
+    #   - spawn_lc_mount_rail (index 0/1)
+    #   - spawn_sfp_mount_rail (index 0/1)
+    #   - spawn_sc_mount_rail (index 0/1)
+    #   - spawn_sc_port (index 0/1)
+    #   - spawn_nic_card_mount (index 0..4)
+    #   - spawn_nic_card
+    # Backwards-compatible clubbing: add_objects() invokes the above with
+    # AIC_OBJECTS defaults (Task 3) — see refactored add_objects below.
+    # =============================================================================
+
+    # Mount-rail URDF anchor offsets (from
+    # ~/Documents/aic/aic_description/urdf/task_board.urdf.xacro). Index 0 is
+    # left side (Y negative), index 1 is right side (Y positive); X is shared.
+    _LC_MOUNT_ANCHOR_X = 0.0275
+    _SFP_MOUNT_ANCHOR_X = 0.0535
+    _SC_MOUNT_ANCHOR_X = 0.0985
+    _MOUNT_ANCHOR_Y = 0.10625  # sign flips with index
+
+    def _spawn_component_via_usd(self, prim_path: str, usd_relpath: str,
+                                  position, rpy) -> Dict[str, Any]:
+        """Helper: idempotently spawn a USD-referenced prim at prim_path.
+
+        Returns a Dict suitable for an MCP atom result. The pose application
+        uses UsdGeom.Xformable.AddTranslateOp + AddRotateXYZOp (intrinsic
+        XYZ Euler matching Gazebo's -R -P -Y semantics).
+        """
+        try:
+            stage = omni.usd.get_context().get_stage()
+            if stage is None:
+                return {"status": "error", "message": "No stage available"}
+            # Asset must be vendored — degrade gracefully per Plan 09 Task 1.
+            try:
+                usd_uri = _local_asset(usd_relpath)
+            except FileNotFoundError as e:
+                return {"status": "error",
+                        "message": f"Asset not vendored ({usd_relpath}) — see Plan 09 Task 1 WARN log: {e}"}
+            # Idempotent cleanup
+            existing = stage.GetPrimAtPath(prim_path)
+            if existing.IsValid():
+                stage.RemovePrim(prim_path)
+            # Create parent path if missing (e.g. /World/TaskBoard before any spawn)
+            parent_path = "/".join(prim_path.rstrip("/").split("/")[:-1])
+            if parent_path and parent_path != "/World" and not stage.GetPrimAtPath(parent_path).IsValid():
+                UsdGeom.Xform.Define(stage, parent_path)
+            # Author the prim with USD reference + pose
+            xform = UsdGeom.Xform.Define(stage, prim_path)
+            xform.GetPrim().GetReferences().AddReference(usd_uri)
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(float(position[0]), float(position[1]), float(position[2])))
+            xform.AddRotateXYZOp().Set(Gf.Vec3f(float(rpy[0]), float(rpy[1]), float(rpy[2])))
+            return {"status": "success",
+                    "message": f"Spawned {prim_path} pose=({position[0]:.4f},{position[1]:.4f},{position[2]:.4f}, RPY=({rpy[0]:.4f},{rpy[1]:.4f},{rpy[2]:.4f}))"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": f"spawn failed at {prim_path}: {e}"}
+
+    def _cmd_spawn_task_board_base(self, x: float = 0.25, y: float = 0.0, z: float = 1.14,
+                                   roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0) -> Dict[str, Any]:
+        """SCENE-01: Spawn task board base.
+
+        Parameter names mirror spawn_task_board.launch.py task_board_x/y/z/roll/pitch/yaw.
+        """
+        prim_path = "/World/TaskBoard"
+        usd_rel = AIC_OBJECTS["task_board_base"]["usd"]
+        return self._spawn_component_via_usd(prim_path, usd_rel,
+                                             position=(x, y, z),
+                                             rpy=(roll, pitch, yaw))
+
+    def _cmd_spawn_lc_mount_rail(self, index: int = 0, present: bool = False,
+                                  translation: float = 0.0,
+                                  roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0) -> Dict[str, Any]:
+        """SCENE-01: Spawn an LC Mount Rail (index 0 or 1).
+
+        Parameter names mirror spawn_task_board.launch.py
+        lc_mount_rail_<index>_present/translation/roll/pitch/yaw.
+        URDF anchor: x=0.0275, y=±0.10625 (sign by index).
+        """
+        if not present:
+            return {"status": "skipped", "message": f"lc_mount_rail_{index}_present=false"}
+        if index not in (0, 1):
+            return {"status": "error", "message": f"lc_mount_rail index must be 0 or 1, got {index}"}
+        anchor_x = self._LC_MOUNT_ANCHOR_X
+        anchor_y = -self._MOUNT_ANCHOR_Y if index == 0 else self._MOUNT_ANCHOR_Y
+        local_pos = (anchor_x, anchor_y + float(translation), 0.0)
+        prim_path = f"/World/TaskBoard/LCMountRail_{index}"
+        return self._spawn_component_via_usd(prim_path,
+                                             "assets/LC Mount/lc_mount_visual.usd",
+                                             position=local_pos,
+                                             rpy=(roll, pitch, yaw))
+
+    def _cmd_spawn_sfp_mount_rail(self, index: int = 0, present: bool = False,
+                                   translation: float = 0.0,
+                                   roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0) -> Dict[str, Any]:
+        """SCENE-01: Spawn an SFP Mount Rail (index 0 or 1).
+
+        Parameter names mirror spawn_task_board.launch.py
+        sfp_mount_rail_<index>_present/translation/roll/pitch/yaw.
+        URDF anchor: x=0.0535, y=±0.10625 (sign by index).
+        """
+        if not present:
+            return {"status": "skipped", "message": f"sfp_mount_rail_{index}_present=false"}
+        if index not in (0, 1):
+            return {"status": "error", "message": f"sfp_mount_rail index must be 0 or 1, got {index}"}
+        anchor_x = self._SFP_MOUNT_ANCHOR_X
+        anchor_y = -self._MOUNT_ANCHOR_Y if index == 0 else self._MOUNT_ANCHOR_Y
+        local_pos = (anchor_x, anchor_y + float(translation), 0.0)
+        prim_path = f"/World/TaskBoard/SFPMountRail_{index}"
+        return self._spawn_component_via_usd(prim_path,
+                                             "assets/SFP Mount/sfp_mount_visual.usd",
+                                             position=local_pos,
+                                             rpy=(roll, pitch, yaw))
+
+    def _cmd_spawn_sc_mount_rail(self, index: int = 0, present: bool = False,
+                                  translation: float = 0.0,
+                                  roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0) -> Dict[str, Any]:
+        """SCENE-01: Spawn an SC Mount Rail (index 0 or 1).
+
+        Parameter names mirror spawn_task_board.launch.py
+        sc_mount_rail_<index>_present/translation/roll/pitch/yaw.
+        URDF anchor: x=0.0985, y=±0.10625 (sign by index).
+        """
+        if not present:
+            return {"status": "skipped", "message": f"sc_mount_rail_{index}_present=false"}
+        if index not in (0, 1):
+            return {"status": "error", "message": f"sc_mount_rail index must be 0 or 1, got {index}"}
+        anchor_x = self._SC_MOUNT_ANCHOR_X
+        anchor_y = -self._MOUNT_ANCHOR_Y if index == 0 else self._MOUNT_ANCHOR_Y
+        local_pos = (anchor_x, anchor_y + float(translation), 0.0)
+        prim_path = f"/World/TaskBoard/SCMountRail_{index}"
+        return self._spawn_component_via_usd(prim_path,
+                                             "assets/SC Mount/sc_mount_visual.usd",
+                                             position=local_pos,
+                                             rpy=(roll, pitch, yaw))
+
+    def _cmd_spawn_sc_port(self, index: int = 0, present: bool = False,
+                            translation: float = 0.0,
+                            roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0) -> Dict[str, Any]:
+        """SCENE-01: Spawn an SC Port (index 0 or 1).
+
+        Parameter names mirror spawn_task_board.launch.py
+        sc_port_<index>_present/translation/roll/pitch/yaw.
+        Wired to AIC_OBJECTS["sc_port_1"]["usd"] (both indices share the same USD).
+        """
+        if not present:
+            return {"status": "skipped", "message": f"sc_port_{index}_present=false"}
+        if index not in (0, 1):
+            return {"status": "error", "message": f"sc_port index must be 0 or 1, got {index}"}
+        # Caller-supplied translation is the rail-axis position; place at local Y = translation.
+        local_pos = (0.0, float(translation), 0.0)
+        prim_path = f"/World/TaskBoard/SCPort_{index}"
+        return self._spawn_component_via_usd(prim_path,
+                                             AIC_OBJECTS["sc_port_1"]["usd"],
+                                             position=local_pos,
+                                             rpy=(roll, pitch, yaw))
+
+    def _cmd_spawn_nic_card_mount(self, index: int = 0, present: bool = False,
+                                   translation: float = 0.0,
+                                   roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0) -> Dict[str, Any]:
+        """SCENE-01: Spawn a NIC Card Mount (index 0..4).
+
+        Parameter names mirror spawn_task_board.launch.py
+        nic_card_mount_<index>_present/translation/roll/pitch/yaw — note 5 indices.
+        """
+        if not present:
+            return {"status": "skipped", "message": f"nic_card_mount_{index}_present=false"}
+        if index not in (0, 1, 2, 3, 4):
+            return {"status": "error", "message": f"nic_card_mount index must be 0..4, got {index}"}
+        local_pos = (0.0, float(translation), 0.0)
+        prim_path = f"/World/TaskBoard/NICCardMount_{index}"
+        return self._spawn_component_via_usd(prim_path,
+                                             "assets/NIC Card Mount/nic_card_mount_visual.usd",
+                                             position=local_pos,
+                                             rpy=(roll, pitch, yaw))
+
+    def _cmd_spawn_nic_card(self, present: bool = False,
+                             translation: float = 0.0,
+                             roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0) -> Dict[str, Any]:
+        """SCENE-01: Spawn a standalone NIC Card.
+
+        spawn_task_board.launch.py has no nic_card_<index> family (only
+        nic_card_mount); this atom mirrors the legacy AIC_OBJECTS["nic_card"]
+        for parity with prior add_objects behavior.
+        """
+        if not present:
+            return {"status": "skipped", "message": "nic_card_present=false"}
+        local_pos = (float(translation), 0.0, 0.0)
+        prim_path = "/World/TaskBoard/NICCard"
+        return self._spawn_component_via_usd(prim_path,
+                                             AIC_OBJECTS["nic_card"]["usd"],
+                                             position=local_pos,
+                                             rpy=(roll, pitch, yaw))
 
     def _cmd_delete_objects(self) -> Dict[str, Any]:
         try:
