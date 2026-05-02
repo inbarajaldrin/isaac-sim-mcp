@@ -121,7 +121,7 @@ Populated by roadmapper on 2026-05-01 during ROADMAP.md creation. Every v1 requi
 | TRIAL-04 | Phase 4 | Pending |
 | TRIAL-05 | Phase 4 | Pending |
 | DX-01 | Phase 1 | Closed (01-04): zero _sim/_real/RG2 hits in extension.py production surface |
-| DX-02 | Phase 1 | Deletion-side proven (01-04): 4-surface contract for 2 removed atoms; probe-script-side honored (01-05): 2 re-runnable probes with machine-parseable Decision blocks; ADDITION-SIDE proven (01-06): 4-surface contract for 2 added atoms (setup_tf_publisher + setup_joint_state_publisher = 8 surfaces total); BATCH-ADDITION-SIDE proven (01-09): 4-surface contract for 7 spawn atoms = 28 surface additions; cumulative final audit in 01-08 |
+| DX-02 | Phase 1 | Closed (01-08): standalone audit_dx02.py exits 0 — 27 PRESENT atoms × 4 surfaces verified, 2 ABSENT atoms (setup_pose_publisher, sync_real_poses) × 4 surfaces all removed verified; UI_METHOD_ALIASES handles registry-name vs method-name divergence; MCP_ONLY_ATOMS exemption documents 7 by-design no-UI control-plane atoms; CHANGELOG.md ships the audit table publicly. Cumulative timeline: 01-04 deletion-side / 01-05 probe-side / 01-06 addition-side / 01-09 batch-addition-side / 01-08 final cumulative audit |
 | DX-03 | Phase 3 | Pending |
 | DX-04 | Phase 4 | Pending |
 | DX-05 | Phase 4 | Pending |
@@ -133,4 +133,4 @@ Populated by roadmapper on 2026-05-01 during ROADMAP.md creation. Every v1 requi
 
 ---
 *Requirements defined: 2026-05-01*
-*Last updated: 2026-05-02 after Plan 01-09 (per-component spawn atoms + SCENE-04 pose params): SCENE-01 + SCENE-04 closed; 7 atoms × 4 surfaces = 28-surface batch DX-02 verified; LC/SFP/SC Mount asset folders vendored with thin USD wrappers; backwards-compat preserved (legacy add_objects + quick_start no-arg load_robot still work); cable params wired but no-op-effective per D-04 (Phase 3 SCENE-05 enables physics)*
+*Last updated: 2026-05-02 after Plan 01-08 (Phase 1 final integration): quick_start common-path refactored per D-12 (TF + JointState publishers + hasattr-guarded reorder + best-effort randomize_lighting); Phase 1 milestone CHANGELOG entry covering all 13 requirement IDs (PARITY-01..05, PARITY-12, TEX-01..03, SCENE-01, SCENE-04, DX-01, DX-02); standalone audit_dx02.py with UI_METHOD_ALIASES + MCP_ONLY_ATOMS exemption pattern — DX-02 closed cumulatively. Phase 1 code complete (9/9 plans); verifier loop pending. Known deferrals to surface in verifier: PARITY-04 view_frames zero-diff (per-frame Raw publisher overrides for 17 underscore→slash frame names — Plan 06 deferral), PARITY-03 gripper/left_finger_joint name (no nameOverrides on the OGN node — follow-up plan).*

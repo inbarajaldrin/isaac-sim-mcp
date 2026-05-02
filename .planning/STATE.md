@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Plan 01-09 complete (7 per-component spawn atoms with full DX-02 4-surface contract + 12 SCENE-04 robot/cable pose params + LC/SFP/SC Mount vendoring with thin USD wrappers; 3 atomic task commits 424d44b/e7b14f4/0583a13; 28 surface additions; 2 minor spec-interpretation deviations both no-functional-impact (RemovePrim shared via helper = 7 not 8; SetActive(False) literal grep = 6 not 1 due to docstring/comment mentions, only 1 functional call))
-last_updated: "2026-05-02T13:35:00.000Z"
-last_activity: 2026-05-02 -- Plan 01-09 complete; 7 per-component spawn atoms + SCENE-04 robot/cable pose params + 3 vendored mount folders with thin USD wrappers; 3 atomic task commits (424d44b vendoring + e7b14f4 atoms + 0583a13 SCENE-04); +486 LOC in extension.py; DX-02 28-surface batch verified; backwards-compat preserved (legacy add_objects + quick_start no-arg load_robot still work); 2 minor spec-interpretation deviations documented (helper-shared RemovePrim count + SetActive grep count include docstrings — zero functional impact)
+stopped_at: Plan 01-08 complete — Phase 1 code-complete; quick_start refactored per D-12 with TF + JointState publishers + best-effort randomize_lighting + hasattr-guarded reorder; comprehensive Phase 1 CHANGELOG entry covering all 13 requirement IDs; standalone DX-02 audit script (audit_dx02.py) — 27 present atoms × 4 surfaces and 2 absent atoms × 4 surfaces verified PASS. 3 atomic task commits (a93b0c8 quick_start refactor / 2351ca4 CHANGELOG / 5082ec0 audit script). Phase 1 verifier loop pending — known deferrals (per-frame TF Raw overrides, JointState gripper/left_finger_joint name override) flagged in CHANGELOG Known-Phase-3 callouts and expected to surface as PARITY-03/04 SC failures in verify_phase_1.sh.
+last_updated: "2026-05-02T14:30:00.000Z"
+last_activity: 2026-05-02 -- Plan 01-08 complete; Phase 1 code-complete (9/9 plans); quick_start common-path refactor per D-12 wires setup_tf_publish_action_graph + setup_joint_state_publish_action_graph after early-play step; randomize_lighting hasattr-guarded best-effort step added; setup_joint_state_reorder hasattr-guarded conditional defensive insurance (Plan 05 verdict NO-WRAPPER-NEEDED so the method does not exist); 207-line Phase 1 milestone CHANGELOG entry covering all 13 requirement IDs (PARITY-01..05, PARITY-12, TEX-01..03, SCENE-01, SCENE-04, DX-01, DX-02) with Added/Changed/Removed/Known-Phase-3-work-items/DX-02 audit table sections; standalone audit_dx02.py with UI_METHOD_ALIASES and MCP_ONLY_ATOMS exemption sets — exits 0 with "27 present atoms × 4 surfaces, 2 absent atoms × 4 surfaces — all OK"; 3 atomic task commits; +36 LOC in extension.py (3267 → 3303)
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 9
-  completed_plans: 8
-  percent: 89
+  completed_plans: 9
+  percent: 100
 ---
 
 # Project State
@@ -25,31 +25,31 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 
 ## Current Position
 
-Phase: 1 (Foundation Parity) — EXECUTING
-Plan: 9 of 9 (last remaining: 01-08 quick_start refactor)
-Status: Executing Phase 1 — Plans 01-01, 01-02, 01-03, 01-04, 01-05, 01-06, 01-07, 01-09 complete
-Last activity: 2026-05-02 -- Plan 01-09 complete; 7 per-component MCP spawn atoms (spawn_task_board_base + spawn_{lc,sfp,sc}_mount_rail + spawn_sc_port + spawn_nic_card_mount + spawn_nic_card) with full DX-02 4-surface contract; 12 SCENE-04 pose kwargs (robot_x/y/z/roll/pitch/yaw + cable_x/y/z/roll/pitch/yaw) wired through load_robot + _cmd_load_robot + MCP_TOOL_REGISTRY; 3 mount asset folders vendored with thin .glb-referencing USD wrappers; build_mount_rail_usds.py shipped; backwards-compat preserved via None-sentinel default (legacy quick_start path unchanged); cable subtree stays SetActive(False) per D-04 — pose params authored but no-op-effective in Phase 1; 3 atomic task commits (424d44b/e7b14f4/0583a13); DX-02 28-surface batch (7 atoms × 4 surfaces) verified by per-atom grep
+Phase: 1 (Foundation Parity) — CODE COMPLETE, verifier loop pending
+Plan: 9 of 9 — all plans complete
+Status: Phase 1 implementation done — verify_phase_1.sh end-to-end gate is the next step (orchestrator / verifier wave)
+Last activity: 2026-05-02 -- Plan 01-08 complete; quick_start refactored per D-12 (TF + JointState + hasattr-guarded reorder + randomize_lighting); Phase 1 CHANGELOG entry shipped (207 lines, 13 requirement IDs, DX-02 audit table); audit_dx02.py shipped (27 PRESENT × 4 surfaces, 2 ABSENT × 4 surfaces — PASS); 3 atomic task commits (a93b0c8/2351ca4/5082ec0); known deferrals (per-frame TF Raw overrides, JointState gripper/left_finger_joint name override) documented in CHANGELOG Known-Phase-3-work-items as expected verifier-surface-up items
 
-Progress: [█████████░] 89%
+Progress: [██████████] 100% (Phase 1 plans complete; phase verifier still pending)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 8
-- Average duration: 6.1 min
-- Total execution time: 49 min
+- Total plans completed: 9
+- Average duration: 6.0 min
+- Total execution time: 59 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| Phase 1 | 8 | 49 min | 6.1 min |
+| Phase 1 | 9 | 59 min | 6.6 min |
 
 **Recent Trend:**
 
-- Last 8 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min), 01-06 (6 min), 01-07 (10 min), 01-09 (8 min)
-- Trend: 01-09 mid-heavy (3 tasks, 17 files net — 1 script + 3 USD wrappers + 12 vendored asset files + 1 extension.py refactor; +486 LOC in extension.py). 2 minor spec-interpretation deviations both no-functional-impact (helper-shared RemovePrim count differs from inline-per-atom assumption; SetActive(False) literal grep includes docstrings). Largest single-plan DX-02 surface in Phase 1 — 7 atoms × 4 surfaces = 28 surface additions, all verified per-atom. Backwards-compat pattern proven: None-sentinel kwarg default + legacy attribute fallback preserves no-arg quick_start path while introducing full Gazebo-named param surface. Asset-vendoring contract extended: thin-USD-wrapper pattern for mesh-source folders (build_mount_rail_usds.py) where upstream lacks pre-cooked USDs. 3 task commits.
+- Last 9 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min), 01-06 (6 min), 01-07 (10 min), 01-09 (8 min), 01-08 (10 min)
+- Trend: 01-08 final-integration plan (3 tasks, 3 files — 1 extension.py refactor + 1 CHANGELOG.md write + 1 new audit_dx02.py script). Net +36 LOC in extension.py (quick_start grew by ~20 lines + docstring). 207-line Phase 1 CHANGELOG covering all 13 requirement IDs. 197-line standalone audit script with UI_METHOD_ALIASES and MCP_ONLY_ATOMS exemption pattern — caught 7 pre-existing 3-surface MCP-only atoms (play_scene/stop_scene/new_stage/etc.) that are by-design no-UI; documented exemption rather than retroactively adding buttons. 3 atomic task commits.
 
 *Updated after each plan completion*
 
@@ -120,6 +120,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-02T13:35:00.000Z
-Stopped at: Plan 01-09 complete — 7 per-component spawn atoms with full DX-02 4-surface contract + 12 SCENE-04 robot/cable pose params + 3 vendored mount asset folders with thin USD wrappers; 3 atomic task commits (424d44b vendoring + e7b14f4 atoms + 0583a13 SCENE-04); 28 surface additions verified per-atom; backwards-compat preserved (legacy add_objects + quick_start no-arg load_robot still work); 2 minor spec-interpretation deviations both no-functional-impact and documented; metadata commit pending
-Resume file: .planning/phases/01-foundation-parity/01-08-PLAN.md (quick_start refactor per D-12 -- inserts new TF + JointState publisher calls between setup_force_publish_action_graph and setup_wrist_cameras; matches their UI button placement; also adds Phase 1 CHANGELOG entry + DX-02 final-audit table; Plan 09's 7 new atoms are now part of the surface this audit table presents)
+Last session: 2026-05-02T14:30:00.000Z
+Stopped at: Plan 01-08 complete — Phase 1 code-complete (9/9). quick_start common-path refactored per D-12 with TF + JointState publishers + hasattr-guarded reorder + best-effort randomize_lighting; comprehensive Phase 1 CHANGELOG entry (207 lines, all 13 requirement IDs, DX-02 audit table, Known-Phase-3 callouts); audit_dx02.py exits 0 (27 PRESENT × 4 surfaces, 2 ABSENT × 4 surfaces — PASS). 3 atomic task commits.
+Resume file: Phase 1 verifier — `bash exts/aic-dt/scripts/verify_phase_1.sh` end-to-end gate. Known deferrals to surface in verifier loop: (a) PARITY-04 view_frames zero-diff against live Gazebo will likely fail until per-frame Raw publisher overrides land for the 17 underscore→slash frame names (Plan 06 deferral); (b) PARITY-03 may fail on `gripper/left_finger_joint` name (Isaac Sim publishes the underscore-form `gripper_left_finger_joint`; aic_adapter logs "Ignoring unexpected joint name" and silently drops it). Both flagged in CHANGELOG Known-Phase-3-work-items.
