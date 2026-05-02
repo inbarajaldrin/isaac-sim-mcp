@@ -185,3 +185,94 @@ ones. The remaining 33 belong to later phases or are Gazebo / ROS internals. See
 | `/scoring/insertion_event`, `/scoring/tf`, `/objects_poses_real`, `/grasp_points_real` | Phase 3 | PARITY-07, PARITY-08, SCENE-06 |
 | Trial-loader-only topics (none observed live) | Phase 4 | TRIAL-01..05 |
 | `/parameter_events`, `/rosout`, `/diagnostics`, `/observations`, `/robot_description`, `/clock`, `/dynamic_joint_states`, `/controller_manager/*` | not applicable (Gazebo / ROS internal) | n/a |
+
+## Cross-Phase Parity Audit (PARITY-12)
+
+This section is the single source of truth for "every Gazebo topic ↔ Isaac Sim
+equivalent ↔ status". It is the canonical Phase-1-ship deliverable for **PARITY-12**:
+a re-runnable check that no Gazebo topic is unintentionally missing or unmapped on
+the Isaac Sim side. Every row in `aic_topics_live.txt` (the full 36-topic surface)
+appears below with its disposition.
+
+To regenerate the live source row-set, run `bash exts/aic-dt/scripts/snapshot_aic_eval.sh`.
+Then update the table below if `topic_list.txt` shows new/removed topics.
+
+| Topic | Type | Live Gazebo | Isaac Sim Status | Phase | Proof-of-Publish |
+|-------|------|-------------|------------------|-------|------------------|
+| `/aic_controller/controller_state` | `aic_control_interfaces/msg/ControllerState` | yes | Phase 2 deferred | Phase 2 (PARITY-11) | — |
+| `/aic_controller/joint_commands` | `aic_control_interfaces/msg/JointMotionUpdate` | yes | Phase 2 deferred | Phase 2 (PARITY-09) | — |
+| `/aic_controller/joint_motion_update` | `aic_control_interfaces/msg/JointMotionUpdate` | yes | Phase 2 deferred | Phase 2 (PARITY-09) | — |
+| `/aic_controller/motion_update` | `aic_control_interfaces/msg/MotionUpdate` | yes | Phase 2 deferred | Phase 2 (PARITY-10) | — |
+| `/aic_controller/pose_commands` | `aic_control_interfaces/msg/MotionUpdate` | yes | Phase 2 deferred | Phase 2 (PARITY-10) | — |
+| `/aic_controller/transition_event` | `lifecycle_msgs/msg/TransitionEvent` | yes | Phase 2 deferred | Phase 2 (PARITY-09/10/11) | — |
+| `/aic/gazebo/contacts/off_limit` | `ros_gz_interfaces/msg/Contacts` | yes | Phase 2 deferred | Phase 2 (PARITY-06) | — |
+| `/center_camera/camera_info` | `sensor_msgs/msg/CameraInfo` | yes | implemented | Phase 1 (Plan 04 rename) | `ros2 topic hz /center_camera/camera_info` after `quick_start` |
+| `/center_camera/image` | `sensor_msgs/msg/Image` | yes | implemented | Phase 1 (Plan 04 rename) | `ros2 topic hz /center_camera/image` after `quick_start` |
+| `/clock` | `rosgraph_msgs/msg/Clock` | yes | implemented | Phase 1 (Isaac Sim native via setup_action_graph) | `ros2 topic echo /clock --once` after `quick_start` |
+| `/controller_manager/activity` | `controller_manager_msgs/msg/Activity` | yes | not applicable (Gazebo internal) | n/a | — |
+| `/controller_manager/introspection_data/full` | `control_msgs/msg/MultiDOFStateStamped` | yes | not applicable (Gazebo internal) | n/a | — |
+| `/controller_manager/introspection_data/names` | `control_msgs/msg/MultiDOFCommand` | yes | not applicable (Gazebo internal) | n/a | — |
+| `/controller_manager/introspection_data/values` | `control_msgs/msg/MultiDOFCommand` | yes | not applicable (Gazebo internal) | n/a | — |
+| `/controller_manager/statistics/full` | `control_msgs/msg/MultiDOFStateStamped` | yes | not applicable (Gazebo internal) | n/a | — |
+| `/controller_manager/statistics/names` | `control_msgs/msg/MultiDOFCommand` | yes | not applicable (Gazebo internal) | n/a | — |
+| `/controller_manager/statistics/values` | `control_msgs/msg/MultiDOFCommand` | yes | not applicable (Gazebo internal) | n/a | — |
+| `/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | yes | not applicable (ROS internal) | n/a | — |
+| `/dynamic_joint_states` | `control_msgs/msg/DynamicJointState` | yes | not applicable (Gazebo internal) | n/a | — |
+| `/fts_broadcaster/transition_event` | `lifecycle_msgs/msg/TransitionEvent` | yes | not applicable (Gazebo lifecycle internal) | n/a | — |
+| `/fts_broadcaster/wrench` | `geometry_msgs/msg/WrenchStamped` | yes | implemented | Phase 1 (Plan 04 — DX-09 rename + Plan 04 Task 4 PARITY-05 full match) | `ros2 topic echo /fts_broadcaster/wrench --once` after `quick_start` (frame_id must equal `ati/tool_link`) |
+| `/fts_broadcaster/wrench_filtered` | `geometry_msgs/msg/WrenchStamped` | yes | Phase 2 deferred | Phase 2 (PARITY-09 — controller-side filter) | — |
+| `/joint_state_broadcaster/transition_event` | `lifecycle_msgs/msg/TransitionEvent` | yes | not applicable (Gazebo lifecycle internal) | n/a | — |
+| `/joint_states` | `sensor_msgs/msg/JointState` | yes | implemented | Phase 1 (Plan 06) | `ros2 topic echo /joint_states --once` after `quick_start` (must match the 7-joint alphabetical name set above) |
+| `/left_camera/camera_info` | `sensor_msgs/msg/CameraInfo` | yes | implemented | Phase 1 (Plan 04 rename) | `ros2 topic hz /left_camera/camera_info` after `quick_start` |
+| `/left_camera/image` | `sensor_msgs/msg/Image` | yes | implemented | Phase 1 (Plan 04 rename) | `ros2 topic hz /left_camera/image` after `quick_start` |
+| `/observations` | `aic_engine_interfaces/msg/Observations` | yes | Phase 4 deferred | Phase 4 (TRIAL-03 — engine-side observation aggregator) | — |
+| `/parameter_events` | `rcl_interfaces/msg/ParameterEvent` | yes | not applicable (ROS internal) | n/a | — |
+| `/right_camera/camera_info` | `sensor_msgs/msg/CameraInfo` | yes | implemented | Phase 1 (Plan 04 rename) | `ros2 topic hz /right_camera/camera_info` after `quick_start` |
+| `/right_camera/image` | `sensor_msgs/msg/Image` | yes | implemented | Phase 1 (Plan 04 rename) | `ros2 topic hz /right_camera/image` after `quick_start` |
+| `/robot_description` | `std_msgs/msg/String` | yes | not applicable (Gazebo internal — robot_state_publisher param) | n/a | — |
+| `/rosout` | `rcl_interfaces/msg/Log` | yes | not applicable (ROS internal) | n/a | — |
+| `/scoring/insertion_event` | `std_msgs/msg/String` | yes | Phase 3 deferred | Phase 3 (PARITY-07) | — |
+| `/scoring/tf` | `tf2_msgs/msg/TFMessage` | yes | Phase 3 deferred | Phase 3 (PARITY-08) | — |
+| `/tf` | `tf2_msgs/msg/TFMessage` | yes | implemented | Phase 1 (Plan 06 — ROS2PublishTransformTree, staticPublisher=False) | `ros2 topic hz /tf` after `quick_start` (expect ~440 Hz on dynamic robot frames) |
+| `/tf_static` | `tf2_msgs/msg/TFMessage` | yes | implemented | Phase 1 (Plan 06 — ROS2PublishTransformTree, staticPublisher=True) | `ros2 topic echo /tf_static --once` after `quick_start` (TRANSIENT_LOCAL QoS, one-shot) |
+
+**Footnote: `not applicable` topics.** These are Gazebo physics-engine or ROS-runtime
+internals with no expected Isaac Sim equivalent:
+- `/controller_manager/*` and `*/transition_event` are `ros2_control` lifecycle
+  diagnostics — Isaac Sim does not run a `controller_manager`; the publisher pattern
+  is direct OmniGraph publishers, no lifecycle node.
+- `/parameter_events`, `/rosout`, `/diagnostics` are ROS-runtime infrastructure;
+  any rclpy-using node in aic-dt gets these for free.
+- `/robot_description` is a `robot_state_publisher` parameter; Phase 1 D-10
+  explicitly chooses Isaac Sim TF action graph over an external `robot_state_publisher`,
+  so `/robot_description` is not republished from sim.
+- `/dynamic_joint_states` is a `joint_state_broadcaster` extension topic that
+  duplicates `/joint_states` with interface metadata; Isaac Sim publishes
+  `/joint_states` only.
+
+### How to re-run this audit
+
+```bash
+# 1. Refresh live snapshot (Docker required)
+bash exts/aic-dt/scripts/snapshot_aic_eval.sh
+
+# 2. Diff the audit table's topics against fresh topic_list.txt — any new/removed
+#    topic means this table needs a corresponding row added/removed.
+diff <(grep -E '^\| `/' exts/aic-dt/docs/topic-parity-reference.md | awk -F'`' '{print $2}' | sort) \
+     <(sort .planning/phases/01-foundation-parity/snapshot/topic_list.txt)
+```
+
+**Which Plan(s) update the audit when a phase is closed:**
+
+- **Phase 1 ship:** this Plan 01 Task 4 (initial population) + Plan 04 Task 4 (PARITY-05 full F/T match) + Plan 06 (TF / JointState implemented rows).
+- **Phase 2 ship:** future plan flips Phase-2-deferred rows to `implemented` and
+  fills their Proof-of-Publish columns (`/aic_controller/*`, `/aic/gazebo/contacts/off_limit`,
+  `/fts_broadcaster/wrench_filtered`, etc.).
+- **Phase 3 ship:** future plan flips Phase-3-deferred rows to `implemented`
+  (`/scoring/insertion_event`, `/scoring/tf`).
+- **Phase 4 ship:** future plan flips remaining `Phase 4 deferred` rows
+  (`/observations`).
+
+The audit's invariant: every topic in `aic_topics_live.txt` MUST appear as exactly
+one row, with an explicit Isaac Sim Status disposition. No silent omissions —
+total surface coverage with explicit dispositions is the value.
