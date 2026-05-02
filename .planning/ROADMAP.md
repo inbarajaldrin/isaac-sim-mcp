@@ -35,16 +35,17 @@ Milestone 1 (Platform Transfer) takes the existing `aic-dt` extension scaffold f
   7. Calling the per-component spawn atoms with a `sample_config.yaml` `task_board` block (mount rails + sc/sfp/lc/nic occupancy + per-entity translation/RPY + robot/board pose) produces a viewport scene equivalent to the same parameters spawned by `spawn_task_board.launch.py` in Gazebo (SCENE-01, SCENE-04)
   8. `exts/aic-dt/docs/topic-parity-reference.md` contains a complete cross-phase parity audit table mapping every Gazebo topic to its Isaac Sim equivalent with phase status (implemented / Phase-N-deferred / not-applicable) and proof-of-publish per implemented row (PARITY-12)
   9. Every new MCP capability lands as one `MCP_TOOL_REGISTRY` entry + matching `_cmd_<name>` handler + one UI button — `MCP_TOOL_REGISTRY` is the only source of tool metadata (DX-02)
-**Plans**: 8 plans
+**Plans**: 9 plans (6 waves)
 Plans:
-- [ ] 01-01-PLAN.md — Snapshot infrastructure: live aic_eval Docker capture script + topic-parity-reference.md (D-01, D-14)
+- [ ] 01-01-PLAN.md — Snapshot infrastructure: live aic_eval Docker capture script + topic-parity-reference.md (D-01, D-14) + cross-phase audit table (PARITY-12)
 - [ ] 01-02-PLAN.md — Asset vendoring: capitalized AIC layout with sibling textures/ folders (D-05); retire snake_case objects/
 - [ ] 01-03-PLAN.md — Doc-only RG2→Robotiq Hand-E correction across .planning/, CLAUDE.md, exts/aic-dt/docs/README.md, exts/aic-dt/docs/CHANGELOG.md (D-03)
-- [ ] 01-04-PLAN.md — extension.py renames (33 _sim/_real cells) + RG2→Hand-E + prim-path bug fix + AIC_OBJECTS update + delete setup_pose_publisher / sync_real_poses atoms
-- [ ] 01-05-PLAN.md — Pre-graph probes: USD prim names → frame-name strategy (sublayer rename OR per-frame Raw publisher overrides) for PARITY-04 + aic_controller subscriber probe → ordering decision for PARITY-03 (probe-driven; conditional fixes)
-- [ ] 01-06-PLAN.md — Two new MCP atoms: setup_tf_publisher (/tf + /tf_static) + setup_joint_state_publisher (/joint_states) per D-10/D-11; targetPrim binds at /World/UR5e/aic_unified_robot/root_joint per RESEARCH Pattern 1
+- [ ] 01-04-PLAN.md — extension.py renames (33 _sim/_real cells) + RG2→Hand-E + prim-path bug fix + AIC_OBJECTS update + delete setup_pose_publisher / sync_real_poses atoms (DX-02 deletion-side) + PARITY-05 wrench full match
+- [ ] 01-05-PLAN.md — Pre-graph probes: USD prim names → frame-name strategy (sublayer rename OR per-frame Raw publisher overrides) for PARITY-04 + aic_controller subscriber probe → ordering decision for PARITY-03 (probe-driven; conditional fixes); DX-02 4-surface for any new reorder atom
+- [ ] 01-06-PLAN.md — Two new MCP atoms: setup_tf_publisher (/tf + /tf_static) + setup_joint_state_publisher (/joint_states) per D-10/D-11; targetPrim binds at /World/UR5e/aic_unified_robot/root_joint per RESEARCH Pattern 1; DX-02 4-surface contract enforced
 - [ ] 01-07-PLAN.md — Verify harness: diff_tf_tree.py (D-08) + sweep_textures.py (D-07; augmented patterns for Isaac Sim asset failures) + verify_phase_1.sh (D-15) + texture-sweep.md (TEX-03)
-- [ ] 01-08-PLAN.md — quick_start refactor per D-12 + Phase 1 CHANGELOG entry
+- [ ] 01-08-PLAN.md — quick_start refactor per D-12 + Phase 1 CHANGELOG entry + DX-02 final-audit table (presents 9 new atoms × 4 surfaces, 2 deleted atoms × 0 surfaces)
+- [ ] 01-09-PLAN.md — SCENE-01 + SCENE-04: 7 per-component spawn atoms (spawn_task_board_base / spawn_<lc|sfp|sc>_mount_rail / spawn_sc_port / spawn_nic_card_mount / spawn_nic_card) mirroring spawn_task_board.launch.py parameter surface; robot/board/cable pose params with Gazebo defaults; LC/SFP/SC Mount asset vendoring from aic_assets/models/; backwards-compatible add_objects clubbing
 **UI hint**: yes
 
 ### Phase 2: Controller Loop
@@ -93,7 +94,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation Parity | 0/TBD | Not started | - |
+| 1. Foundation Parity | 0/9 | Not started | - |
 | 2. Controller Loop & Parametric Scene | 0/TBD | Not started | - |
 | 3. Cable Physics & Ground-Truth Pose | 0/TBD | Not started | - |
 | 4. Trial Loader & End-to-End Verification | 0/TBD | Not started | - |
