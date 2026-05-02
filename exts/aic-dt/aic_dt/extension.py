@@ -105,24 +105,24 @@ AIC_RANDOMIZATION = {
 WRIST_CAMERAS = {
     "center_camera": {
         "prim_suffix": "center_camera_optical/center_camera",
-        "topic": "center_camera_rgb_sim",
-        "info_topic": "center_camera_info",
+        "topic": "center_camera/image",
+        "info_topic": "center_camera/camera_info",
         "frame_id": "center_camera_optical",
         "width": 640,
         "height": 480,
     },
     "left_camera": {
         "prim_suffix": "left_camera_optical/left_camera",
-        "topic": "left_camera_rgb_sim",
-        "info_topic": "left_camera_info",
+        "topic": "left_camera/image",
+        "info_topic": "left_camera/camera_info",
         "frame_id": "left_camera_optical",
         "width": 640,
         "height": 480,
     },
     "right_camera": {
         "prim_suffix": "right_camera_optical/right_camera",
-        "topic": "right_camera_rgb_sim",
-        "info_topic": "right_camera_info",
+        "topic": "right_camera/image",
+        "info_topic": "right_camera/camera_info",
         "frame_id": "right_camera_optical",
         "width": 640,
         "height": 480,
@@ -163,7 +163,7 @@ MCP_TOOL_REGISTRY = {
         "parameters": {}
     },
     "load_robot": {
-        "description": "Import the UR5e robot (with integrated RG2 gripper and cable) into the scene at the AIC position. Configures articulation and joint drives.",
+        "description": "Import the UR5e robot (with integrated Robotiq Hand-E gripper and cable) into the scene at the AIC position. Configures articulation and joint drives.",
         "parameters": {}
     },
     "setup_action_graph": {
@@ -873,7 +873,7 @@ class DigitalTwin(omni.ext.IExt):
         # 8. Create workspace camera at 640x480
         print("--- Creating Workspace Camera (640x480) ---")
         stage = omni.usd.get_context().get_stage()
-        ws_prim_path = "/World/workspace_camera_sim"
+        ws_prim_path = "/World/workspace_camera"
         ws_position = (0.8572405778988392, -1.3321141046870788, 0.9906567613694909)
         ws_quat_xyzw = (0.4714, 0.1994, 0.3347, 0.7912)
         ws_width, ws_height = 640, 480
@@ -918,7 +918,7 @@ class DigitalTwin(omni.ext.IExt):
         print("--- Setting up Workspace Camera Action Graph ---")
         self._create_camera_actiongraph(
             ws_prim_path, ws_width, ws_height,
-            "workspace_camera_sim", "WorkspaceCameraSim"
+            "workspace_camera", "WorkspaceCamera"
         )
         await app.next_update_async()
 
@@ -996,7 +996,7 @@ class DigitalTwin(omni.ext.IExt):
             drive_api.GetDampingAttr().Set(self._ur5e_damping)
             print(f"Set {joint_name}: maxForce={self._ur5e_max_force}, stiffness={self._ur5e_stiffness}, damping={self._ur5e_damping}")
 
-        print("UR5e robot loaded successfully (with integrated RG2 gripper and cable)!")
+        print("UR5e robot loaded successfully (with integrated Robotiq Hand-E gripper and cable)!")
 
     async def setup_action_graph(self):
         import omni.graph.core as og
@@ -1063,7 +1063,7 @@ class DigitalTwin(omni.ext.IExt):
     # ==================== Force Publisher ====================
 
     def setup_force_publish_action_graph(self):
-        """Setup force publishing as geometry_msgs/WrenchStamped on /force_torque_sensor_broadcaster/wrench_sim."""
+        """Setup force publishing as geometry_msgs/WrenchStamped on /fts_broadcaster/wrench."""
         import omni.physx
 
         print("Setting up UR5e Force Publisher (WrenchStamped)...")
@@ -1099,7 +1099,7 @@ class DigitalTwin(omni.ext.IExt):
                 keys.SET_VALUES: [
                     ("publisher.inputs:messageName", "WrenchStamped"),
                     ("publisher.inputs:messagePackage", "geometry_msgs"),
-                    ("publisher.inputs:topicName", "force_torque_sensor_broadcaster/wrench_sim"),
+                    ("publisher.inputs:topicName", "fts_broadcaster/wrench"),
                 ],
                 keys.CONNECT: [
                     ("tick.outputs:tick", "publisher.inputs:execIn"),
@@ -1119,7 +1119,7 @@ class DigitalTwin(omni.ext.IExt):
         self._force_publish_active = True
 
         print(f"UR5e Force Publisher created at {graph_path}")
-        print("Publishing geometry_msgs/WrenchStamped to topic: /force_torque_sensor_broadcaster/wrench_sim")
+        print("Publishing geometry_msgs/WrenchStamped to topic: /fts_broadcaster/wrench")
 
     def _on_physics_step_force(self, dt):
         """Physics step callback - read joint forces and update OmniGraph WrenchStamped attributes."""
@@ -1290,7 +1290,7 @@ class DigitalTwin(omni.ext.IExt):
             return
 
         if is_workspace:
-            prim_path = "/World/workspace_camera_sim"
+            prim_path = "/World/workspace_camera"
             position = (0.8572405778988392, -1.3321141046870788, 0.9906567613694909)
             quat_xyzw = (0.4714, 0.1994, 0.3347, 0.7912)
             camera_prim = UsdGeom.Camera.Define(stage, prim_path)
@@ -1323,10 +1323,10 @@ class DigitalTwin(omni.ext.IExt):
         stage = omni.usd.get_context().get_stage()
 
         if is_workspace:
-            if not stage.GetPrimAtPath("/World/workspace_camera_sim"):
+            if not stage.GetPrimAtPath("/World/workspace_camera"):
                 print("Error: Workspace camera not found. Create it first.")
             else:
-                self._create_camera_actiongraph("/World/workspace_camera_sim", width, height, "workspace_camera_sim", "WorkspaceCameraSim")
+                self._create_camera_actiongraph("/World/workspace_camera", width, height, "workspace_camera", "WorkspaceCamera")
 
         if is_custom:
             custom_prim_path = self._custom_camera_prim_field.model.get_value_as_string()
@@ -2354,7 +2354,7 @@ class DigitalTwin(omni.ext.IExt):
         try:
             from omni.kit.async_engine import run_coroutine
             run_coroutine(self.load_robot())
-            return {"status": "success", "message": "UR5e loaded with integrated RG2 gripper at /World/UR5e"}
+            return {"status": "success", "message": "UR5e loaded with integrated Robotiq Hand-E gripper at /World/UR5e"}
         except Exception as e:
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
