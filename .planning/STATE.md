@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Plan 01-02 complete (asset vendoring — capitalized AIC tree under assets/assets/, snake_case retired)
-last_updated: "2026-05-02T12:26:00.000Z"
-last_activity: 2026-05-02 -- Plan 01-02 complete; ready for Plan 01-03 (RG2→Hand-E doc correction)
+stopped_at: Plan 01-03 complete (RG2→Robotiq Hand-E doc correction; 12 occurrences across 5 files)
+last_updated: "2026-05-02T12:34:00.000Z"
+last_activity: 2026-05-02 -- Plan 01-03 complete; doc surface uniformly identifies gripper as Robotiq Hand-E
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 9
-  completed_plans: 2
-  percent: 22
+  completed_plans: 3
+  percent: 33
 ---
 
 # Project State
@@ -26,30 +26,30 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 1 (Foundation Parity) — EXECUTING
-Plan: 3 of 9
-Status: Executing Phase 1 — Plans 01-01 and 01-02 complete
-Last activity: 2026-05-02 -- Plan 01-02 complete; capitalized vendored asset tree shipped, snake_case objects/ retired
+Plan: 4 of 9
+Status: Executing Phase 1 — Plans 01-01, 01-02, 01-03 complete
+Last activity: 2026-05-02 -- Plan 01-03 complete; RG2→Robotiq Hand-E correction landed across .planning/, CLAUDE.md, exts/aic-dt/docs/
 
-Progress: [██░░░░░░░░] 22%
+Progress: [███░░░░░░░] 33%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 2
-- Average duration: 4.5 min
-- Total execution time: 9 min
+- Total plans completed: 3
+- Average duration: 4 min
+- Total execution time: 12 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| Phase 1 | 2 | 9 min | 4.5 min |
+| Phase 1 | 3 | 12 min | 4 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 01-01 (7 min), 01-02 (~2 min)
-- Trend: pure-vendoring plan; 2 tasks; 0 auto-fixes (deterministic cp -r flow, all acceptance criteria first-pass)
+- Last 5 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min)
+- Trend: pure-doc correction plan; 2 tasks; 0 auto-fixes (deterministic Edit-tool replacements, all acceptance criteria first-pass; 1 issue handled cleanly = stash-and-restore for unrelated dirty CLAUDE.md state)
 
 *Updated after each plan completion*
 
@@ -73,6 +73,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Recent decisions affecti
 - Plan 01-02: snake_case `exts/aic-dt/assets/objects/` retired in same plan; production extension is broken-by-design between this plan and Plan 04 lands (intentional sequencing per the plan)
 - Plan 01-02: `cp -r` whole-folder is the vendoring contract — selective `.usd`-only copy reintroduces TEX-01 (missing sibling textures)
 - Plan 01-02: AIC's CAPITALIZED layout (with spaces) preserved verbatim — USDs reference `./textures/...` relatively; renaming would re-break TEX-01 without USD rewrites
+- Plan 01-03: AIC URDF xacro (`~/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro`) is the canonical gripper-identification source — it includes `Robotiq Hand-E/robotiq_hande_macro.xacro`, NOT RG2; doc surface (`.planning/`, `CLAUDE.md`, `exts/aic-dt/docs/`) corrected accordingly
+- Plan 01-03: ROADMAP.md plan-description lines naming this plan reworded from "RG2→Robotiq Hand-E correction" to "gripper-name correction (Robotiq Hand-E)" — keeps zero literal `RG2` tokens in the doc surface
+- Plan 01-03: Stash-and-restore pattern used to keep pre-existing uncommitted CLAUDE.md edits out of plan commits — only RG2 hunks landed in commit `397b530`, unrelated dirty state preserved as before
+- Plan 01-03: PARITY-01 doc wording corrected; actual implementation (URDF load) is downstream — PARITY-01 status remains `[ ]` until code path lands (likely 01-04/01-06)
 
 ### Pending Todos
 
@@ -92,6 +96,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-02T12:26:00.000Z
-Stopped at: Plan 01-02 complete — capitalized vendored asset tree shipped, snake_case objects/ retired
-Resume file: .planning/phases/01-foundation-parity/01-03-PLAN.md (RG2→Robotiq Hand-E doc-only correction next)
+Last session: 2026-05-02T12:34:00.000Z
+Stopped at: Plan 01-03 complete — RG2→Robotiq Hand-E doc correction across .planning/, CLAUDE.md, exts/aic-dt/docs/README.md
+Resume file: .planning/phases/01-foundation-parity/01-04-PLAN.md (extension.py renames + code-side gripper-name correction + prim-path bug fix + AIC_OBJECTS update + DX-02 deletion-side + PARITY-05 wrench)
