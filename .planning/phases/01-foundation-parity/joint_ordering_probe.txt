@@ -1,0 +1,99 @@
+Probing: /home/aaugus11/Documents/aic/aic_controller/src
+
+[1] Searching for JointState subscriber declarations...
+/home/aaugus11/Documents/aic/aic_controller/src/aic_controller.cpp:374:          last_joint_reference_ = JointState(current_state_, num_joints_);
+/home/aaugus11/Documents/aic/aic_controller/src/aic_controller.cpp:718:  last_joint_reference_ = JointState(current_state_, num_joints_);
+/home/aaugus11/Documents/aic/aic_controller/src/aic_controller.cpp:793:  auto current_joint_state = JointState(current_state_, num_joints_);
+/home/aaugus11/Documents/aic/aic_controller/src/aic_controller.cpp:858:            JointState(joint_motion_update_.target_state, num_joints_);
+/home/aaugus11/Documents/aic/aic_controller/src/aic_controller.cpp:868:  JointState new_joint_reference = last_joint_reference_;
+/home/aaugus11/Documents/aic/aic_controller/src/aic_controller.cpp:1499:    JointState& target_state, double soft_margin_radians) {
+/home/aaugus11/Documents/aic/aic_controller/src/aic_controller.cpp:1677:    const JointState& last_reference, const JointState& target_state,
+/home/aaugus11/Documents/aic/aic_controller/src/aic_controller.cpp:1680:    JointState& new_reference) {
+/home/aaugus11/Documents/aic/aic_controller/src/joint_state.cpp:23:JointState::JointState() : num_joints_(0) {}
+/home/aaugus11/Documents/aic/aic_controller/src/joint_state.cpp:26:JointState::JointState(const std::size_t num_joints)
+/home/aaugus11/Documents/aic/aic_controller/src/joint_state.cpp:33:JointState::JointState(JointTrajectoryPoint& msg, const std::size_t num_joints)
+
+[2] Searching for joint_states subscription topic...
+  (no joint_states topic literal found)
+
+[3] Searching for name-indexed access patterns (msg->name, name[i], find by name)...
+  -> no name-indexed access patterns found
+
+[4] Searching for positional access patterns (msg->position[N], direct index)...
+  -> no positional access patterns found
+
+[5] Verdict (heuristic):
+  CONCLUSION: UNKNOWN -- neither pattern found in C++ source. Manually inspect the controller plugin.
+
+[6] Manual extension — searching aic_adapter (the actual /joint_states subscriber)...
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:80:  joint_sort_order_["shoulder_pan_joint"] = 0;
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:81:  joint_sort_order_["shoulder_lift_joint"] = 1;
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:82:  joint_sort_order_["elbow_joint"] = 2;
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:83:  joint_sort_order_["wrist_1_joint"] = 3;
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:84:  joint_sort_order_["wrist_2_joint"] = 4;
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:85:  joint_sort_order_["wrist_3_joint"] = 5;
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:86:  joint_sort_order_["gripper/left_finger_joint"] = 6;
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:88:      std::make_unique<std::deque<sensor_msgs::msg::JointState::UniquePtr>>();
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:89:  joint_state_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:90:      "/joint_states", 5,
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:91:      [this](sensor_msgs::msg::JointState::UniquePtr msg) -> void {
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:93:        while (this->joint_state_deque_->size() > kJointStateDequeMaxLength) {
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:189:      ReorderJointState(*(*joint_state_deque_)[joint_state_msg_idx],
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:190:                        observation_msg->joint_states);
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:232:void AicAdapterNode::ReorderJointState(
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:233:    const sensor_msgs::msg::JointState& original,
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:234:    sensor_msgs::msg::JointState& reordered) {
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:237:  if (n_joints != joint_sort_order_.size()) {
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:239:                 joint_sort_order_.size(), n_joints);
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:268:    if (!joint_sort_order_.contains(original.name[original_joint_idx])) {
+/home/aaugus11/Documents/aic/aic_adapter/src/aic_adapter.cpp:274:        joint_sort_order_.at(original.name[original_joint_idx]);
+
+[7] Manual extension — aic_engine /joint_states subscriber (settle check only)...
+  // Wait for joints to settle by checking velocities.
+  std::condition_variable cv;
+  std::mutex mtx;
+  bool joints_settled = false;
+  const rclcpp::QoS reliable_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
+  auto joint_states_sub =
+      node_->create_subscription<sensor_msgs::msg::JointState>(
+          "/joint_states", reliable_qos,
+          [this, &joints_settled, &cv,
+           &mtx](const sensor_msgs::msg::JointState::SharedPtr msg) {
+            if (msg->velocity.empty()) return;
+            for (size_t i = 0; i < msg->velocity.size(); ++i) {
+              if (std::fabs(msg->velocity[i]) > 1e-3) return;
+            }
+            {
+              std::unique_lock<std::mutex> lock(mtx);
+              joints_settled = true;
+            }
+            cv.notify_one();
+          });
+
+  std::unique_lock<std::mutex> lock(mtx);
+  const auto start = node_->now();
+  const auto timeout_duration = rclcpp::Duration::from_seconds(10);
+  while (rclcpp::ok() && !joints_settled &&
+         (node_->now() - start) < timeout_duration) {
+    cv.wait_for(lock, std::chrono::milliseconds(100),
+                [&joints_settled] { return joints_settled; });
+  }
+
+  // TODO(Yadunund): Implement other simulator readiness checks.
+
+  return true;
+}
+
+//==============================================================================
+
+## Decision (recorded by Plan 05 Task 2)
+
+Verdict: NAME-INDEXED
+Action: NO-WRAPPER-NEEDED
+Rationale: The default `aic_controller/src/` grep returned UNKNOWN because aic_controller is a ros2_control plugin that reads joint state directly from the controller_interface hardware-state interfaces (read_state_from_hardware on `current_state_`), NOT from the `/joint_states` topic. Manual extension of the probe (sections [6] and [7]) found the actual /joint_states subscribers in `aic_adapter/src/aic_adapter.cpp` and `aic_engine/src/aic_engine.cpp`. aic_adapter::ReorderJointState explicitly reorders by name via `joint_sort_order_.at(original.name[i])` (lines 80-86 declare the canonical map; lines 266-279 perform the lookup), then publishes a name-canonical `Observation.joint_states`. RunACT.py:224's `position[:7]` is on the *already-reordered* Observation, not directly on `/joint_states`. aic_engine.cpp:1260-1274 only checks `msg->velocity[i]` for "joints settled" (order-invariant). Therefore /joint_states topic ordering does NOT need to be canonical — the wrapper is unnecessary.
+
+Plan 06 IS however bound by ONE strict name-presence contract: all 7 expected joints MUST be present by name in every published /joint_states msg, otherwise aic_adapter logs "Ignoring unexpected joint name" and silently drops them. The 7 names are:
+  - shoulder_pan_joint, shoulder_lift_joint, elbow_joint
+  - wrist_1_joint, wrist_2_joint, wrist_3_joint
+  - gripper/left_finger_joint  (note the slash — same parity issue as the TF frames)
+Plan 06 must verify the Isaac Sim articulation publishes all 7 with these EXACT names. The slashed name is a likely fail-point and MUST be cross-checked against the USD prim leaf name in usd_prim_inventory.txt (the unified USD has `gripper_left_finger_joint` as the joint prim — Plan 06 must override the published joint_state name to `gripper/left_finger_joint`, analogous to the TF frame_id Raw overrides).
