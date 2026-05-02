@@ -163,8 +163,21 @@ MCP_TOOL_REGISTRY = {
         "parameters": {}
     },
     "load_robot": {
-        "description": "Import the UR5e robot (with integrated Robotiq Hand-E gripper and cable) into the scene at the AIC position. Configures articulation and joint drives.",
-        "parameters": {}
+        "description": "Import the UR5e robot (with integrated Robotiq Hand-E gripper and cable) at /World/UR5e. SCENE-04: pose configurable via robot_x/y/z/roll/pitch/yaw and cable_x/y/z/roll/pitch/yaw — parameter names match aic_gz_bringup.launch.py. Cable params are wired through but produce no-op effect in Phase 1 (cable SetActive(False) per D-04).",
+        "parameters": {
+            "robot_x": {"type": "float", "description": "Robot base X (meters). Default None → use historic Isaac Sim base position; pass -0.2 for Gazebo default."},
+            "robot_y": {"type": "float", "description": "Robot base Y (meters). Default None → use legacy; pass 0.2 for Gazebo default."},
+            "robot_z": {"type": "float", "description": "Robot base Z (meters). Default None → use legacy; pass 1.14 for Gazebo default."},
+            "robot_roll": {"type": "float", "description": "Robot base roll (radians). Default 0.0."},
+            "robot_pitch": {"type": "float", "description": "Robot base pitch (radians). Default 0.0."},
+            "robot_yaw": {"type": "float", "description": "Robot base yaw (radians). Default 0.0; Gazebo default -3.141."},
+            "cable_x": {"type": "float", "description": "Cable subtree X (meters). Default 0.172 (aic_gz_bringup.launch.py). No-op effect in Phase 1."},
+            "cable_y": {"type": "float", "description": "Cable subtree Y. Default 0.024."},
+            "cable_z": {"type": "float", "description": "Cable subtree Z. Default 1.518."},
+            "cable_roll": {"type": "float", "description": "Cable subtree roll (radians). Default 0.4432."},
+            "cable_pitch": {"type": "float", "description": "Cable subtree pitch (radians). Default -0.48."},
+            "cable_yaw": {"type": "float", "description": "Cable subtree yaw (radians). Default 1.3303."},
+        }
     },
     "setup_action_graph": {
         "description": "Create the ROS2 action graph for UR5e joint state subscription and clock publishing.",
@@ -1061,7 +1074,34 @@ class DigitalTwin(omni.ext.IExt):
 
     # ==================== Robot ====================
 
-    async def load_robot(self):
+    async def load_robot(self,
+                         robot_x: float = None, robot_y: float = None, robot_z: float = None,
+                         robot_roll: float = 0.0, robot_pitch: float = 0.0, robot_yaw: float = 0.0,
+                         cable_x: float = 0.172, cable_y: float = 0.024, cable_z: float = 1.518,
+                         cable_roll: float = 0.4432, cable_pitch: float = -0.48, cable_yaw: float = 1.3303):
+        """Load the unified UR5e + Robotiq Hand-E + cable USD into /World/UR5e.
+
+        SCENE-04: Robot base + cable poses are configurable via the same parameter
+        names Gazebo uses (mirroring
+        ~/Documents/aic/aic_bringup/launch/aic_gz_bringup.launch.py:
+        `robot_x/y/z/roll/pitch/yaw` and `cable_x/y/z/roll/pitch/yaw`).
+
+        Defaults:
+          - robot_x/y/z = None → use the historic Isaac Sim base position
+            self._robot_position = (-0.18, -0.122, 0.0). This preserves
+            backwards compatibility for legacy callers (quick_start, UI button,
+            existing _cmd_load_robot with no params). To use the Gazebo-default
+            position (-0.2, 0.2, 1.14), pass robot_x=-0.2, robot_y=0.2,
+            robot_z=1.14 explicitly. The parameter SURFACE matches Gazebo;
+            only the no-arg fallback differs (because Isaac Sim's enclosure
+            is rooted at Z=-1.15 vs Gazebo's world Z=0).
+          - cable_x/y/z/roll/pitch/yaw = aic_gz_bringup.launch.py defaults
+            (0.172, 0.024, 1.518, 0.4432, -0.48, 1.3303). Cable subtree is
+            SetActive(False) per D-04 (cable physics is Phase 3 / SCENE-05),
+            so cable pose params are wired through but produce a no-op
+            visible effect in Phase 1. Phase 3 enables physics, at which
+            point these params start mattering.
+        """
         asset_path = _local_asset("robot/aic_unified_robot_cable_sdf.usd")
         prim_path = self._robot_prim_path
 
@@ -1086,13 +1126,25 @@ class DigitalTwin(omni.ext.IExt):
         else:
             raise RuntimeError(f"Failed to load prim at {prim_path}")
 
-        # Apply translation with identity orientation (NO 180 degree yaw)
+        # Resolve robot position: explicit kwargs override the historic
+        # self._robot_position legacy default. Mix-and-match is allowed
+        # (e.g. caller passes robot_z only).
+        rx = self._robot_position[0] if robot_x is None else float(robot_x)
+        ry = self._robot_position[1] if robot_y is None else float(robot_y)
+        rz = self._robot_position[2] if robot_z is None else float(robot_z)
+
+        # Apply translation + RPY rotation. AddRotateXYZOp is intrinsic XYZ
+        # Euler matching Gazebo's -R -P -Y semantics.
         xform = UsdGeom.Xform(prim)
         xform.ClearXformOpOrder()
-        position = Gf.Vec3d(*self._robot_position)
-        xform.AddTranslateOp().Set(position)
-        xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
-        print(f"Applied translation {self._robot_position} to {prim_path} (identity orientation)")
+        xform.AddTranslateOp().Set(Gf.Vec3d(rx, ry, rz))
+        # If all RPY are zero, keep the existing identity-quaternion behavior
+        # (avoids any rounding drift in the legacy default path).
+        if (float(robot_roll), float(robot_pitch), float(robot_yaw)) == (0.0, 0.0, 0.0):
+            xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
+        else:
+            xform.AddRotateXYZOp().Set(Gf.Vec3f(float(robot_roll), float(robot_pitch), float(robot_yaw)))
+        print(f"Applied translation ({rx},{ry},{rz}) RPY=({robot_roll},{robot_pitch},{robot_yaw}) to {prim_path}")
 
         # Cable workaround: even when aic-dt is loaded post-startup (which lets PhysX
         # cook the cable + Body_005 SDF successfully — cache grows from 0 to ~113 MB),
@@ -1101,8 +1153,25 @@ class DigitalTwin(omni.ext.IExt):
         # rope (PhysxPhysicsJointInstancer + density-based mass per RigidBodyRopeDemo)
         # AND the post-play wedge is resolved, deactivate the cable subtree so the
         # rest of the scene stays responsive.
+        #
+        # SCENE-04: cable_x/y/z/roll/pitch/yaw pose params are wired through to
+        # the cable transform (matching Gazebo's parameter surface), but the
+        # subtree is SetActive(False) per D-04 — Phase 3 enables physics, at
+        # which point these params start mattering. Authoring the pose now
+        # means the parameter surface is in place without any additional code
+        # change in Phase 3.
         cable_prim = stage.GetPrimAtPath(f"{prim_path}/cable")
         if cable_prim and cable_prim.IsValid():
+            try:
+                cable_xform = UsdGeom.Xform(cable_prim)
+                # Only re-apply if not already at the requested pose to avoid
+                # double-stacking xformOps on hot-reload.
+                cable_xform.ClearXformOpOrder()
+                cable_xform.AddTranslateOp().Set(Gf.Vec3d(float(cable_x), float(cable_y), float(cable_z)))
+                cable_xform.AddRotateXYZOp().Set(Gf.Vec3f(float(cable_roll), float(cable_pitch), float(cable_yaw)))
+                print(f"Authored cable pose translation=({cable_x},{cable_y},{cable_z}) RPY=({cable_roll},{cable_pitch},{cable_yaw}) (no-op effect in Phase 1 — cable SetActive(False))")
+            except Exception as exc:  # noqa: BLE001 — pose authoring on a deactivated subtree is best-effort
+                print(f"Cable pose authoring skipped: {exc}")
             cable_prim.SetActive(False)
             print(f"Deactivated {prim_path}/cable (post-play physics wedge — see comment above)")
 
@@ -1784,13 +1853,68 @@ class DigitalTwin(omni.ext.IExt):
         size = bbox.ComputeAlignedRange().GetSize()
         return (size[0], size[1], size[2])
 
+    @staticmethod
+    def _quat_to_rpy(quat):
+        """Convert (w, x, y, z) quaternion to (roll, pitch, yaw) Euler angles (XYZ intrinsic).
+
+        Used by add_objects to bridge the legacy AIC_OBJECTS rotation field
+        (quaternion) to the per-component spawn atoms' RPY parameter surface.
+        """
+        if quat is None:
+            return (0.0, 0.0, 0.0)
+        w, x, y, z = quat
+        sinr_cosp = 2.0 * (w * x + y * z)
+        cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+        roll = math.atan2(sinr_cosp, cosr_cosp)
+        sinp = 2.0 * (w * y - z * x)
+        pitch = math.asin(max(-1.0, min(1.0, sinp)))
+        siny_cosp = 2.0 * (w * z + x * y)
+        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
+        return (roll, pitch, yaw)
+
     def add_objects(self, folder_path="/World/Objects"):
         """Add AIC task board objects to the scene at their configured positions.
+
+        SCENE-01 / DX-02: this is the backwards-compatible CLUBBED spawn path.
+        The canonical per-component spawn surface is the new atoms
+        (_cmd_spawn_task_board_base, _cmd_spawn_sc_port, _cmd_spawn_nic_card,
+        ...). This method preserves the prior 4-prim spawn UX (which the
+        UI button "Add All Objects" and `_cmd_add_objects` depend on) by
+        invoking the per-component atoms with AIC_OBJECTS legacy defaults
+        (NOT the all-`_present=false` defaults that spawn_task_board.launch.py
+        ships with — those would spawn nothing). For full launch.py-parity
+        per-component params, callers use the per-component atoms directly
+        via MCP or UI.
 
         Uses two-pass loading: create references first, then position.
         Skips entirely if all objects already exist (idempotent).
         """
         stage = omni.usd.get_context().get_stage()
+
+        # SCENE-01 clubbing: also drive the new per-component atoms so the
+        # /World/TaskBoard subtree mirrors the new atom-authored layout
+        # alongside the legacy /World/Objects path. Calls are best-effort:
+        # if the new atoms fail (e.g. asset not vendored), the legacy
+        # /World/Objects path below still produces a working scene.
+        try:
+            base_pos = AIC_OBJECTS["task_board_base"]["position"]
+            self._cmd_spawn_task_board_base(x=base_pos[0], y=base_pos[1], z=base_pos[2])
+            sc1_pos = AIC_OBJECTS["sc_port_1"]["position"]
+            sc1_rpy = self._quat_to_rpy(AIC_OBJECTS["sc_port_1"]["rotation"])
+            self._cmd_spawn_sc_port(index=0, present=True,
+                                    translation=sc1_pos[1],
+                                    roll=sc1_rpy[0], pitch=sc1_rpy[1], yaw=sc1_rpy[2])
+            sc2_pos = AIC_OBJECTS["sc_port_2"]["position"]
+            sc2_rpy = self._quat_to_rpy(AIC_OBJECTS["sc_port_2"]["rotation"])
+            self._cmd_spawn_sc_port(index=1, present=True,
+                                    translation=sc2_pos[1],
+                                    roll=sc2_rpy[0], pitch=sc2_rpy[1], yaw=sc2_rpy[2])
+            nic_pos = AIC_OBJECTS["nic_card"]["position"]
+            self._cmd_spawn_nic_card(present=True, translation=nic_pos[0])
+            print("[add_objects] Clubbed spawn atoms invoked (4 atoms — task_board_base, sc_port x2, nic_card)")
+        except Exception as exc:  # noqa: BLE001 — best-effort, legacy path below is canonical
+            print(f"[add_objects] Clubbed spawn-atom call best-effort failed: {exc} — falling through to legacy path")
 
         # Check if all objects already exist
         all_exist = True
@@ -2628,11 +2752,29 @@ class DigitalTwin(omni.ext.IExt):
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
 
-    def _cmd_load_robot(self) -> Dict[str, Any]:
+    def _cmd_load_robot(self,
+                        robot_x: float = None, robot_y: float = None, robot_z: float = None,
+                        robot_roll: float = 0.0, robot_pitch: float = 0.0, robot_yaw: float = 0.0,
+                        cable_x: float = 0.172, cable_y: float = 0.024, cable_z: float = 1.518,
+                        cable_roll: float = 0.4432, cable_pitch: float = -0.48, cable_yaw: float = 1.3303
+                        ) -> Dict[str, Any]:
+        """SCENE-04: forward Gazebo-named pose params through to load_robot.
+
+        See load_robot() docstring for the Gazebo parameter mapping and
+        backwards-compat default semantics. Cable params are wired through
+        to a no-op-effective transform per D-04 (cable SetActive(False) in
+        Phase 1; Phase 3 enables physics).
+        """
         try:
             from omni.kit.async_engine import run_coroutine
-            run_coroutine(self.load_robot())
-            return {"status": "success", "message": "UR5e loaded with integrated Robotiq Hand-E gripper at /World/UR5e"}
+            run_coroutine(self.load_robot(
+                robot_x=robot_x, robot_y=robot_y, robot_z=robot_z,
+                robot_roll=robot_roll, robot_pitch=robot_pitch, robot_yaw=robot_yaw,
+                cable_x=cable_x, cable_y=cable_y, cable_z=cable_z,
+                cable_roll=cable_roll, cable_pitch=cable_pitch, cable_yaw=cable_yaw,
+            ))
+            return {"status": "success",
+                    "message": "UR5e loaded with integrated Robotiq Hand-E gripper at /World/UR5e (SCENE-04 pose params applied)"}
         except Exception as e:
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
