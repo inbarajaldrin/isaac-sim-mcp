@@ -7,7 +7,7 @@
 
 ### Asset & Topic Parity
 
-- [ ] **PARITY-01**: Isaac Sim loads the AIC repo's `aic_description` xacro/URDF for the UR5e + RG2 + 3 wrist cameras (no divergent kinematics or geometry from Gazebo)
+- [ ] **PARITY-01**: Isaac Sim loads the AIC repo's `aic_description` xacro/URDF for the UR5e + Robotiq Hand-E + 3 wrist cameras (no divergent kinematics or geometry from Gazebo)
 - [~] **PARITY-02**: Isaac Sim loads the AIC repo's `aic_assets` meshes for the task board, ports (sc / sfp / lc / nic), mount rails, cables, and the AIC enclosure (no divergent geometry) _(disk-layer vendor complete in Plan 01-02 — capitalized AIC tree byte-identical under exts/aic-dt/assets/assets/; code path update lands in Plan 01-04, scene-load verification at Plan 01-06; LC/SFP mount rails + cable assets vendored in Plan 01-09)_
 - [~] **PARITY-03**: Isaac Sim publishes `/joint_states` with the same joint name set + ordering Gazebo publishes _(reference snapshot captured in Plan 01-01; implementation in Plan 01-06)_
 - [~] **PARITY-04**: Isaac Sim publishes `/tf` and `/tf_static` containing the same robot + gripper + camera frames Gazebo publishes (with same parent-child hierarchy and frame names) _(reference snapshot captured in Plan 01-01; implementation in Plan 01-06)_
@@ -30,7 +30,7 @@
 
 - [ ] **SCENE-01**: Task-board spawn supports the same component delta parameters `aic_bringup/launch/spawn_task_board.launch.py` accepts (`{lc,sfp,sc}_mount_rail_{0,1}_present`/`translation`/`roll`/`pitch`/`yaw`, `{sc,sfp,nic}_port_*` presence + translation + RPY) — Isaac Sim spawn produces equivalent scene state for any valid Gazebo parameter set
 - [ ] **SCENE-02**: Cable spawn supports both `cable_type` values Gazebo supports (`sfp_sc_cable`, `sfp_sc_cable_reversed`)
-- [ ] **SCENE-03**: Cable spawn supports `attach_cable_to_gripper:=true` semantics — plug body is attached to the RG2 gripper at the same offset Gazebo uses, with `gripper_initial_pos` matching cable type (0.0073 for sfp_sc_cable, 0.00655 default)
+- [ ] **SCENE-03**: Cable spawn supports `attach_cable_to_gripper:=true` semantics — plug body is attached to the Robotiq Hand-E gripper at the same offset Gazebo uses, with `gripper_initial_pos` matching cable type (0.0073 for sfp_sc_cable, 0.00655 default)
 - [ ] **SCENE-04**: Robot, board, and cable poses are configurable via the same parameter names Gazebo uses (`robot_x/y/z/roll/pitch/yaw`, `task_board_x/y/...`, `cable_x/y/...`)
 - [ ] **SCENE-05**: A cable physics strategy is chosen, justified, and implemented (deformable / articulated chain / rigid-plug-with-visual hybrid) such that CheatCode-relevant behaviors (plug pose under gripper attach, plug-port insertion contact) match Gazebo within tolerance — strategy itself is a Phase 1 research deliverable using `nvidia-suite-docs` skill
 - [ ] **SCENE-06**: Object TF frames CheatCode reads (e.g. `{cable_name}/{plug_name}_link`, port frames in `base_link`) are published into `/tf` from Isaac Sim when `ground_truth` mode is on — `lookup_transform` calls in CheatCode succeed without code change

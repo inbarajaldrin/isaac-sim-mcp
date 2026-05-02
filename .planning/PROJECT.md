@@ -15,7 +15,7 @@ When the same `aic_controller` + `aic_example_policies/CheatCode.py` + `sample_c
 - ✓ `aic-dt` extension scaffold with MCP socket server on port 8768 — existing (commits 880a3a4, 2be9e0c, 8ff7104)
 - ✓ Atomic MCP tool model with single-source registry (`MCP_TOOL_REGISTRY` + `_cmd_<name>` handlers) — existing
 - ✓ Postload launcher + `quick_start` Quick Start clubbing the common path — existing (commit 2be9e0c)
-- ✓ UR5e load + RG2 attach ordering correct (RG2 attached before play) — existing (commit 8ff7104)
+- ✓ UR5e load + Robotiq Hand-E attach ordering correct (Robotiq Hand-E attached before play) — existing (commit 8ff7104)
 - ✓ AIC enclosure + initial task-board object set (`task_board_base`, `sc_port_1/2`, `nic_card`) loadable from local `assets/` (no Nucleus dependency) — existing
 - ✓ Domain-randomization atoms for board / SC ports / NIC card — existing
 - ✓ Built-in wrist camera ROS 2 publishers (center / left / right) at 640×480 — existing
@@ -25,7 +25,7 @@ When the same `aic_controller` + `aic_example_policies/CheatCode.py` + `sample_c
 ### Active (Milestone 1 — Platform Transfer)
 
 - [ ] **Topic parity with Gazebo**: Isaac Sim publishes the *exact* topic names `aic_controller` + `aic_engine` + `CheatCode` consume today (`/joint_states`, `/tf` with object frames in `base_link`, `/tf_static`, `/scoring/tf`, `/fts_broadcaster/wrench`, `/aic/gazebo/contacts/off_limit`, `/scoring/insertion_event`, `/aic_controller/{joint,pose}_commands`, `/aic_controller/controller_state`). No `_sim` / `_real` suffixes, no remap nodes, no bridge translators. Replace placeholder `objects_poses_sim` / `sync_real_poses` machinery currently in the extension.
-- [ ] **Same USD/URDF as Gazebo**: load the AIC repo's `aic_description` xacro/URDF and `aic_assets` meshes for the UR5e + RG2 + 3 wrist cameras + cable + task board. No divergent geometry or kinematics.
+- [ ] **Same USD/URDF as Gazebo**: load the AIC repo's `aic_description` xacro/URDF and `aic_assets` meshes for the UR5e + Robotiq Hand-E + 3 wrist cameras + cable + task board. No divergent geometry or kinematics.
 - [ ] **Texture / material sweep**: load every USD/MDL referenced by the spawn path, find anything broken (pink, black, missing maps, broken MDL refs, GLB→USD PBR loss), and fix in place. Discover-by-loading.
 - [ ] **Task board parameterization parity**: Isaac Sim spawn supports the same component deltas `spawn_task_board.launch.py` does (mount rails 0/1, sc/sfp/lc port presence + translation + RPY, NIC rails 0–3, etc.) so a `sample_config.yaml` trial config lands the same scene as Gazebo.
 - [ ] **Cable spawn parity**: Isaac Sim spawn supports both `cable_type` values Gazebo supports (`sfp_sc_cable`, `sfp_sc_cable_reversed`) with `attach_cable_to_gripper` semantics. Cable physics fidelity strategy is a Phase 1 research item — see Key Decisions / Constraints.
@@ -56,7 +56,7 @@ When the same `aic_controller` + `aic_example_policies/CheatCode.py` + `sample_c
 
 ## Context
 
-**Larger ecosystem.** This repo (`isaac-sim-mcp`) hosts three Isaac Sim extensions — `aic-dt` (this project's focus), `ur5e-dt` (older UR5e + RG2 reference), and `soarm101-dt` — plus a top-level `isaac_mcp/` socket server, an `ompl_src/` motion-planning side experiment, and helper `scripts/`. The repo as a whole is "Claude-driven Isaac Sim digital twins for various robots." `aic-dt` was scaffolded recently (commit `880a3a4` adds it; `2be9e0c` and `8ff7104` are quality-of-life follow-ups). It is currently a placeholder — UI structure, MCP tool registry, atomic+clubbed pattern, ROS publisher patterns are all worth keeping; specific topic names like `objects_poses_sim` / `sync_real_poses` are *not* and will be replaced by Gazebo-native topic names in M1.
+**Larger ecosystem.** This repo (`isaac-sim-mcp`) hosts three Isaac Sim extensions — `aic-dt` (this project's focus), `ur5e-dt` (older UR5e + Robotiq Hand-E reference), and `soarm101-dt` — plus a top-level `isaac_mcp/` socket server, an `ompl_src/` motion-planning side experiment, and helper `scripts/`. The repo as a whole is "Claude-driven Isaac Sim digital twins for various robots." `aic-dt` was scaffolded recently (commit `880a3a4` adds it; `2be9e0c` and `8ff7104` are quality-of-life follow-ups). It is currently a placeholder — UI structure, MCP tool registry, atomic+clubbed pattern, ROS publisher patterns are all worth keeping; specific topic names like `objects_poses_sim` / `sync_real_poses` are *not* and will be replaced by Gazebo-native topic names in M1.
 
 **The AIC competition.** AI for Industry Challenge (AIC) — UR5e robot inserting cables into ports on a task board. Qualification deadline May 15, 2026. Scoring: 75pts for full insertion, 12pts duration bonus, 6pts smoothness, 6pts efficiency. The competition's reference toolkit lives at `~/Documents/aic` and includes:
 
