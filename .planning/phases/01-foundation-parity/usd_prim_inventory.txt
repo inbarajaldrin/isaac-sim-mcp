@@ -1,0 +1,266 @@
+USD: exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd
+GV : .planning/phases/01-foundation-parity/aic_frames_live.gv
+
+[USD prims under stage]
+  /Environment
+  /Environment/GroundPlane
+  /Render
+  /Render/OmniverseKit
+  /Render/OmniverseKit/HydraTextures
+  /Render/Vars
+  /World
+  /World/aic_unified_robot
+  /World/aic_unified_robot/ati_base_link
+  /World/aic_unified_robot/ati_base_link/collisions
+  /World/aic_unified_robot/ati_base_link/visuals
+  /World/aic_unified_robot/ati_tool_link
+  /World/aic_unified_robot/ati_tool_link/collisions
+  /World/aic_unified_robot/ati_tool_link/visuals
+  /World/aic_unified_robot/base
+  /World/aic_unified_robot/base/collisions
+  /World/aic_unified_robot/base/visuals
+  /World/aic_unified_robot/base_link
+  /World/aic_unified_robot/base_link/collisions
+  /World/aic_unified_robot/base_link/visuals
+  /World/aic_unified_robot/base_link_inertia
+  /World/aic_unified_robot/base_link_inertia/collisions
+  /World/aic_unified_robot/base_link_inertia/visuals
+  /World/aic_unified_robot/cam_mount_cam_mount_link
+  /World/aic_unified_robot/cam_mount_cam_mount_link/collisions
+  /World/aic_unified_robot/cam_mount_cam_mount_link/visuals
+  /World/aic_unified_robot/center_camera_camera_link
+  /World/aic_unified_robot/center_camera_camera_link/collisions
+  /World/aic_unified_robot/center_camera_camera_link/visuals
+  /World/aic_unified_robot/center_camera_optical
+  /World/aic_unified_robot/center_camera_optical/collisions
+  /World/aic_unified_robot/center_camera_optical/visuals
+  /World/aic_unified_robot/center_camera_sensor_link
+  /World/aic_unified_robot/center_camera_sensor_link/collisions
+  /World/aic_unified_robot/center_camera_sensor_link/visuals
+  /World/aic_unified_robot/flange
+  /World/aic_unified_robot/flange/collisions
+  /World/aic_unified_robot/flange/visuals
+  /World/aic_unified_robot/forearm_link
+  /World/aic_unified_robot/forearm_link/collisions
+  /World/aic_unified_robot/forearm_link/visuals
+  /World/aic_unified_robot/ft_frame
+  /World/aic_unified_robot/ft_frame/collisions
+  /World/aic_unified_robot/ft_frame/visuals
+  /World/aic_unified_robot/gripper_hande_base_link
+  /World/aic_unified_robot/gripper_hande_base_link/collisions
+  /World/aic_unified_robot/gripper_hande_base_link/visuals
+  /World/aic_unified_robot/gripper_hande_finger_link_l
+  /World/aic_unified_robot/gripper_hande_finger_link_l/collisions
+  /World/aic_unified_robot/gripper_hande_finger_link_l/visuals
+  /World/aic_unified_robot/gripper_hande_finger_link_r
+  /World/aic_unified_robot/gripper_hande_finger_link_r/FixedJoint
+  /World/aic_unified_robot/gripper_hande_finger_link_r/collisions
+  /World/aic_unified_robot/gripper_hande_finger_link_r/visuals
+  /World/aic_unified_robot/gripper_tcp
+  /World/aic_unified_robot/gripper_tcp/collisions
+  /World/aic_unified_robot/gripper_tcp/visuals
+  /World/aic_unified_robot/joints/ati_attach_joint
+  /World/aic_unified_robot/joints/attach_cam_mount
+  /World/aic_unified_robot/joints/attach_center_camera
+  /World/aic_unified_robot/joints/attach_ft_sensor_joint
+  /World/aic_unified_robot/joints/attach_gripper
+  /World/aic_unified_robot/joints/attach_left_camera
+  /World/aic_unified_robot/joints/attach_right_camera
+  /World/aic_unified_robot/joints/base_joint
+  /World/aic_unified_robot/joints/base_link_base_fixed_joint
+  /World/aic_unified_robot/joints/base_link_base_link_inertia
+  /World/aic_unified_robot/joints/center_camera_attach_optical
+  /World/aic_unified_robot/joints/center_camera_attach_sensor_link
+  /World/aic_unified_robot/joints/elbow_joint
+  /World/aic_unified_robot/joints/flange_tool0
+  /World/aic_unified_robot/joints/gripper_attach_tool_frame
+  /World/aic_unified_robot/joints/gripper_left_finger_joint
+  /World/aic_unified_robot/joints/gripper_right_finger_joint
+  /World/aic_unified_robot/joints/left_camera_attach_optical
+  /World/aic_unified_robot/joints/left_camera_attach_sensor_link
+  /World/aic_unified_robot/joints/right_camera_attach_optical
+  /World/aic_unified_robot/joints/right_camera_attach_sensor_link
+  /World/aic_unified_robot/joints/shoulder_lift_joint
+  /World/aic_unified_robot/joints/shoulder_pan_joint
+  /World/aic_unified_robot/joints/tabletop_joint
+  /World/aic_unified_robot/joints/wrist_1_joint
+  /World/aic_unified_robot/joints/wrist_2_joint
+  /World/aic_unified_robot/joints/wrist_3_flange
+  /World/aic_unified_robot/joints/wrist_3_joint
+  /World/aic_unified_robot/joints/wrist_3_link_ft_frame
+  /World/aic_unified_robot/left_camera_camera_link
+  /World/aic_unified_robot/left_camera_camera_link/collisions
+  /World/aic_unified_robot/left_camera_camera_link/visuals
+  /World/aic_unified_robot/left_camera_optical
+  /World/aic_unified_robot/left_camera_optical/collisions
+  /World/aic_unified_robot/left_camera_optical/visuals
+  /World/aic_unified_robot/left_camera_sensor_link
+  /World/aic_unified_robot/left_camera_sensor_link/collisions
+  /World/aic_unified_robot/left_camera_sensor_link/visuals
+  /World/aic_unified_robot/right_camera_camera_link
+  /World/aic_unified_robot/right_camera_camera_link/collisions
+  /World/aic_unified_robot/right_camera_camera_link/visuals
+  /World/aic_unified_robot/right_camera_optical
+  /World/aic_unified_robot/right_camera_optical/collisions
+  /World/aic_unified_robot/right_camera_optical/visuals
+  /World/aic_unified_robot/right_camera_sensor_link
+  /World/aic_unified_robot/right_camera_sensor_link/collisions
+  /World/aic_unified_robot/right_camera_sensor_link/visuals
+  /World/aic_unified_robot/root_joint
+  /World/aic_unified_robot/shoulder_link
+  /World/aic_unified_robot/shoulder_link/collisions
+  /World/aic_unified_robot/shoulder_link/visuals
+  /World/aic_unified_robot/tabletop
+  /World/aic_unified_robot/tabletop/collisions
+  /World/aic_unified_robot/tabletop/visuals
+  /World/aic_unified_robot/tool0
+  /World/aic_unified_robot/tool0/collisions
+  /World/aic_unified_robot/tool0/visuals
+  /World/aic_unified_robot/upper_arm_link
+  /World/aic_unified_robot/upper_arm_link/collisions
+  /World/aic_unified_robot/upper_arm_link/visuals
+  /World/aic_unified_robot/world
+  /World/aic_unified_robot/world/collisions
+  /World/aic_unified_robot/world/visuals
+  /World/aic_unified_robot/wrist_1_link
+  /World/aic_unified_robot/wrist_1_link/collisions
+  /World/aic_unified_robot/wrist_1_link/visuals
+  /World/aic_unified_robot/wrist_2_link
+  /World/aic_unified_robot/wrist_2_link/collisions
+  /World/aic_unified_robot/wrist_2_link/visuals
+  /World/aic_unified_robot/wrist_3_link
+  /World/aic_unified_robot/wrist_3_link/collisions
+  /World/aic_unified_robot/wrist_3_link/visuals
+  /World/cable
+  /World/cable/Rope
+  /World/cable/Rope/fixedJoint
+  /World/cable/Rope/fixedJoint2
+  /World/cable/sc_plug_visual
+  /World/cable/sc_plug_visual/Cube_002
+  /World/cable/sc_plug_visual/Cylinder_005
+  /World/cable/sc_plug_visual/Cylinder_007
+  /World/cable/sc_plug_visual/Cylinder_009
+  /World/cable/sc_plug_visual/Cylinder_011
+  /World/cable/sc_plug_visual/HOUSING_BLUE_Predeterminado_005
+  /World/cable/sc_plug_visual/HOUSING_BLUE_Predeterminado_007
+  /World/cable/sc_plug_visual/HOUSING_BLUE_Predeterminado_009
+  /World/cable/sc_plug_visual/HOUSING_BLUE_Predeterminado_011
+  /World/cable/sc_plug_visual/PARTE_INTERNA_A_Predeterminado_003
+  /World/cable/sc_plug_visual/PARTE_INTERNA_A_Predeterminado_005
+  /World/cable/sc_plug_visual/ferula_Predeterminado_003
+  /World/cable/sc_plug_visual/ferula_Predeterminado_005
+  /World/cable/sfp_module_visual
+  /World/cable/sfp_module_visual/lc_plug_visual
+  /World/cable/sfp_module_visual/lc_plug_visual/Cube_010
+  /World/cable/sfp_module_visual/lc_plug_visual/Cube_012
+  /World/cable/sfp_module_visual/lc_plug_visual/Cube_014
+  /World/cable/sfp_module_visual/lc_plug_visual/Cube_016
+  /World/cable/sfp_module_visual/lc_plug_visual/Cube_018
+  /World/cable/sfp_module_visual/lc_plug_visual/Cube_020
+  /World/cable/sfp_module_visual/lc_plug_visual/Cube_022
+  /World/cable/sfp_module_visual/lc_plug_visual/Cylinder_002
+  /World/cable/sfp_module_visual/lc_plug_visual/FCA_FCFC_DPS1Z_ma1_AQUA_002
+  /World/cable/sfp_module_visual/lc_plug_visual/node_AF02_003_MA2_002
+  /World/cable/sfp_module_visual/sfp_module_visual
+
+[Live frame names from aic_frames_live.gv]
+  aic_world
+  ati/base_link
+  ati/tool_link
+  base
+  base_link
+  base_link_inertia
+  cam_mount/cam_mount_link
+  center_camera/camera_link
+  center_camera/optical
+  center_camera/sensor_link
+  flange
+  forearm_link
+  ft_frame
+  gripper/hande_base_link
+  gripper/hande_finger_link_l
+  gripper/hande_finger_link_r
+  gripper/tcp
+  left_camera/camera_link
+  left_camera/optical
+  left_camera/sensor_link
+  right_camera/camera_link
+  right_camera/optical
+  right_camera/sensor_link
+  shoulder_link
+  tabletop
+  tool0
+  upper_arm_link
+  view_frames Result
+  world
+  wrist_1_link
+  wrist_2_link
+  wrist_3_link
+
+[Diff: live frame -> USD prim match]
+  NO-PRIM                 live='aic_world'  prim='<none>'
+  UNDERSCORE-MISMATCH     live='ati/base_link'  prim='/World/aic_unified_robot/ati_base_link'
+  UNDERSCORE-MISMATCH     live='ati/tool_link'  prim='/World/aic_unified_robot/ati_tool_link'
+  MATCH                   live='base'  prim='/World/aic_unified_robot/base'
+  MATCH                   live='base_link'  prim='/World/aic_unified_robot/base_link'
+  MATCH                   live='base_link_inertia'  prim='/World/aic_unified_robot/base_link_inertia'
+  UNDERSCORE-MISMATCH     live='cam_mount/cam_mount_link'  prim='/World/aic_unified_robot/cam_mount_cam_mount_link'
+  UNDERSCORE-MISMATCH     live='center_camera/camera_link'  prim='/World/aic_unified_robot/center_camera_camera_link'
+  UNDERSCORE-MISMATCH     live='center_camera/optical'  prim='/World/aic_unified_robot/center_camera_optical'
+  UNDERSCORE-MISMATCH     live='center_camera/sensor_link'  prim='/World/aic_unified_robot/center_camera_sensor_link'
+  MATCH                   live='flange'  prim='/World/aic_unified_robot/flange'
+  MATCH                   live='forearm_link'  prim='/World/aic_unified_robot/forearm_link'
+  MATCH                   live='ft_frame'  prim='/World/aic_unified_robot/ft_frame'
+  UNDERSCORE-MISMATCH     live='gripper/hande_base_link'  prim='/World/aic_unified_robot/gripper_hande_base_link'
+  UNDERSCORE-MISMATCH     live='gripper/hande_finger_link_l'  prim='/World/aic_unified_robot/gripper_hande_finger_link_l'
+  UNDERSCORE-MISMATCH     live='gripper/hande_finger_link_r'  prim='/World/aic_unified_robot/gripper_hande_finger_link_r'
+  UNDERSCORE-MISMATCH     live='gripper/tcp'  prim='/World/aic_unified_robot/gripper_tcp'
+  UNDERSCORE-MISMATCH     live='left_camera/camera_link'  prim='/World/aic_unified_robot/left_camera_camera_link'
+  UNDERSCORE-MISMATCH     live='left_camera/optical'  prim='/World/aic_unified_robot/left_camera_optical'
+  UNDERSCORE-MISMATCH     live='left_camera/sensor_link'  prim='/World/aic_unified_robot/left_camera_sensor_link'
+  UNDERSCORE-MISMATCH     live='right_camera/camera_link'  prim='/World/aic_unified_robot/right_camera_camera_link'
+  UNDERSCORE-MISMATCH     live='right_camera/optical'  prim='/World/aic_unified_robot/right_camera_optical'
+  UNDERSCORE-MISMATCH     live='right_camera/sensor_link'  prim='/World/aic_unified_robot/right_camera_sensor_link'
+  MATCH                   live='shoulder_link'  prim='/World/aic_unified_robot/shoulder_link'
+  MATCH                   live='tabletop'  prim='/World/aic_unified_robot/tabletop'
+  MATCH                   live='tool0'  prim='/World/aic_unified_robot/tool0'
+  MATCH                   live='upper_arm_link'  prim='/World/aic_unified_robot/upper_arm_link'
+  NO-PRIM                 live='view_frames Result'  prim='<none>'
+  MATCH                   live='world'  prim='/World/aic_unified_robot/world'
+  MATCH                   live='wrist_1_link'  prim='/World/aic_unified_robot/wrist_1_link'
+  MATCH                   live='wrist_2_link'  prim='/World/aic_unified_robot/wrist_2_link'
+  MATCH                   live='wrist_3_link'  prim='/World/aic_unified_robot/wrist_3_link'
+
+[Summary] 32 live frames | 16 underscore-mismatches | 2 no-prim
+
+[Recommended fix strategy]
+  STRATEGY: PER-FRAME-RAW-OVERRIDE -- mixed mismatch pattern (16 underscore prims + 2 no-prim frames). ROS2PublishRawTransformTree is the only strategy that handles BOTH renaming AND synthesizing missing TF edges.
+
+[Override list for Plan 06 / sublayer]
+  OVERRIDE  prim='None'  expected_frame_id='aic_world'
+  OVERRIDE  prim='/World/aic_unified_robot/ati_base_link'  expected_frame_id='ati/base_link'
+  OVERRIDE  prim='/World/aic_unified_robot/ati_tool_link'  expected_frame_id='ati/tool_link'
+  OVERRIDE  prim='/World/aic_unified_robot/cam_mount_cam_mount_link'  expected_frame_id='cam_mount/cam_mount_link'
+  OVERRIDE  prim='/World/aic_unified_robot/center_camera_camera_link'  expected_frame_id='center_camera/camera_link'
+  OVERRIDE  prim='/World/aic_unified_robot/center_camera_optical'  expected_frame_id='center_camera/optical'
+  OVERRIDE  prim='/World/aic_unified_robot/center_camera_sensor_link'  expected_frame_id='center_camera/sensor_link'
+  OVERRIDE  prim='/World/aic_unified_robot/gripper_hande_base_link'  expected_frame_id='gripper/hande_base_link'
+  OVERRIDE  prim='/World/aic_unified_robot/gripper_hande_finger_link_l'  expected_frame_id='gripper/hande_finger_link_l'
+  OVERRIDE  prim='/World/aic_unified_robot/gripper_hande_finger_link_r'  expected_frame_id='gripper/hande_finger_link_r'
+  OVERRIDE  prim='/World/aic_unified_robot/gripper_tcp'  expected_frame_id='gripper/tcp'
+  OVERRIDE  prim='/World/aic_unified_robot/left_camera_camera_link'  expected_frame_id='left_camera/camera_link'
+  OVERRIDE  prim='/World/aic_unified_robot/left_camera_optical'  expected_frame_id='left_camera/optical'
+  OVERRIDE  prim='/World/aic_unified_robot/left_camera_sensor_link'  expected_frame_id='left_camera/sensor_link'
+  OVERRIDE  prim='/World/aic_unified_robot/right_camera_camera_link'  expected_frame_id='right_camera/camera_link'
+  OVERRIDE  prim='/World/aic_unified_robot/right_camera_optical'  expected_frame_id='right_camera/optical'
+  OVERRIDE  prim='/World/aic_unified_robot/right_camera_sensor_link'  expected_frame_id='right_camera/sensor_link'
+  OVERRIDE  prim='None'  expected_frame_id='view_frames Result'
+
+[Recommended strategy token] PER-FRAME-RAW-OVERRIDE
+
+## Decision (recorded by Plan 05 Task 1)
+
+Strategy: PER-FRAME-RAW-OVERRIDE
+Rationale: 16 of 32 live frames are USD prims that exist but with underscore-flattened names (e.g., USD prim `/World/aic_unified_robot/gripper_hande_base_link` must publish as ROS frame_id `gripper/hande_base_link`). 2 entries are non-prim noise/synthesis: `aic_world` is a real Gazebo static-published synthesized frame with no driving prim (must be published as a static `world -> aic_world` identity edge), and `view_frames Result` is a .gv legend artifact (filter at consumer — NOT a real ROS frame, ignore in Plan 06 builder). USD sublayer renaming was rejected because (a) USD prim names cannot legally contain `/` (it is the path separator), so any `over` block trying `over "gripper/hande_base_link"` produces an invalid Sdf path; (b) even if `customData:frameId` were authored, ROS2PublishTransformTree in Isaac Sim 5.0 reads the prim's `name` (the `Sdf.Path` leaf), not custom metadata, so the rename would have no effect on the published frame_id. Therefore PER-FRAME-RAW-OVERRIDE is the ONLY workable strategy for these 16 + 1 frames; Plan 06's TF builder will read the override list above and emit one `ROS2PublishRawTransformTree` (or equivalently, populate per-frame `targetPrim` + `parentFrame`/`childFrame` overrides) per entry.
+Affected prims: 17 (16 underscore-rename + 1 synthesized aic_world edge)
+Implementing task: Task 3 SKIPPED (no sublayer authored). Plan 06 Task 1 (TF builder) reads this `[Override list for Plan 06 / sublayer]` section and creates per-frame Raw publishers. The 14 MATCH frames (base, base_link, base_link_inertia, flange, forearm_link, ft_frame, shoulder_link, tabletop, tool0, upper_arm_link, world, wrist_1_link, wrist_2_link, wrist_3_link) can be published via the standard ROS2PublishTransformTree default name mapping. `view_frames Result` is filtered out (legend artifact, not a real frame).
