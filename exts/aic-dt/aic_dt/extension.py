@@ -217,14 +217,6 @@ MCP_TOOL_REGISTRY = {
             }
         }
     },
-    "setup_pose_publisher": {
-        "description": "Create an action graph to publish object poses to ROS2 topic 'objects_poses_sim'.",
-        "parameters": {}
-    },
-    "sync_real_poses": {
-        "description": "Subscribe to /objects_poses_real ROS2 topic and update sim object poses to match real-world detected poses.",
-        "parameters": {}
-    },
     "new_stage": {
         "description": "Clear the entire USD stage and free accumulated memory. The scene will be empty afterwards -- use quick_start to rebuild it.",
         "parameters": {}
@@ -264,8 +256,6 @@ MCP_HANDLERS = {
     "randomize_single_object": "_cmd_randomize_single_object",
     "save_scene_state": "_cmd_save_scene_state",
     "restore_scene_state": "_cmd_restore_scene_state",
-    "setup_pose_publisher": "_cmd_setup_pose_publisher",
-    "sync_real_poses": "_cmd_sync_real_poses",
     "new_stage": "_cmd_new_stage",
     "quick_start": "_cmd_quick_start",
     "randomize_lighting": "_cmd_randomize_lighting",
@@ -481,14 +471,11 @@ class DigitalTwin(omni.ext.IExt):
                         with ui.VStack(spacing=5, height=0):
                             with ui.HStack(spacing=5):
                                 ui.Button("Add All Objects", width=150, height=35, clicked_fn=self.add_objects)
-                                ui.Button("Setup Pose Publisher", width=180, height=35, clicked_fn=self.create_pose_publisher)
                                 ui.Button("Delete Objects", width=150, height=35, clicked_fn=self.delete_objects)
 
                     # 6. Task Board Objects > Scene State
                     with ui.CollapsableFrame(title="Scene State", name="subFrame", collapsed=True, height=0):
                         with ui.VStack(spacing=5, height=0):
-                            with ui.HStack(spacing=5):
-                                ui.Button("Sync Real Poses", width=180, height=35, clicked_fn=self.sync_real_poses)
                             with ui.HStack(spacing=5):
                                 ui.Button("Randomize Poses", width=150, height=35, clicked_fn=self.randomize_object_poses)
                             with ui.HStack(spacing=5):
@@ -869,10 +856,9 @@ class DigitalTwin(omni.ext.IExt):
         self.add_objects()
         await app.next_update_async()
 
-        # 7. Setup pose publisher
-        print("--- Setting up pose publisher ---")
-        self.create_pose_publisher()
-        await app.next_update_async()
+        # 7. (pose-publisher step retired in Plan 04 — replaced by TF/JointState
+        #     publishers added in Plan 06. Quick_start temporarily skips this gap;
+        #     Plan 07 reorders the sequence to call the new publishers here.)
 
         # 8. Create workspace camera at 640x480
         print("--- Creating Workspace Camera (640x480) ---")
@@ -1692,136 +1678,6 @@ class DigitalTwin(omni.ext.IExt):
 
         print(f"[randomize_lighting] Intensity={intensity:.0f}, Color=({r:.2f}, {g:.2f}, {b:.2f})")
 
-    # ==================== Sync Real Poses ====================
-
-    def sync_real_poses(self):
-        """Subscribe to /objects_poses_real and update sim object poses to match."""
-        import rclpy
-        from tf2_msgs.msg import TFMessage
-
-        rclpy.init(args=None)
-        node = rclpy.create_node("_sync_real_poses_tmp")
-        try:
-            msg_received = [None]
-
-            def _cb(msg):
-                msg_received[0] = msg
-
-            sub = node.create_subscription(TFMessage, "/objects_poses_real", _cb, 1)
-            t0 = time.time()
-            while msg_received[0] is None and (time.time() - t0) < 3.0:
-                rclpy.spin_once(node, timeout_sec=0.1)
-            node.destroy_subscription(sub)
-
-            if msg_received[0] is None:
-                print("[SyncRealPoses] No message received on /objects_poses_real within 3s")
-                return
-
-            real_poses = {}
-            for tf in msg_received[0].transforms:
-                t = tf.transform.translation
-                r = tf.transform.rotation
-                real_poses[tf.child_frame_id] = {
-                    'position': (t.x, t.y, t.z),
-                    'quat_wxyz': (r.w, r.x, r.y, r.z),
-                }
-
-            stage = omni.usd.get_context().get_stage()
-            updated = []
-            for name, pose in real_poses.items():
-                prim_path = self._get_prim_path(name)
-                prim = stage.GetPrimAtPath(prim_path)
-                if not prim.IsValid():
-                    print(f"[SyncRealPoses] Prim not found: {prim_path}")
-                    continue
-
-                qw, qx, qy, qz = pose['quat_wxyz']
-                quat = Gf.Quatf(float(qw), float(qx), float(qy), float(qz))
-                omni.kit.commands.execute("ChangeProperty",
-                    prop_path=f"{prim_path}.xformOp:orient", value=quat, prev=None)
-                omni.kit.commands.execute("ChangeProperty",
-                    prop_path=f"{prim_path}.xformOp:translate",
-                    value=Gf.Vec3d(*pose['position']), prev=None)
-                updated.append(name)
-
-            print(f"[SyncRealPoses] Updated {len(updated)} objects: {updated}")
-        finally:
-            node.destroy_node()
-            rclpy.shutdown()
-
-    # ==================== Pose Publisher ====================
-
-    def create_pose_publisher(self):
-        """Create action graph for publishing object poses to ROS2"""
-        stage = omni.usd.get_context().get_stage()
-        if not stage:
-            print("Error: No stage found")
-            return
-
-        # Collect body prim paths
-        body_paths = []
-        folder_path = "/World/Objects"
-        objects_prim = stage.GetPrimAtPath(folder_path)
-        if not objects_prim or not objects_prim.IsValid():
-            print(f"Warning: {folder_path} does not exist")
-            return
-
-        for child in objects_prim.GetChildren():
-            object_name = child.GetName()
-            if object_name == "PhysicsMaterial":
-                continue
-            body_path = self._get_prim_path(object_name, folder_path)
-            body_prim = stage.GetPrimAtPath(body_path)
-            if body_prim and body_prim.IsValid():
-                body_paths.append(body_path)
-                print(f"Found: {body_path}")
-
-        if not body_paths:
-            print("No objects found in /World/Objects")
-            return
-
-        graph_path = "/Graph/ActionGraph_objects_poses"
-        if stage.GetPrimAtPath(graph_path) and stage.GetPrimAtPath(graph_path).IsValid():
-            print(f"Action graph already exists at {graph_path}, skipping creation")
-            return
-
-        keys = og.Controller.Keys
-        (graph, nodes, _, _) = og.Controller.edit(
-            {"graph_path": graph_path, "evaluator_name": "execution"},
-            {
-                keys.CREATE_NODES: [
-                    ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
-                    ("ros2_context", "isaacsim.ros2.bridge.ROS2Context"),
-                    ("isaac_read_simulation_time", "isaacsim.core.nodes.IsaacReadSimulationTime"),
-                    ("ros2_publish_transform_tree", "isaacsim.ros2.bridge.ROS2PublishTransformTree"),
-                ],
-                keys.CONNECT: [
-                    ("on_playback_tick.outputs:tick", "ros2_publish_transform_tree.inputs:execIn"),
-                    ("ros2_context.outputs:context", "ros2_publish_transform_tree.inputs:context"),
-                    ("isaac_read_simulation_time.outputs:simulationTime", "ros2_publish_transform_tree.inputs:timeStamp"),
-                ],
-                keys.SET_VALUES: [
-                    ("ros2_publish_transform_tree.inputs:topicName", "objects_poses_sim"),
-                    ("isaac_read_simulation_time.inputs:resetOnStop", False),
-                ],
-            },
-        )
-
-        ros2_node_path = f"{graph_path}/ros2_publish_transform_tree"
-        ros2_prim = stage.GetPrimAtPath(ros2_node_path)
-        if ros2_prim.IsValid():
-            parent_rel = ros2_prim.GetRelationship("inputs:parentPrim")
-            if not parent_rel:
-                parent_rel = ros2_prim.CreateRelationship("inputs:parentPrim", custom=True)
-            parent_rel.SetTargets([Sdf.Path("/World")])
-
-            target_rel = ros2_prim.GetRelationship("inputs:targetPrims")
-            if not target_rel:
-                target_rel = ros2_prim.CreateRelationship("inputs:targetPrims", custom=True)
-            target_rel.SetTargets([Sdf.Path(p) for p in body_paths])
-
-            print(f"Pose publisher created at {graph_path}, publishing {len(body_paths)} objects")
-
     # ==================== Visibility (Exclude/Include) ====================
 
     def _build_visibility_ui(self):
@@ -2537,24 +2393,6 @@ class DigitalTwin(omni.ext.IExt):
             print(f"[restore_state] Error: {str(e)}")
             traceback.print_exc()
             return {"status": "error", "message": f"Failed to restore scene state: {str(e)}"}
-
-    def _cmd_setup_pose_publisher(self) -> Dict[str, Any]:
-        try:
-            self.create_pose_publisher()
-            return {"status": "success", "message": "Pose publisher action graph created at /Graph/ActionGraph_objects_poses"}
-        except Exception as e:
-            carb.log_error(f"Error in setup_pose_publisher: {e}")
-            traceback.print_exc()
-            return {"status": "error", "message": f"Failed to setup pose publisher: {str(e)}"}
-
-    def _cmd_sync_real_poses(self) -> Dict[str, Any]:
-        try:
-            self.sync_real_poses()
-            return {"status": "success", "message": "Synced real poses to sim"}
-        except Exception as e:
-            carb.log_error(f"Error in sync_real_poses: {e}")
-            traceback.print_exc()
-            return {"status": "error", "message": str(e)}
 
     async def _cmd_new_stage(self) -> Dict[str, Any]:
         """Clear the entire USD stage to free accumulated memory."""
