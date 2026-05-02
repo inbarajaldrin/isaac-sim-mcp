@@ -2194,37 +2194,52 @@ class DigitalTwin(omni.ext.IExt):
         print("--- Loading scene ---")
         await self.load_scene()
 
-        # 2. Import UR5e
+        # 2. Import UR5e (load_ur5e calls reset_async + timeline.stop internally)
         print("--- Importing UR5e ---")
         await self.load_ur5e()
-
-        # 3. Setup UR5e action graph
-        print("--- Setting up UR5e Action Graph ---")
-        await self.setup_action_graph()
-
-        # 4. Setup UR5e force publisher
-        print("--- Setting up UR5e Force Publisher ---")
-        self.setup_force_publish_action_graph()
 
         app = omni.kit.app.get_app()
         await app.next_update_async()
 
-        # 5. Import RG2 gripper
+        # 3. Import RG2 gripper (BEFORE play — adds the gripper USD to the stage and
+        # configures gripper joint drives. Modifying USD/physics topology while the
+        # timeline is playing causes the gripper to not attach properly.)
         print("--- Importing RG2 Gripper ---")
         self.import_rg2_gripper()
         await app.next_update_async()
 
-        # 6. Attach gripper to UR5e
+        # 4. Attach gripper to UR5e (BEFORE play — creates the fixed joint that
+        # rigidly attaches RG2 to UR5e's gripper link. Must happen with timeline
+        # stopped so PhysX picks up the new joint at next play.)
         print("--- Attaching Gripper to UR5e ---")
         self.attach_rg2_to_ur5e()
         await app.next_update_async()
 
-        # 7. Setup gripper action graph
+        # 5. Play the scene NOW — articulation is complete (UR5e + RG2 attached).
+        # Bisection on 2026-05-01 showed: doing all action-graph / camera setup THEN
+        # play() at the end wedges the kit main thread because PhysX cooking + many
+        # OmniGraphs + ROS2 publishers all kick off simultaneously and lock-contend.
+        # Playing here, with subsequent graphs added while the timeline is already
+        # running, keeps the sim responsive. Mirrors aic-dt's quick_start fix.
+        print("--- Playing scene (articulation complete; graphs come next) ---")
+        self._timeline.play()
+        await app.next_update_async()
+
+        # 6. Setup UR5e action graph (graphs are safe to add post-play)
+        print("--- Setting up UR5e Action Graph ---")
+        await self.setup_action_graph()
+
+        # 7. Setup UR5e force publisher
+        print("--- Setting up UR5e Force Publisher ---")
+        self.setup_force_publish_action_graph()
+        await app.next_update_async()
+
+        # 8. Setup gripper action graph
         print("--- Setting up Gripper Action Graph ---")
         self.setup_gripper_action_graph()
         await app.next_update_async()
 
-        # 8. Create workspace camera at 1280x720
+        # 9. Create workspace camera at 1280x720 (post-play; just a UsdGeom.Camera)
         print("--- Creating Workspace Camera (1280x720) ---")
         stage = omni.usd.get_context().get_stage()
         ws_prim_path = "/World/workspace_camera_sim"
@@ -2295,16 +2310,10 @@ class DigitalTwin(omni.ext.IExt):
             print(f"Workspace camera created at {ws_prim_path} with resolution {ws_width}x{ws_height}")
         await app.next_update_async()
 
-        # 9. Reset world to initialize all physics views (articulations need this)
-        world = World.instance()
-        if world:
-            await world.reset_async()
+        # 10. Already playing from step 5 — no-op the original late play() here.
+        # (Calling play() again on a playing timeline is harmless but unnecessary.)
         await app.next_update_async()
-
-        # 10. Play the scene
-        print("--- Playing scene ---")
-        self._timeline.play()
-        await app.next_update_async()
+        print("--- Already playing (from step 5) ---")
 
         # 11. Start workspace camera publisher (viewport or action graph based on toggle)
         print("--- Starting Workspace Camera Publisher ---")
