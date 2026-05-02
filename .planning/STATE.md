@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 context gathered
-last_updated: "2026-05-02T12:10:55.952Z"
-last_activity: 2026-05-02 -- Phase 1 planning complete
+stopped_at: Plan 01-01 complete (snapshot infra + topic-parity-reference.md + PARITY-12 audit)
+last_updated: "2026-05-02T12:21:00.000Z"
+last_activity: 2026-05-02 -- Plan 01-01 complete; ready for Plan 01-02 (asset vendoring)
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 9
-  completed_plans: 0
-  percent: 0
+  completed_plans: 1
+  percent: 11
 ---
 
 # Project State
@@ -25,31 +25,31 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 
 ## Current Position
 
-Phase: 1 of 4 (Foundation Parity)
-Plan: 0 of TBD in current phase
-Status: Ready to execute
-Last activity: 2026-05-02 -- Phase 1 planning complete
+Phase: 1 (Foundation Parity) — EXECUTING
+Plan: 2 of 9
+Status: Executing Phase 1 — Plan 01-01 complete
+Last activity: 2026-05-02 -- Plan 01-01 complete; live snapshot + topic-parity-reference shipped
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 11%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0
-- Average duration: —
-- Total execution time: 0 hours
+- Total plans completed: 1
+- Average duration: 7 min
+- Total execution time: 7 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| Phase 1 | 1 | 7 min | 7 min |
 
 **Recent Trend:**
 
-- Last 5 plans: —
-- Trend: —
+- Last 5 plans: 01-01 (7 min)
+- Trend: first plan; 4 tasks; 1 auto-fix (Rule 1: container-vs-image RepoDigests)
 
 *Updated after each plan completion*
 
@@ -66,6 +66,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Recent decisions affecti
 - Cable physics strategy deferred to Phase 3 research (use `nvidia-suite-docs` skill)
 - M1 success bar = all `sample_config.yaml` trials pass under CheatCode against Isaac Sim
 - MCP atomic + clubbed model preserved (`MCP_TOOL_REGISTRY` + `_cmd_<name>` + per-tool button + `quick_start` clubbing)
+- Plan 01-01: image digest captured = `sha256:be08f28709acc4662da7378e94c5efccb66a8a0fff27ffccdc68e471d8967433` (D-14 pin)
+- Plan 01-01: live aic_eval surface is 36 topics (not 35; +2 controller motion_update topics drift since research)
+- Plan 01-01: `docker inspect` for RepoDigests must target the image, not the running container — running containers may have empty `.RepoDigests` field
 
 ### Pending Todos
 
@@ -85,6 +88,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-02T07:59:20.533Z
-Stopped at: Phase 1 context gathered
-Resume file: .planning/phases/01-foundation-parity/01-CONTEXT.md
+Last session: 2026-05-02T12:21:00.000Z
+Stopped at: Plan 01-01 complete — snapshot infra + topic-parity-reference shipped
+Resume file: .planning/phases/01-foundation-parity/01-02-PLAN.md (asset vendoring next)

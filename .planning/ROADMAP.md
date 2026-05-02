@@ -37,7 +37,7 @@ Milestone 1 (Platform Transfer) takes the existing `aic-dt` extension scaffold f
   9. Every new MCP capability lands as one `MCP_TOOL_REGISTRY` entry + matching `_cmd_<name>` handler + one UI button — `MCP_TOOL_REGISTRY` is the only source of tool metadata (DX-02)
 **Plans**: 9 plans (6 waves)
 Plans:
-- [ ] 01-01-PLAN.md — Snapshot infrastructure: live aic_eval Docker capture script + topic-parity-reference.md (D-01, D-14) + cross-phase audit table (PARITY-12)
+- [x] 01-01-PLAN.md — Snapshot infrastructure: live aic_eval Docker capture script + topic-parity-reference.md (D-01, D-14) + cross-phase audit table (PARITY-12)
 - [ ] 01-02-PLAN.md — Asset vendoring: capitalized AIC layout with sibling textures/ folders (D-05); retire snake_case objects/
 - [ ] 01-03-PLAN.md — Doc-only RG2→Robotiq Hand-E correction across .planning/, CLAUDE.md, exts/aic-dt/docs/README.md, exts/aic-dt/docs/CHANGELOG.md (D-03)
 - [ ] 01-04-PLAN.md — extension.py renames (33 _sim/_real cells) + RG2→Hand-E + prim-path bug fix + AIC_OBJECTS update + delete setup_pose_publisher / sync_real_poses atoms (DX-02 deletion-side) + PARITY-05 wrench full match
@@ -94,7 +94,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation Parity | 0/9 | Not started | - |
+| 1. Foundation Parity | 1/9 | In progress | - |
 | 2. Controller Loop & Parametric Scene | 0/TBD | Not started | - |
 | 3. Cable Physics & Ground-Truth Pose | 0/TBD | Not started | - |
 | 4. Trial Loader & End-to-End Verification | 0/TBD | Not started | - |

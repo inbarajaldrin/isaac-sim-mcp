@@ -9,8 +9,8 @@
 
 - [ ] **PARITY-01**: Isaac Sim loads the AIC repo's `aic_description` xacro/URDF for the UR5e + RG2 + 3 wrist cameras (no divergent kinematics or geometry from Gazebo)
 - [ ] **PARITY-02**: Isaac Sim loads the AIC repo's `aic_assets` meshes for the task board, ports (sc / sfp / lc / nic), mount rails, cables, and the AIC enclosure (no divergent geometry)
-- [ ] **PARITY-03**: Isaac Sim publishes `/joint_states` with the same joint name set + ordering Gazebo publishes
-- [ ] **PARITY-04**: Isaac Sim publishes `/tf` and `/tf_static` containing the same robot + gripper + camera frames Gazebo publishes (with same parent-child hierarchy and frame names)
+- [~] **PARITY-03**: Isaac Sim publishes `/joint_states` with the same joint name set + ordering Gazebo publishes _(reference snapshot captured in Plan 01-01; implementation in Plan 01-06)_
+- [~] **PARITY-04**: Isaac Sim publishes `/tf` and `/tf_static` containing the same robot + gripper + camera frames Gazebo publishes (with same parent-child hierarchy and frame names) _(reference snapshot captured in Plan 01-01; implementation in Plan 01-06)_
 - [ ] **PARITY-05**: Isaac Sim publishes `/fts_broadcaster/wrench` (`geometry_msgs/WrenchStamped`) for the UR5e end-effector force/torque, matching Gazebo's topic name and frame_id
 - [ ] **PARITY-06**: Isaac Sim publishes `/aic/gazebo/contacts/off_limit` (`ros_gz_interfaces/Contacts`) for off-limit-item contact events — exact topic name kept even though "gazebo" is in it (zero-rename rule)
 - [ ] **PARITY-07**: Isaac Sim publishes `/scoring/insertion_event` (`std_msgs/String`) when a cable plug-port insertion completes
@@ -18,7 +18,7 @@
 - [ ] **PARITY-09**: Isaac Sim subscribes to `/aic_controller/joint_commands` (`aic_control_interfaces/JointMotionUpdate`) and applies the commanded motion to the UR5e
 - [ ] **PARITY-10**: Isaac Sim subscribes to `/aic_controller/pose_commands` (`aic_control_interfaces/MotionUpdate`) and applies the commanded motion to the UR5e end-effector
 - [ ] **PARITY-11**: Isaac Sim publishes / subscribes `/aic_controller/controller_state` (`aic_control_interfaces/ControllerState`) so force-torque tare and controller bookkeeping work unchanged
-- [ ] **PARITY-12**: Topic-surface audit recorded — a single document (under `exts/aic-dt/docs/`) lists every Gazebo topic in the AIC reference setup and shows the Isaac Sim equivalent (with proof-of-publish), surfacing any unintentional gaps before M1 ship
+- [x] **PARITY-12**: Topic-surface audit recorded — a single document (under `exts/aic-dt/docs/`) lists every Gazebo topic in the AIC reference setup and shows the Isaac Sim equivalent (with proof-of-publish), surfacing any unintentional gaps before M1 ship _(initial population in Plan 01-01; flips to fully-populated proof-of-publish after Plans 01-04 and 01-06 ship)_
 
 ### Texture & Material Sweep
 
@@ -96,8 +96,8 @@ Populated by roadmapper on 2026-05-01 during ROADMAP.md creation. Every v1 requi
 |-------------|-------|--------|
 | PARITY-01 | Phase 1 | Pending |
 | PARITY-02 | Phase 1 | Pending |
-| PARITY-03 | Phase 1 | Pending |
-| PARITY-04 | Phase 1 | Pending |
+| PARITY-03 | Phase 1 | Snapshot reference captured (01-01); awaiting implementation (01-06) |
+| PARITY-04 | Phase 1 | Snapshot reference captured (01-01); awaiting implementation (01-06) |
 | PARITY-05 | Phase 1 | Pending |
 | PARITY-06 | Phase 2 | Pending |
 | PARITY-07 | Phase 3 | Pending |
@@ -105,7 +105,7 @@ Populated by roadmapper on 2026-05-01 during ROADMAP.md creation. Every v1 requi
 | PARITY-09 | Phase 2 | Pending |
 | PARITY-10 | Phase 2 | Pending |
 | PARITY-11 | Phase 2 | Pending |
-| PARITY-12 | Phase 1 | Pending |
+| PARITY-12 | Phase 1 | Initial audit table shipped (01-01); proof-of-publish columns fill as Plans 04/06 ship |
 | TEX-01 | Phase 1 | Pending |
 | TEX-02 | Phase 1 | Pending |
 | TEX-03 | Phase 1 | Pending |
