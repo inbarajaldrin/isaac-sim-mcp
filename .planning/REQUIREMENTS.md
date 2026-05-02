@@ -24,7 +24,7 @@
 
 - [~] **TEX-01**: Every USD/MDL asset referenced by the M1 spawn path loads in Isaac Sim with no missing-texture warnings, no pink/black materials, and no broken MDL references — verified by loading the full M1 scene and walking the viewport _(disk-layer root cause fixed in Plan 01-02 — sibling textures/ folders now present for every per-object USD; final viewport verification at Plan 01-06 verify_phase_1.sh after Plan 01-04 updates AIC_OBJECTS paths)_
 - [~] **TEX-02**: Any GLB-imported PBR maps that lost binding during USD conversion are rebound (or the asset is re-vendored under `exts/aic-dt/assets/` with correct MDL bindings) _(disk-layer re-vendor complete in Plan 01-02 — assets now at correct on-disk locations relative to USD's relative texture references; final binding verification at Plan 01-06)_
-- [ ] **TEX-03**: Texture sweep findings + fix log captured under `exts/aic-dt/docs/` (which assets had which problem, what fix was applied) — shipping documentation, not just code
+- [x] **TEX-03**: Texture sweep findings + fix log captured under `exts/aic-dt/docs/` (which assets had which problem, what fix was applied) — shipping documentation, not just code _(Plan 01-07: `exts/aic-dt/docs/texture-sweep.md` shipped with header + methodology + augmented PATTERNS list + row format; `exts/aic-dt/scripts/sweep_textures.py` appends `## Sweep run <ISO>` sections per run; smoke test against existing Kit log returned 267 hits including the known sc_port_visual.usd `Could not open` failures)_
 
 ### Parameterized Scene Spawn
 
@@ -108,7 +108,7 @@ Populated by roadmapper on 2026-05-01 during ROADMAP.md creation. Every v1 requi
 | PARITY-12 | Phase 1 | Initial audit table shipped (01-01); proof-of-publish columns fill as Plans 04/06 ship |
 | TEX-01 | Phase 1 | Disk-layer root cause fixed (01-02 — sibling textures/ vendored); final viewport verify at Plan 01-06 |
 | TEX-02 | Phase 1 | Disk-layer re-vendor complete (01-02 — capitalized layout with textures siblings byte-identical to AIC source); final binding verify at Plan 01-06 |
-| TEX-03 | Phase 1 | Pending |
+| TEX-03 | Phase 1 | Plan 01-07 — `texture-sweep.md` scaffold + `sweep_textures.py` shipped (D-07 baseline + 4 augmented Isaac-Sim asset-failure patterns; smoke-tested 267 hits) |
 | SCENE-01 | Phase 1 | Pending |
 | SCENE-02 | Phase 3 | Pending |
 | SCENE-03 | Phase 3 | Pending |

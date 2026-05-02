@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Plan 01-06 complete (TF + JointState MCP atoms added across 4 surfaces each; OGN-spec verification surfaced 2 architectural deferrals from Plan 05 SUMMARY -- Raw publisher API doesn't take prim relationships, JointState publisher has no nameOverrides input; both deferrals documented inline in builder docstrings + Plan 08 verify-harness contract)
-last_updated: "2026-05-02T13:09:15.000Z"
-last_activity: 2026-05-02 -- Plan 01-06 complete; setup_tf_publisher + setup_joint_state_publisher atoms in extension.py (+278 lines); 2 commits (f3dd646 probe + ac580c5 atoms); 8/8 surface-presence grep checks pass; runtime smoke test deferred to Plan 07 quick_start integration; 2 architectural gaps from Plan 05 verdict documented for follow-up plan
+stopped_at: Plan 01-07 complete (verify harness shipped — diff_tf_tree.py + sweep_textures.py + verify_phase_1.sh + texture-sweep.md; 4 files, 3 task commits, all acceptance criteria PASS; smoke tests confirm regex sanity; PARITY-03/04 deferrals from Plan 06 will be visible to verify_phase_1.sh as honest FAILs gating Phase 1 completion)
+last_updated: "2026-05-02T18:30:00.000Z"
+last_activity: 2026-05-02 -- Plan 01-07 complete; 3 scripts + 1 doc shipped (diff_tf_tree.py 71 lines, sweep_textures.py 200 lines, verify_phase_1.sh 441 lines, texture-sweep.md scaffold); 3 atomic task commits (fea9efd diff_tf_tree + d883e4d sweep + 0d17ef4 verify); zero deviations; smoke tests: TF diff PASS 31 frames/30 edges on aic_frames_live.gv self-compare, sweep_textures captured 267 lines from existing Kit log including the augmented `Could not open` pattern catching sc_port_visual.usd broken sub-references, verify_phase_1.sh bash -n clean + --help works + --bogus correctly exits 2; 15/15 literal-token acceptance grep PASS; key pattern proven: audit-files-as-machine-readable-contracts (parity_05_wrench_framing.txt + joint_ordering_probe.txt grepped by verify script for Live frame_id / Verdict / Action fields)
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 9
-  completed_plans: 6
-  percent: 67
+  completed_plans: 7
+  percent: 78
 ---
 
 # Project State
@@ -26,30 +26,30 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 1 (Foundation Parity) — EXECUTING
-Plan: 7 of 9
-Status: Executing Phase 1 — Plans 01-01, 01-02, 01-03, 01-04, 01-05, 01-06 complete
-Last activity: 2026-05-02 -- Plan 01-06 complete; setup_tf_publisher + setup_joint_state_publisher MCP atoms (8 surfaces total) + 2 OmniGraph builders in extension.py (+278 lines); Task 0 probe_root_joint.py verifies /aic_unified_robot/root_joint exists as PhysicsFixedJoint (PASS); 2 commits (f3dd646 probe + ac580c5 atoms); 2 architectural deferrals documented (TF frame_id slash overrides + JointState gripper finger rename) for follow-up plan -- OGN spec verified locally before authoring caught the gaps in Plan 05 SUMMARY's verdict
+Plan: 8 of 9
+Status: Executing Phase 1 — Plans 01-01, 01-02, 01-03, 01-04, 01-05, 01-06, 01-07 complete
+Last activity: 2026-05-02 -- Plan 01-07 complete; verification harness shipped (3 scripts + 1 doc); diff_tf_tree.py D-08 self-test PASS 31/30; sweep_textures.py D-07 augmented PATTERNS confirmed via 267-hit smoke test on existing Kit log catching the known sc_port_visual.usd `Could not open` failures; verify_phase_1.sh D-15 10-step hybrid harness with port-detect + cold-launch fallback + audit-file consumption (parity_05_wrench_framing.txt + joint_ordering_probe.txt as machine-readable contracts); zero deviations; 3 atomic task commits
 
-Progress: [██████░░░░] 67%
+Progress: [███████░░░] 78%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 6
-- Average duration: 5.2 min
-- Total execution time: 31 min
+- Total plans completed: 7
+- Average duration: 5.9 min
+- Total execution time: 41 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| Phase 1 | 6 | 31 min | 5.2 min |
+| Phase 1 | 7 | 41 min | 5.9 min |
 
 **Recent Trend:**
 
-- Last 6 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min), 01-06 (6 min)
-- Trend: 01-06 mid-weight (3 tasks, 1 file created + 1 file modified +278 lines) -- the OGN-spec verification before authoring caught 2 architectural gaps in Plan 05 SUMMARY's verdict before they would have wedged at runtime (Raw publisher API doesn't take a targetPrim; JointState publisher has no nameOverrides input). Saved an estimated 30-60 min of "why doesn't this rename work" debug. 4 deviations: 1 Rule 1 (probe REPO_ROOT off-by-one dirname, fixed pre-commit), 2 Rule 4 (architectural gaps documented + deferred per plan-body deferral L51/L302), 1 commit-policy relaxation (Tasks 1+2 share single commit ac580c5 since both edits are co-located in extension.py and authored as coherent unit). 2 task commits.
+- Last 7 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min), 01-06 (6 min), 01-07 (10 min)
+- Trend: 01-07 mid-weight (3 tasks, 4 files created — 3 scripts + 1 doc; 712 LOC total). Zero deviations, zero auto-fixes. All three scripts smoke-tested live: diff_tf_tree.py self-compare PASS, sweep_textures.py 267-hit grep proves augmented patterns work, verify_phase_1.sh `bash -n` clean + arg parsing tested. Pattern proven: audit-files-as-machine-readable-contracts (Plan 04's parity_05_wrench_framing.txt and Plan 05's joint_ordering_probe.txt have standardized field names that downstream verify scripts grep). 3 task commits.
 
 *Updated after each plan completion*
 
@@ -113,6 +113,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-02T13:09:15.000Z
-Stopped at: Plan 01-06 complete — setup_tf_publisher + setup_joint_state_publisher MCP atoms (8 surfaces total) + 2 OmniGraph builders + probe_root_joint.py; 2 atomic task commits (f3dd646 probe + ac580c5 atoms) + metadata commit pending; 2 architectural deferrals (TF frame_id slash overrides per Plan 05 PER-FRAME-RAW-OVERRIDE verdict, JointState gripper_left_finger_joint -> gripper/left_finger_joint rename) documented inline in builder docstrings + Plan 08 verify-harness "expect to fail" contract -- a follow-up plan addresses both via Raw publishers backed by IsaacReadOdometry/OgnGetPrimWorldPose source nodes + JointState wrapper republisher
-Resume file: .planning/phases/01-foundation-parity/01-07-PLAN.md (quick_start refactor per D-12 -- inserts new TF + JointState publisher calls between setup_force_publish_action_graph and setup_wrist_cameras; matches their UI button placement)
+Last session: 2026-05-02T18:30:00.000Z
+Stopped at: Plan 01-07 complete — verify harness shipped (3 scripts + 1 doc); 3 atomic task commits (fea9efd diff_tf_tree, d883e4d sweep + texture-sweep.md, 0d17ef4 verify_phase_1.sh); zero deviations, all acceptance criteria PASS first try; smoke tests confirm regex sanity; audit-file-as-machine-readable-contract pattern proven (parity_05_wrench_framing.txt + joint_ordering_probe.txt grepped for standardized field names). PARITY-03/04 deferrals from Plan 06 will surface as honest FAILs in verify_phase_1.sh — the script does not paper over them; metadata commit pending
+Resume file: .planning/phases/01-foundation-parity/01-08-PLAN.md (quick_start refactor per D-12 -- inserts new TF + JointState publisher calls between setup_force_publish_action_graph and setup_wrist_cameras; matches their UI button placement; also adds Phase 1 CHANGELOG entry + DX-02 final-audit table)
