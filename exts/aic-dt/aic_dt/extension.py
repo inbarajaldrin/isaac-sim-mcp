@@ -56,23 +56,30 @@ def _local_asset(relpath):
 
 # AIC task board object definitions (local assets only)
 AIC_OBJECTS = {
+    # Path values restored to the m + Z-up originals (mPU=1.0, upAxis=Z) — Plan 04
+    # silently swapped these to the cm + Y-up `*_visual.usd` variants that AIC's
+    # IsaacLab vendored alongside the originals (mPU=0.01, upAxis=Y) — those import
+    # at 100x smaller scale and rotated 90deg into the mPU=1.0 + Z-up parent stage.
+    # The originals are byte-identical to the pre-Plan-02 snake_case versions
+    # (md5-verified) — this restores the prior known-good visual state while
+    # preserving Plan 02's vendoring layout (capitalized folders + sibling textures/).
     "task_board_base": {
-        "usd": "assets/Task Board Base/base_visual.usd",
+        "usd": "assets/Task Board Base/task_board_rigid.usd",
         "position": (0.2837, 0.229, 0.0),
         "rotation": None,  # identity quaternion
     },
     "sc_port_1": {
-        "usd": "assets/SC Port/sc_port_visual.usd",
+        "usd": "assets/SC Port/sc_port.usd",
         "position": (0.2904, 0.1928, 0.005),
         "rotation": (0.73136, 0.0, 0.0, -0.682),  # wxyz
     },
     "sc_port_2": {
-        "usd": "assets/SC Port/sc_port_visual.usd",
+        "usd": "assets/SC Port/sc_port.usd",
         "position": (0.2913, 0.1507, 0.005),
         "rotation": (0.73136, 0.0, 0.0, -0.682),  # wxyz
     },
     "nic_card": {
-        "usd": "assets/NIC Card Mount/nic_card_visual.usd",
+        "usd": "assets/NIC Card/nic_card.usd",
         "position": (0.25135, 0.25229, 0.0743),
         "rotation": None,
     },
