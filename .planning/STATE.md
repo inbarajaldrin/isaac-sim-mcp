@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning_complete
-stopped_at: Phase 2 PLANNING COMPLETE ✓ (autonomous M1 mode). 6 PLAN.md files in 6 sequential waves (controller_loop.py is single-file → forces serialization). Plan-checker VERIFICATION PASSED on iteration 2 (1 real blocker fixed in revision; 1 spurious blocker refuted; 3 of 4 warnings addressed). Critical landmine surfaced + fixed: D-05 PYTHONPATH-link approach is broken (Python 3.12 vs 3.11 ABI mismatch); Plan 02-01 implements workspace rebuild against Python 3.11 humble. Lula path corrected (motion_generation.lula.kinematics, NOT lula). gripper/tcp pose handling implements Pitfall #2 Option A (static SE(3) offset). Off-limit fallback list guaranteed non-empty. Auto-advancing to /gsd-execute-phase 2 --auto.
-last_updated: "2026-05-03T12:30:00.000Z"
-last_activity: 2026-05-03 -- /gsd-plan-phase 2 --auto --skip-ui chain complete: gsd-phase-researcher (02-RESEARCH.md, HIGH confidence, 9 pitfalls + critical D-05 ABI landmine identified), gsd-pattern-mapper (02-PATTERNS.md, 6 files mapped to Phase 1 analogs), gsd-planner (6 PLAN.md files), gsd-plan-checker (iter 1: 2 blockers + 4 warnings; iter 2 after revision: VERIFICATION PASSED). Auto-advancing to execute-phase next.
+status: executing
+stopped_at: Phase 2 Plan 01 EXECUTED ✓ (autonomous M1 mode, 49 min). D-05 ABI landmine fixed — aic_control_interfaces + ros_gz_interfaces vendored into ~/IsaacSim-ros_workspaces/humble_ws/src/ and rebuilt for Python 3.11 via build_ros.sh; round-trip import verified through ~/env_isaaclab/bin/activate. Open Q1 settled — snapshot of live aic_eval container confirms ALL FOUR Plan 02 critical topic names (joint_commands/pose_commands/controller_state/off_limit) match CONTEXT.md verbatim with correct types. Off-limit prim mapping locked to 3 USD prefixes (/World/Enclosure, /World/Enclosure_Walls, /World/TaskBoard) derived from URDF authoritative source. 4 deviations auto-fixed (3 Rule 1 install-path/COPY-context discoveries, 1 Rule 3 launchpad transient) — all documented inline in build_aic_msgs.sh + aic-msgs-setup.md so future re-runs sail through. 2 task commits (c5588e0, 523cfd7) + 1 metadata commit pending. Plans 02-02..06 unblocked. Auto-advancing to Plan 02-02 next.
+last_updated: "2026-05-03T20:13:16.000Z"
+last_activity: 2026-05-03 -- /gsd-execute-phase 2 Plan 01 complete: D-05 ABI fix (workspace vendor+rebuild for cp311) + Open Q1 settlement (live aic_eval topic-list snapshot confirms CONTEXT.md assumptions verbatim) + D-10 off-limit prim mapping (3 URDF-derived USD prefixes). 4 deviations auto-fixed via Rules 1/3. Files: 4 in repo (docs+scripts) + 7 raw snapshot artifacts. Round-trip import OK from ~/env_isaaclab/bin/python.
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 9
-  completed_plans: 9
+  total_plans: 10
+  completed_plans: 10
   percent: 100
 ---
 
@@ -25,18 +25,18 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 
 ## Current Position
 
-Phase: 2 (Controller Loop) — PLANNING COMPLETE ✓; ready for /gsd-execute-phase 2 --auto
-Plan: 0 of 6 — execution starts next
-Status: 6 PLAN.md files validated (PASS on iteration 2). Wave structure: 1→2→3→4→5→6 (sequential due to controller_loop.py file overlap). Architecture locked + research-corrected: D-05 ABI fix (workspace rebuild) + Lula path (motion_generation.lula.kinematics) + Pitfall #2 Option A (gripper/tcp static offset) + non-empty DEFAULT_OFF_LIMIT_PRIMS guarantee.
-Last activity: 2026-05-03 -- /gsd-plan-phase 2 --auto --skip-ui produced 02-RESEARCH.md + 02-PATTERNS.md + 6 PLAN.md files. Plan-checker validated on iteration 2 after targeted revision (Open Questions resolved, Plan 02-04 implements Pitfall #2 Option A static offset, DEFAULT_OFF_LIMIT_PRIMS non-empty fallback). Auto-advancing to execute-phase.
+Phase: 2 (Controller Loop) — EXECUTING; Plan 1 of 6 complete
+Plan: 02-01 ✓ → 02-02 next
+Status: D-05 ABI landmine fixed (custom messages build for cp311, importable from Isaac Sim's bundled Python). Open Q1 settled (4 critical topics confirmed live + match CONTEXT.md verbatim). Off-limit mapping = 3 URDF-derived USD prefixes. Plans 02-02..06 unblocked. Wave structure unchanged: 1→2→3→4→5→6.
+Last activity: 2026-05-03 -- /gsd-execute-phase 2 Plan 01 (49 min): vendored aic_control_interfaces + ros_gz_interfaces into IsaacSim-ros_workspaces/humble_ws/src; rebuilt via build_ros.sh; round-trip import verified through env_isaaclab/bin/activate; live aic_eval Docker snapshot captured all 4 critical topic names + 3 bonus controller topics out-of-scope; offlimit-prim-mapping.md doc locks DEFAULT_OFF_LIMIT_PRIMS to 3 prefixes derived from URDF authoritative source. 4 deviations Rule 1/3 auto-fixed. Auto-advancing to Plan 02-02.
 
-Progress: [███████░░░] M1 ~35% (Phase 1 closed + Phase 2 planned; execution + smoke + closure pending for Phase 2; Phase 3 SCENE-05 = ~3-4hr; Phase 4 = trial loader + E2E)
+Progress: [████████░░] M1 ~38% (Phase 1 closed + Phase 2 plan 1 of 6 done; execution pending for plans 02-02..06; Phase 3 SCENE-05 = ~3-4hr; Phase 4 = trial loader + E2E)
 
 ## Phase 2 Plans
 
 | Plan | Wave | Objective | Requirements |
 |------|------|-----------|--------------|
-| 02-01 | 1 | Custom message workspace rebuild (Python 3.11 humble) + topic-name discovery probe + off-limit prim mapping | (infra for PARITY-06/09/10/11) |
+| 02-01 ✓ | 1 | Custom message workspace rebuild (Python 3.11 humble) + topic-name discovery probe + off-limit prim mapping | (infra for PARITY-06/09/10/11) |
 | 02-02 | 2 | controller_loop.py skeleton + 2 MCP atoms (8 surface additions per DX-02) + manager helper + on_shutdown + quick_start hook | (skeleton infra) |
 | 02-03 | 3 | PARITY-09: joint_commands subscriber + name-keyed parser + per-joint set_gains + apply_action | PARITY-09 |
 | 02-04 | 4 | PARITY-10: pose_commands subscriber + Lula IK + Pitfall #2 Option A static offset for gripper/tcp | PARITY-10 |
@@ -47,20 +47,21 @@ Progress: [███████░░░] M1 ~35% (Phase 1 closed + Phase 2 pla
 
 **Velocity:**
 
-- Total plans completed: 9
-- Average duration: 6.0 min
-- Total execution time: 59 min
+- Total plans completed: 10
+- Average duration: 10.8 min
+- Total execution time: 108 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | Phase 1 | 9 | 59 min | 6.6 min |
+| Phase 2 | 1 | 49 min | 49 min |
 
 **Recent Trend:**
 
-- Last 9 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min), 01-06 (6 min), 01-07 (10 min), 01-09 (8 min), 01-08 (10 min)
-- Trend: 01-08 final-integration plan (3 tasks, 3 files — 1 extension.py refactor + 1 CHANGELOG.md write + 1 new audit_dx02.py script). Net +36 LOC in extension.py (quick_start grew by ~20 lines + docstring). 207-line Phase 1 CHANGELOG covering all 13 requirement IDs. 197-line standalone audit script with UI_METHOD_ALIASES and MCP_ONLY_ATOMS exemption pattern — caught 7 pre-existing 3-surface MCP-only atoms (play_scene/stop_scene/new_stage/etc.) that are by-design no-UI; documented exemption rather than retroactively adding buttons. 3 atomic task commits.
+- Last 10 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min), 01-06 (6 min), 01-07 (10 min), 01-09 (8 min), 01-08 (10 min), 02-01 (49 min)
+- Trend: 02-01 infra plan (3 tasks, 9 files — 4 in repo + 5 raw snapshot artifacts under .planning/). Long pole was Docker workspace rebuild (~12 min, ran twice due to vendor-path confusion). Discovery: TWO landmines beyond D-05 (the install-path divergence isaac_sim_ros_ws/install vs humble_ws/install, AND the Dockerfile COPY context confusion humble_ws/src vs build_ws/humble/humble_ws/src). Both surfaced + documented + worked-around, baked into wrapper script for future re-runs. Open Q1 settled with all 4 critical topics confirmed CONTEXT.md-correct. Off-limit live capture empty under CheatCode (expected); URDF-derived authoritative source = 3 USD prefixes (/World/Enclosure, /World/Enclosure_Walls, /World/TaskBoard). 4 deviations (3 Rule 1 discoveries + 1 Rule 3 launchpad transient) auto-fixed.
 
 *Updated after each plan completion*
 
@@ -112,6 +113,12 @@ Decisions are logged in PROJECT.md Key Decisions table. Recent decisions affecti
 - Plan 01-09: Mount-rail thin USDs reference the .glb mesh via relative AddReference. Plain pxr (outside Kit) emits "Cannot determine file format" warnings during stage save because the glTF SDF plugin loads only inside Kit's runtime; the USDs themselves are byte-correct USDC and load fine in Isaac Sim runtime. Verification deferred to Plan 07's verify_phase_1.sh harness in a running Kit session.
 - Plan 01-09: 4-surface contract proven for ATOM ADDITION at 7-atom batch scale (28 surface additions). Largest single-plan DX-02 surface in Phase 1; mirrors Plan 04's 8-surface deletion-side proof on the addition side. Pattern: helper-extraction (DRY) coexists with the 4-surface contract because surfaces are PER ATOM (registry/handler-map/_cmd/UI button), and each atom's _cmd method is its own surface even when it delegates to a shared helper.
 - Plan 01-09: Asset-vendoring contract extended to mesh-source folders. When upstream lacks pre-cooked USDs (LC/SFP/SC Mount in aic_assets/models/ ship .glb only), Plan 02's `cp -r` mirroring still applies; this plan adds a thin USD wrapper authoring step (build_mount_rail_usds.py) that emits one-line-of-payload USDs referencing the local mesh. Pattern: `Usd.Stage.CreateNew + UsdGeom.Xform.Define("/Root") + DefinePrim("/Root/Mesh","Xform").GetReferences().AddReference("./<mesh>")`. Caller picks first available .dae > .glb > .stl > .obj.
+- Plan 02-01: D-05 ABI fix landed via workspace rebuild (NOT PYTHONPATH-link to AIC pixi env, which is broken — pixi builds against Python 3.12, Isaac Sim runs Python 3.11, ABI-incompatible across minor versions). Vendor `aic_control_interfaces` from `~/Documents/aic/aic_interfaces/` and `ros_gz_interfaces` from `gazebosim/ros_gz` humble branch into `~/IsaacSim-ros_workspaces/humble_ws/src/`, then `bash build_ros.sh -d humble -v 22.04`. Round-trip import via `~/env_isaaclab/bin/python` (after venv-activate) is the gate.
+- Plan 02-01: TWO additional landmines beyond D-05 surfaced and documented inline in `exts/aic-dt/docs/aic-msgs-setup.md` + `exts/aic-dt/scripts/build_aic_msgs.sh`. (a) Vendor target is `~/IsaacSim-ros_workspaces/humble_ws/src/` (Dockerfile COPY context), NOT `~/IsaacSim-ros_workspaces/build_ws/humble/humble_ws/src/` (post-build extracted dir) — both share the segment "humble_ws/src" but live at different repo roots. (b) Built artifacts install per-package under `isaac_sim_ros_ws/install/<pkg>/local/lib/python3.11/dist-packages/<pkg>/` (NO `--merge-install`), NOT in the inner `humble_ws/install/local/lib/...` (which IS `--merge-install`). `~/env_isaaclab/bin/activate` already sources both setups so auto-discovery handles it.
+- Plan 02-01: Open Q1 verdict — all four CONTEXT.md-assumed Phase 2 controller topic names (joint_commands/pose_commands/controller_state/off_limit) confirmed CORRECT against live aic_eval Docker container (snapshot_aic_eval_offlimit.sh). NO CONTEXT.md edits needed. Plans 02-03..06 wire to assumed names verbatim. Bonus: 3 additional aic_controller topics observed live (joint_motion_update, motion_update, transition_event) — out of scope, doc'd for future reference.
+- Plan 02-01: D-10 off-limit prim mapping verdict — set is PREFIX-BASED (3 entries: `/World/Enclosure`, `/World/Enclosure_Walls`, `/World/TaskBoard`), NOT a hand-enumerated list of individual link names. Authoritative source: `~/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro` lines 122-130 (`<off_limit_models>` block in `OffLimitContactsPlugin`). Gazebo plugin walks all collision children of these 3 top-level models dynamically; Isaac Sim equivalent uses `actor_path.startswith(prefix)` filtering in Plan 02-06's contact callback.
+- Plan 02-01: Off-limit live capture under CheatCode is EXPECTED-EMPTY (CheatCode is a passing policy that doesn't trigger off-limit collisions) — accepted, not treated as failure. URDF source-of-truth fallback is canonical. WallPresser/WallToucher policy noted in offlimit-prim-mapping.md as the swap if a future plan needs non-empty capture.
+- Plan 02-01: `ros2 topic echo` from inside aic_eval fails for custom message types (Zenoh + kilted-CLI quirk) but `ros2 topic info` works — type confirmation done via topic-info captures alone. Sample echoes captured via `--once` are stub yamls but not load-bearing for any downstream plan.
 
 ### Pending Todos
 
@@ -131,9 +138,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-03T12:30:00.000Z
-Stopped at: Phase 2 plan-phase chain complete; auto-advancing to /gsd-execute-phase 2 --auto in same session (1M context model has headroom).
-Resume file: .planning/HANDOFF.json (autonomous M1 mode persistent — kept until M1 ships). Active per-phase artifacts: .planning/phases/02-controller-loop/{02-CONTEXT.md, 02-RESEARCH.md, 02-PATTERNS.md, 02-01..06-PLAN.md}.
+Last session: 2026-05-03T20:13:16.000Z
+Stopped at: Plan 02-01 EXECUTED ✓ (49 min). D-05 ABI fix landed, Open Q1 settled, off-limit prim mapping locked. Plans 02-02..06 unblocked. Auto-advancing to Plan 02-02 next.
+Resume file: .planning/HANDOFF.json (autonomous M1 mode persistent — kept until M1 ships). Active per-phase artifacts: .planning/phases/02-controller-loop/{02-CONTEXT.md, 02-RESEARCH.md, 02-PATTERNS.md, 02-01-SUMMARY.md ✓, 02-01..06-PLAN.md, snapshot/}.
 
 ## Phase 1 Outstanding (post-Gap-A/B closure)
 

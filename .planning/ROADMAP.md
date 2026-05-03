@@ -65,7 +65,7 @@ Plans:
   5. Each new capability ships as one MCP tool entry in `MCP_TOOL_REGISTRY` + matching `_cmd_<name>` handler + one UI button — `MCP_TOOL_REGISTRY` is the only source of tool metadata
 **Plans**: 6 plans (sequential waves 1→6 — controller_loop.py is a single shared file across plans 02-03..06, so they serialize)
 Plans:
-- [ ] 02-01-PLAN.md — Workspace rebuild for Python 3.11 ABI (D-05 fix: vendor + build aic_control_interfaces + ros_gz_interfaces) + Open Q1 settlement (snapshot live aic_eval controller topic names + off-limit prim mapping)
+- [x] 02-01-PLAN.md — Workspace rebuild for Python 3.11 ABI (D-05 fix: vendor + build aic_control_interfaces + ros_gz_interfaces) + Open Q1 settlement (snapshot live aic_eval controller topic names + off-limit prim mapping)
 - [ ] 02-02-PLAN.md — controller_loop.py skeleton (AicControllerLoop class, lifecycle, stub callbacks, omni.physx physics-step subscription) + extension.py 2 MCP atoms × 4-surface contract (`setup_controller_subscribers` + `setup_offlimit_contacts`) + `_start_aic_controller_loop` manager helper + on_shutdown teardown + quick_start chain insertion
 - [ ] 02-03-PLAN.md — PARITY-09: `_on_joint_cmd` validation + `_apply_joint_cmd` with name-keyed parser (D-09), per-joint stiffness/damping via `Articulation.set_gains`, positions/feedforward via `Articulation.apply_action(ArticulationActions)` per D-06; gripper/left_finger_joint silently no-op'd
 - [ ] 02-04-PLAN.md — PARITY-10: `_setup_kinematics` (LulaKinematicsSolver + ArticulationKinematicsSolver from bundled UR5e config; `end_effector_frame_name="tool0"` per Pitfall 2) + `_on_pose_cmd` validation + `_apply_pose_cmd` with ROS↔Lula quaternion order conversion (Pitfall 4); D-06 Cartesian impedance fields logged + ignored
