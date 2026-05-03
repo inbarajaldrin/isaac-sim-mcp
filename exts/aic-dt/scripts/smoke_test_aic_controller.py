@@ -132,19 +132,26 @@ def main():
                 sl_idx = -1
             if sl_idx >= 0:
                 cmd = JointMotionUpdate()
-                # Match aic_adapter joint name set + ordering (Phase 1 verified).
-                # Exclude gripper/left_finger_joint per D-09 (silently no-op'd).
                 cmd.target_state = JointTrajectoryPoint()
-                cmd.target_state.joint_names = [
-                    n for n in joint_names_in_state if n != "gripper/left_finger_joint"
-                ]
+                # JointTrajectoryPoint has no joint_names — uses positional
+                # ordering. controller_loop applies in URDF kinematic order:
+                # shoulder_pan, shoulder_lift, elbow, wrist_1, wrist_2, wrist_3.
+                # Read current arm-joint positions from /joint_states (which is
+                # alphabetical from aic_adapter) and reorder to URDF order.
+                URDF_ORDER = (
+                    "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
+                    "wrist_1_joint", "wrist_2_joint", "wrist_3_joint",
+                )
                 cmd.target_state.positions = []
-                for jn in cmd.target_state.joint_names:
+                for jn in URDF_ORDER:
                     base_idx = joint_names_in_state.index(jn)
                     pos = initial_positions[base_idx]
                     if jn == "shoulder_lift_joint":
                         pos += 0.05  # 0.05 rad delta
                     cmd.target_state.positions.append(pos)
+                # target_stiffness + target_damping per-joint (size must equal num_joints)
+                cmd.target_stiffness = [2000.0] * 6
+                cmd.target_damping = [100.0] * 6
                 cmd.trajectory_generation_mode.mode = 2  # MODE_POSITION (per TrajectoryGenerationMode.msg)
                 node._joint_cmd_pub.publish(cmd)
                 # Spin 2s; check moved

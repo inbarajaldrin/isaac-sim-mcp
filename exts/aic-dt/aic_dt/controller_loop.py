@@ -63,28 +63,46 @@ def _force_python311_ros_paths():
 def _ensure_rclpy_clean_import():
     """Evict half-loaded ROS modules from sys.modules before (re)import.
 
-    Mirror of parity_publishers.py:_ensure_rclpy_clean_import. Extends
-    _ROS_PREFIXES with two additional packages used in Phase 2:
+    Phase 2 inter-module fix (2026-05-03): if rclpy is already loaded with
+    a working `builtin_interfaces.msg.Time` (i.e., parity_publishers.py
+    already established the 3.11 ROS workspace as canonical), do NOT
+    evict the stock ROS prefixes — doing so would invalidate the Time
+    class object that parity_publishers has cached references to, causing
+    the Header.stamp type check to fail with
+    `AssertionError("The 'stamp' field must be a sub message of type 'Time'")`.
 
-      - aic_control_interfaces (D-05 fix consumer — built in Plan 02-01)
-      - ros_gz_interfaces      (PARITY-06 Contacts msg consumer — Plan 02-01 vendored)
+    Only evict the Phase-2-specific prefixes (aic_control_interfaces +
+    ros_gz_interfaces) which parity_publishers does not import. This lets
+    the controller_loop's first init pick up the 3.11 build of the custom
+    messages while leaving the stock-message classes other modules already
+    use intact.
 
-    See parity_publishers.py for the full rationale (Isaac Sim's startup ROS2
-    bridge attempt half-loads modules; subsequent imports use the failed
-    __path__ unless we evict and reload).
+    On a true cold start (rclpy not yet loaded — i.e., controller_loop
+    starts BEFORE parity_publishers), evict everything per the original
+    Phase 1 pattern.
     """
-    _ROS_PREFIXES = (
+    _PHASE_2_ONLY_PREFIXES = ("aic_control_interfaces", "ros_gz_interfaces")
+    _STOCK_ROS_PREFIXES = (
         "rclpy", "rcl_interfaces", "sensor_msgs", "tf2_msgs", "geometry_msgs",
         "std_msgs", "builtin_interfaces", "action_msgs", "lifecycle_msgs",
         "rosidl_runtime_py", "rosidl_generator_py", "rosidl_parser",
         "rmw", "rmw_dds_common", "rosgraph_msgs", "diagnostic_msgs",
         "trajectory_msgs", "visualization_msgs", "shape_msgs", "nav_msgs",
         "controller_manager_msgs", "control_msgs", "ros2pkg", "ament_index_python",
-        "aic_control_interfaces",  # NEW — Phase 2 D-05 fix consumer (Plan 02-01)
-        "ros_gz_interfaces",       # NEW — Phase 2 PARITY-06 Contacts msg consumer
     )
+
+    # Detect whether parity_publishers (or any prior module) has already
+    # loaded the canonical 3.11 builtin_interfaces. If so, don't evict it.
+    canonical_already_loaded = (
+        "builtin_interfaces.msg" in sys.modules
+        and "rclpy" in sys.modules
+    )
+
+    prefixes = _PHASE_2_ONLY_PREFIXES if canonical_already_loaded \
+        else (_STOCK_ROS_PREFIXES + _PHASE_2_ONLY_PREFIXES)
+
     for mod_name in list(sys.modules):
-        for prefix in _ROS_PREFIXES:
+        for prefix in prefixes:
             if mod_name == prefix or mod_name.startswith(prefix + "."):
                 del sys.modules[mod_name]
                 break
@@ -103,6 +121,19 @@ ARM_JOINTS = {
     "wrist_2_joint",
     "wrist_3_joint",
 }
+# URDF kinematic order — JointMotionUpdate.target_state.positions[i] maps to
+# this joint at index i. JointMotionUpdate uses positional ordering (not
+# name-keyed) — JointTrajectoryPoint has no joint_names field. aic_controller
+# applies positions in config-defined order; AIC's controller config matches
+# UR5e URDF order.
+ARM_JOINTS_ORDERED = (
+    "shoulder_pan_joint",
+    "shoulder_lift_joint",
+    "elbow_joint",
+    "wrist_1_joint",
+    "wrist_2_joint",
+    "wrist_3_joint",
+)
 # AIC's slashed gripper joint name (FixedJoint zero-DOF in the unified USD).
 # Silently no-op'd per D-09 — gripper opens via /gripper_command (String),
 # not /aic_controller/joint_commands.
@@ -529,48 +560,41 @@ class AicControllerLoop:
         import numpy as np
         from isaacsim.core.utils.types import ArticulationActions
 
-        # Build a name-keyed view of the message's per-joint data. We iterate the
-        # incoming joint_names list (D-09: name-keyed; do NOT assume positional
-        # alignment with Isaac Sim's articulation DOF order — apply_action handles
-        # the index resolution internally via joint_names=...).
-        arm_names = []
-        arm_positions = []
-        arm_efforts = []
-        arm_kps = []
-        arm_kds = []
+        # POSITIONAL parser per actual JointMotionUpdate contract:
+        # - target_state is a trajectory_msgs/JointTrajectoryPoint
+        # - JointTrajectoryPoint has NO joint_names field (only positions/
+        #   velocities/accelerations/effort/time_from_start)
+        # - aic_controller maps positions[i] to its config-defined joint i;
+        #   AIC's controller config matches UR5e URDF kinematic order
+        # - Isaac Sim mirrors that mapping via ARM_JOINTS_ORDERED
+        # - D-09 gripper note: GRIPPER_NOOP (gripper/left_finger_joint) is a
+        #   FixedJoint zero-DOF, NEVER appears in JointMotionUpdate position
+        #   arrays (gripper opens via /gripper_command String topic separately).
+        #   So no slashed-name handling needed in this parser — the message
+        #   just carries 6 arm-joint values.
+        n_arm = len(ARM_JOINTS_ORDERED)
+        positions = list(msg.target_state.positions or [])
+        efforts = list(msg.target_feedforward_torque or [])
+        stiffnesses = list(msg.target_stiffness or [])
+        dampings = list(msg.target_damping or [])
 
-        msg_joint_names = list(msg.target_state.joint_names)
-        n_msg = len(msg_joint_names)
+        # Truncate or pad to n_arm — aic_controller treats config size as the
+        # contract; we accept N==n_arm and silently drop anything else (D-11).
+        if positions and len(positions) != n_arm:
+            if not self._logged_apply_error:
+                self._node.get_logger().debug(
+                    f"joint_cmd positions size {len(positions)} != {n_arm} — dropping")
+                self._logged_apply_error = True
+            return
 
-        # has_* flags require the per-joint vector to align with the message's
-        # joint_names list (one value per joint). Stiffness/damping at the
-        # JointMotionUpdate level are a parallel array indexed by joint_names.
-        has_positions = bool(msg.target_state.positions) and len(msg.target_state.positions) == n_msg
-        has_efforts = bool(msg.target_feedforward_torque) and len(msg.target_feedforward_torque) == n_msg
-        has_stiffness = bool(msg.target_stiffness) and len(msg.target_stiffness) == n_msg
-        has_damping = bool(msg.target_damping) and len(msg.target_damping) == n_msg
+        arm_names = list(ARM_JOINTS_ORDERED)
+        arm_positions = [float(p) for p in positions] if positions else []
+        arm_efforts = [float(e) for e in efforts[:n_arm]] if len(efforts) == n_arm else []
+        arm_kps = [float(k) for k in stiffnesses[:n_arm]] if len(stiffnesses) == n_arm else []
+        arm_kds = [float(k) for k in dampings[:n_arm]] if len(dampings) == n_arm else []
 
-        for i, name in enumerate(msg_joint_names):
-            if name == GRIPPER_NOOP:
-                # D-09: FixedJoint zero-DOF — silently no-op
-                continue
-            if name not in ARM_JOINTS:
-                # Unknown joint — warn but don't fail the whole message (D-09).
-                self._node.get_logger().warn(
-                    f"Unknown joint name in joint_cmd: {name!r} — skipping")
-                continue
-            arm_names.append(name)
-            if has_positions:
-                arm_positions.append(float(msg.target_state.positions[i]))
-            if has_efforts:
-                arm_efforts.append(float(msg.target_feedforward_torque[i]))
-            if has_stiffness:
-                arm_kps.append(float(msg.target_stiffness[i]))
-            if has_damping:
-                arm_kds.append(float(msg.target_damping[i]))
-
-        if not arm_names:
-            return  # No valid arm joints in this message
+        if not arm_positions:
+            return  # No positions in this message — nothing to apply
 
         # Apply gains FIRST so the next PD step uses the new stiffness/damping.
         # set_gains is a no-op pre-play (Pitfall 6) — wrapped to swallow the
@@ -587,23 +611,44 @@ class AicControllerLoop:
                     self._node.get_logger().debug(f"set_gains failed: {exc!r}")
                     self._logged_apply_error = True
 
-        # Apply positions + (optional) feedforward efforts via apply_action.
-        # apply_action handles name→DOF-index resolution internally — we only
-        # pass the subset of joints we have data for.
+        # Apply positions via set_joint_positions (direct write, bypasses PD).
+        #
+        # Why direct-write instead of apply_action(joint_positions=...) PD targets:
+        # Phase 1's setup_action_graph creates an OGN ArticulationController node
+        # at /Graph/ActionGraph_UR5e/articulation_controller subscribed to
+        # /joint_states (Phase 1 echo of current state). At every physics tick
+        # the OGN controller calls apply_action with whatever's on /joint_states,
+        # effectively setting position targets back to current positions —
+        # racing with our apply_action calls and cancelling them. set_joint_positions
+        # writes dof_pos directly and the OGN PD then tracks the new state,
+        # so the OGN controller can no longer fight us.
+        #
+        # aic_controller pre-smooths trajectories before publishing JointMotionUpdate,
+        # so per-tick direct writes produce visually-smooth motion at the controller's
+        # publish rate (no need for sim-side PD tracking).
         if arm_positions and len(arm_positions) == len(arm_names):
-            action_kwargs = {
-                "joint_positions": np.array([arm_positions], dtype=np.float32),
-                "joint_names": arm_names,
-            }
-            if arm_efforts and len(arm_efforts) == len(arm_names):
-                action_kwargs["joint_efforts"] = np.array([arm_efforts], dtype=np.float32)
             try:
-                self._articulation.apply_action(ArticulationActions(**action_kwargs))
+                self._articulation.set_joint_positions(
+                    np.array([arm_positions], dtype=np.float32),
+                    joint_names=arm_names,
+                )
             except Exception as exc:
                 if not self._logged_apply_error:
-                    self._node.get_logger().debug(f"apply_action failed: {exc!r}")
+                    self._node.get_logger().debug(f"set_joint_positions failed: {exc!r}")
                     self._logged_apply_error = True
                 return
+            # Feedforward effort still goes through apply_action (set_joint_positions
+            # doesn't accept efforts; effort is applied alongside the position target).
+            if arm_efforts and len(arm_efforts) == len(arm_names):
+                try:
+                    self._articulation.apply_action(ArticulationActions(
+                        joint_efforts=np.array([arm_efforts], dtype=np.float32),
+                        joint_names=arm_names,
+                    ))
+                except Exception as exc:
+                    if not self._logged_apply_error:
+                        self._node.get_logger().debug(f"apply_action(efforts) failed: {exc!r}")
+                        self._logged_apply_error = True
 
         # Bookkeeping for ControllerState publish (Plan 02-05 reads these).
         self._last_reference_joint_state = msg.target_state
@@ -732,11 +777,27 @@ class AicControllerLoop:
             )
             return
 
+        # Apply IK output via set_joint_positions (direct write, bypasses PD).
+        # Same OGN-controller-competition rationale as _apply_joint_cmd: Phase 1's
+        # /Graph/ActionGraph_UR5e/articulation_controller races with apply_action;
+        # set_joint_positions wins the race by writing dof_pos directly.
+        # ik_action.joint_positions is a numpy array of shape (1, n_dof) or list.
         try:
-            self._articulation.apply_action(ik_action)
+            ik_positions = ik_action.joint_positions
+            if ik_positions is not None:
+                if not isinstance(ik_positions, np.ndarray):
+                    ik_positions = np.array(ik_positions, dtype=np.float32)
+                if ik_positions.ndim == 1:
+                    ik_positions = ik_positions.reshape(1, -1)
+                # ArticulationKinematicsSolver returns positions for the IK chain
+                # joints (URDF arm order); pass joint_names explicitly to be safe.
+                self._articulation.set_joint_positions(
+                    ik_positions.astype(np.float32),
+                    joint_names=list(ARM_JOINTS_ORDERED),
+                )
         except Exception as exc:
             if not self._logged_apply_error:
-                self._node.get_logger().debug(f"apply_action(ik_action) failed: {exc!r}")
+                self._node.get_logger().debug(f"set_joint_positions(ik) failed: {exc!r}")
                 self._logged_apply_error = True
             return
 
