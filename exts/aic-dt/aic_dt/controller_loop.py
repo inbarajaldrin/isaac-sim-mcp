@@ -438,8 +438,28 @@ class AicControllerLoop:
                 self._logged_apply_error = True
 
     def _on_pose_cmd(self, msg):
-        """STUB — Plan 02-04 implements validation + buffering per D-02/D-11."""
-        self._latest_pose_cmd = msg
+        """Validate incoming MotionUpdate per aic_controller.cpp:218-227 and buffer for next physics tick.
+
+        Per D-11: bad commands log debug + return; never raise into the physics callback.
+        Per D-08: callbacks MUST NOT apply commands directly — only buffer to self._latest_pose_cmd.
+        Per Pitfall 2 Option A: gripper/tcp frame_id is accepted; the static SE(3) offset
+                                cached at _setup_kinematics is applied in _apply_pose_cmd.
+        """
+        try:
+            if msg.header.frame_id not in ("base_link", "gripper/tcp"):
+                self._node.get_logger().debug(
+                    f"Dropped pose_cmd: header.frame_id={msg.header.frame_id} not in (base_link, gripper/tcp)"
+                )
+                return
+            if msg.trajectory_generation_mode.mode == MODE_UNSPECIFIED:
+                self._node.get_logger().debug("Dropped pose_cmd: trajectory_generation_mode UNSPECIFIED")
+                return
+            # Validation passed — buffer for the physics tick
+            self._latest_pose_cmd = msg
+        except Exception as exc:
+            if not self._logged_apply_error:
+                self._node.get_logger().debug(f"_on_pose_cmd validation error: {exc!r}")
+                self._logged_apply_error = True
 
     # ------------------------------------------------------------------ #
     # Apply / publish — STUBS (Plans 02-03..06 implement bodies).
@@ -547,8 +567,144 @@ class AicControllerLoop:
         self._last_target_mode = TARGET_MODE_JOINT
 
     def _apply_pose_cmd(self, msg):
-        """STUB — Plan 02-04 implements per D-02/D-06."""
-        pass
+        """Apply a validated MotionUpdate by IK-resolving the Cartesian pose target to joint positions.
+
+        Per D-02: LulaKinematicsSolver via ArticulationKinematicsSolver wrapper.
+        Per D-06: target_stiffness[36] (6x6 Cartesian impedance), feedforward_wrench_at_tip,
+                  wrench_feedback_gains_at_tip[6] are CONTROLLER-SIDE math — Isaac Sim
+                  is the hardware sink. Log at debug; do NOT act on them. Double-applying
+                  corrupts aic_controller's intent.
+        Per Pitfall 2 Option A: end_effector_frame_name="tool0"; if msg.header.frame_id ==
+                  "gripper/tcp", pre-multiply the target pose by self._tcp_to_tool0_offset_xform
+                  (cached at _setup_kinematics) to convert from gripper/tcp frame to tool0
+                  frame BEFORE passing to LulaKinematicsSolver. NO drop+log fallback (Open
+                  Question Q3 RESOLVED).
+        Per Pitfall 4: ROS quaternion is (x,y,z,w); Lula expects (w,x,y,z) — convert at boundary.
+        Per D-11: callbacks never raise — outer try/except in _on_physics_step catches.
+        """
+        if self._articulation is None or self._kinematics is None:
+            return  # Pre-play / IK setup not ready
+
+        import numpy as np
+
+        # Pitfall 2 Option A (Open Question Q3 RESOLVED): if frame_id == "gripper/tcp",
+        # pre-multiply the target pose by self._tcp_to_tool0_offset_xform to convert from
+        # gripper/tcp frame into tool0 frame before passing to LulaKinematicsSolver (which
+        # only knows about tool0 — gripper/tcp is not in the bundled UR5e URDF).
+        #
+        # SE(3) composition (numpy, 4x4 row-major Pixar convention):
+        #   T_world_tcp_target  = msg.pose (homogeneous)
+        #   T_world_tool0_target = T_world_tcp_target @ T_tcp_to_tool0
+        # where T_tcp_to_tool0 is the static rigid offset cached at _setup_kinematics time.
+        #
+        # If the offset capture failed at setup time (matrices are None), refuse the command
+        # rather than silently producing wrong joint targets.
+        if msg.header.frame_id == "gripper/tcp":
+            if self._tcp_to_tool0_offset_xform is None:
+                self._node.get_logger().debug(
+                    "Dropped pose_cmd: gripper/tcp frame received but tool0<->tcp offset "
+                    "matrices were not captured at _setup_kinematics time (see error log there)."
+                )
+                return
+            # Build T_world_tcp_target as a 4x4 from msg.pose
+            from scipy.spatial.transform import Rotation as _R   # bundled with isaacsim env
+            R_tcp = _R.from_quat([
+                msg.pose.orientation.x,
+                msg.pose.orientation.y,
+                msg.pose.orientation.z,
+                msg.pose.orientation.w,
+            ]).as_matrix()
+            T_world_tcp = np.eye(4, dtype=np.float64)
+            T_world_tcp[:3, :3] = R_tcp
+            T_world_tcp[0, 3] = msg.pose.position.x
+            T_world_tcp[1, 3] = msg.pose.position.y
+            T_world_tcp[2, 3] = msg.pose.position.z
+            # Compose: T_world_tool0 = T_world_tcp @ T_tcp_to_tool0
+            T_world_tool0 = T_world_tcp @ self._tcp_to_tool0_offset_xform
+            # Decompose back to (position, quaternion)
+            target_position_override = T_world_tool0[:3, 3].copy()
+            target_orientation_override = _R.from_matrix(T_world_tool0[:3, :3]).as_quat()  # (x,y,z,w)
+            # Re-pack as (w,x,y,z) for Lula (Pitfall 4)
+            gripper_tcp_overrides = (
+                target_position_override,
+                np.array([
+                    target_orientation_override[3],   # w
+                    target_orientation_override[0],   # x
+                    target_orientation_override[1],   # y
+                    target_orientation_override[2],   # z
+                ], dtype=np.float64),
+            )
+            self._node.get_logger().debug(
+                f"Pose cmd transform: gripper/tcp target -> tool0 target "
+                f"(translation diff = {target_position_override - np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])})"
+            )
+        else:
+            gripper_tcp_overrides = None
+
+        # Log + ignore Cartesian impedance fields per D-06
+        if msg.target_stiffness and any(s != 0.0 for s in msg.target_stiffness):
+            self._node.get_logger().debug(
+                f"Ignoring MotionUpdate.target_stiffness (6x6 Cartesian impedance) — D-06: controller-side math"
+            )
+        if msg.feedforward_wrench_at_tip and (
+            msg.feedforward_wrench_at_tip.force.x != 0.0
+            or msg.feedforward_wrench_at_tip.force.y != 0.0
+            or msg.feedforward_wrench_at_tip.force.z != 0.0
+        ):
+            self._node.get_logger().debug(
+                "Ignoring MotionUpdate.feedforward_wrench_at_tip — D-06: controller-side math"
+            )
+
+        # Build IK target (Pitfall 4: convert ROS quat → Lula quat at boundary).
+        # If the gripper/tcp -> tool0 transform produced overrides above, use those.
+        if gripper_tcp_overrides is not None:
+            target_position, target_orientation = gripper_tcp_overrides
+        else:
+            target_position = np.array(
+                [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z],
+                dtype=np.float64,
+            )
+            # Lula expects (w, x, y, z); ROS Quaternion is (x, y, z, w)
+            target_orientation = np.array([
+                msg.pose.orientation.w,
+                msg.pose.orientation.x,
+                msg.pose.orientation.y,
+                msg.pose.orientation.z,
+            ], dtype=np.float64)
+
+        try:
+            ik_action, success = self._kinematics.compute_inverse_kinematics(
+                target_position=target_position,
+                target_orientation=target_orientation,
+            )
+        except Exception as exc:
+            if not self._logged_apply_error:
+                self._node.get_logger().debug(f"compute_inverse_kinematics raised: {exc!r}")
+                self._logged_apply_error = True
+            return
+
+        if not success:
+            self._node.get_logger().debug(
+                f"IK did not converge for pose target ({target_position.tolist()}); dropping per D-11"
+            )
+            return
+
+        try:
+            self._articulation.apply_action(ik_action)
+        except Exception as exc:
+            if not self._logged_apply_error:
+                self._node.get_logger().debug(f"apply_action(ik_action) failed: {exc!r}")
+                self._logged_apply_error = True
+            return
+
+        # Bookkeeping for ControllerState publish (Plan 02-05 reads these)
+        self._last_reference_tcp_pose = msg.pose
+        self._last_target_mode = TARGET_MODE_CARTESIAN
+
+        # PyKDL fallback path (D-02): documented but NOT implemented. Research recommendation:
+        # defer until Lula proves insufficient (no failure observed yet). If Lula returns
+        # success=False repeatedly for known-reachable targets, this is where a PyKDL
+        # ChainIkSolverPos_LMA / TRAC-IK fallback would slot in.
 
     def _publish_controller_state(self):
         """STUB — Plan 02-05 implements per D-07."""
