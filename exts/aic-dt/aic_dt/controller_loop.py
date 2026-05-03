@@ -163,6 +163,11 @@ class AicControllerLoop:
         self._articulation = None
         # IK/FK solver (Plan 02-04 initializes; Plan 02-05 reuses for FK)
         self._kinematics = None
+        # Static SE(3) offsets cached at _setup_kinematics time (Plan 02-04 / Pitfall 2 Option A).
+        # _tool0_to_tcp_offset_xform: 4x4 numpy SE(3); egress (FK tool0 pose -> tcp pose, Plan 02-05 reuses).
+        # _tcp_to_tool0_offset_xform: 4x4 numpy SE(3); ingress (gripper/tcp pose_cmd -> tool0 IK target).
+        self._tool0_to_tcp_offset_xform = None
+        self._tcp_to_tool0_offset_xform = None
         # omni.physx contact-report subscription handle (Plan 02-06 initializes)
         self._contact_sub = None
         # Latest command state (modified by sub callbacks; read in physics tick)
@@ -316,6 +321,8 @@ class AicControllerLoop:
         self._contacts_pub = None
         self._articulation = None
         self._kinematics = None
+        self._tool0_to_tcp_offset_xform = None
+        self._tcp_to_tool0_offset_xform = None
         # Buffers
         self._latest_joint_cmd = None
         self._latest_pose_cmd = None
@@ -556,8 +563,120 @@ class AicControllerLoop:
     # ------------------------------------------------------------------ #
 
     def _setup_kinematics(self) -> bool:
-        """STUB — Plan 02-04 implements LulaKinematicsSolver + ArticulationKinematicsSolver init."""
-        return True
+        """Initialize Lula IK + FK solver AND cache the static tool0 <-> gripper/tcp SE(3) offsets.
+
+        Per D-02: Use LulaKinematicsSolver (NOT full RmpFlow — aic_controller pre-smooths
+                  the trajectory; RMPflow reactive avoidance is redundant).
+        Per Pitfall 1: Import from `isaacsim.robot_motion.motion_generation.lula.kinematics`,
+                       NOT bare `isaacsim.robot_motion.lula` (CONTEXT D-02 wording is wrong).
+        Per Pitfall 2 + Open Question Q3 RESOLVED: end_effector_frame_name = "tool0" for
+                       the Lula solver (gripper/tcp is NOT in the bundled UR5e URDF). The
+                       static `tool0 -> gripper/tcp` SE(3) offset is captured here from the
+                       USD prim hierarchy (Phase 1's parity_publishers.py publishes the same
+                       chain at startup, so the offset is well-defined and stable).
+                       Caches:
+                         self._tool0_to_tcp_offset_xform  : 4x4 numpy SE(3) (egress: FK tool0 -> tcp)
+                         self._tcp_to_tool0_offset_xform  : 4x4 numpy SE(3) (ingress: cmd tcp -> tool0)
+        Idempotent; safe on hot-reload.
+        """
+        if self._articulation is None:
+            self._node.get_logger().warn("_setup_kinematics: articulation not initialized — deferring")
+            return False
+        try:
+            import os
+            import numpy as np
+            import isaacsim.robot_motion.motion_generation as motion_generation
+            from isaacsim.robot_motion.motion_generation.lula.kinematics import LulaKinematicsSolver
+            from isaacsim.robot_motion.motion_generation import ArticulationKinematicsSolver
+        except ImportError as exc:
+            self._node.get_logger().error(
+                f"_setup_kinematics: lula imports failed — {exc!r}. "
+                f"Ensure isaacsim.robot_motion.motion_generation extension is enabled."
+            )
+            return False
+
+        # Walk up to ext root; the motion_policy_configs lives 3 levels up from motion_generation/
+        mg_root = os.path.dirname(motion_generation.__file__)
+        ur5e_root = os.path.normpath(os.path.join(
+            mg_root, "..", "..", "..", "motion_policy_configs", "universal_robots", "ur5e"
+        ))
+        robot_description_path = os.path.join(ur5e_root, "rmpflow", "ur5e_robot_description.yaml")
+        urdf_path = os.path.join(ur5e_root, "ur5e.urdf")
+
+        if not os.path.exists(robot_description_path):
+            self._node.get_logger().error(
+                f"_setup_kinematics: Lula UR5e robot_description not found at {robot_description_path} — PARITY-10 will fail."
+            )
+            return False
+        if not os.path.exists(urdf_path):
+            self._node.get_logger().error(
+                f"_setup_kinematics: Lula UR5e URDF not found at {urdf_path} — PARITY-10 will fail."
+            )
+            return False
+
+        try:
+            lula_solver = LulaKinematicsSolver(robot_description_path, urdf_path)
+            self._kinematics = ArticulationKinematicsSolver(
+                robot_articulation=self._articulation,
+                kinematics_solver=lula_solver,
+                end_effector_frame_name="tool0",
+            )
+        except Exception as exc:
+            self._node.get_logger().error(f"_setup_kinematics: Lula construction failed — {exc!r}")
+            self._kinematics = None
+            return False
+
+        # ---- Pitfall 2 Option A: cache static tool0 <-> gripper/tcp SE(3) offset ----
+        # Read the USD prim hierarchy directly. Both prims live under the unified-robot
+        # Xform; the USD authoring captures the same static chain that parity_publishers.py
+        # publishes on /tf_static at startup (verified Phase 1).
+        try:
+            import omni.usd
+            from pxr import UsdGeom, Gf
+            stage = omni.usd.get_context().get_stage()
+            if stage is None:
+                raise RuntimeError("no USD stage open")
+            tool0_path = f"{self._robot_xform_path}/tool0"
+            tcp_path = f"{self._robot_xform_path}/gripper/tcp"
+            tool0_prim = stage.GetPrimAtPath(tool0_path)
+            tcp_prim = stage.GetPrimAtPath(tcp_path)
+            if not tool0_prim or not tool0_prim.IsValid():
+                raise RuntimeError(f"tool0 prim not found at {tool0_path}")
+            if not tcp_prim or not tcp_prim.IsValid():
+                raise RuntimeError(f"gripper/tcp prim not found at {tcp_path}")
+            # ComputeLocalToWorldTransform yields a Gf.Matrix4d in stage units (meters)
+            xf_cache = UsdGeom.XformCache()
+            tool0_world = xf_cache.GetLocalToWorldTransform(tool0_prim)   # Gf.Matrix4d (row-major)
+            tcp_world = xf_cache.GetLocalToWorldTransform(tcp_prim)       # Gf.Matrix4d
+            # tool0 -> tcp = inverse(tool0_world) * tcp_world
+            tool0_to_tcp_gf = tool0_world.GetInverse() * tcp_world
+            # Convert Gf.Matrix4d (row-major) -> numpy 4x4 column-major SE(3) we use in apply_pose
+            # Pixar's Matrix4d is row-major; SE(3) math below uses standard column-major (row-vec * mat).
+            # We store both directions as 4x4 numpy arrays in the row-major Pixar convention.
+            def _gf_to_np(m):
+                return np.array(
+                    [[m[i][j] for j in range(4)] for i in range(4)],
+                    dtype=np.float64,
+                )
+            self._tool0_to_tcp_offset_xform = _gf_to_np(tool0_to_tcp_gf)
+            self._tcp_to_tool0_offset_xform = _gf_to_np(tool0_to_tcp_gf.GetInverse())
+            self._node.get_logger().info(
+                f"_setup_kinematics: Lula IK ready (UR5e bundled config, ee='tool0'); "
+                f"tool0 -> gripper/tcp offset cached (translation={tool0_to_tcp_gf.ExtractTranslation()})"
+            )
+            return True
+        except Exception as exc:
+            # If the offset capture fails, leave the matrices as None (identity-ish) and log
+            # a clear error — the gripper/tcp ingress path will then refuse to dispatch (see
+            # _apply_pose_cmd guard) instead of silently producing wrong joint targets.
+            self._tool0_to_tcp_offset_xform = None
+            self._tcp_to_tool0_offset_xform = None
+            self._node.get_logger().error(
+                f"_setup_kinematics: tool0 <-> gripper/tcp offset capture failed: {exc!r}. "
+                f"gripper/tcp pose_cmds will be refused until offset is recoverable."
+            )
+            # Lula itself is initialized — IK with frame_id='base_link' still works.
+            return True
 
     def _setup_contact_subscription(self) -> bool:
         """STUB — Plan 02-06 implements omni.physx contact-report subscription per D-03."""
