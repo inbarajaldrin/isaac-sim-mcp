@@ -202,6 +202,21 @@ MCP_TOOL_REGISTRY = {
         "description": "Create the ROS2 /joint_states publisher action graph (sensor_msgs/JointState). Reads articulation state and emits ROS2 messages from the sim thread.",
         "parameters": {}
     },
+    # Phase 2 — controller-loop atoms (Plan 02-02 skeleton; Plans 02-03..06 fill callbacks).
+    "setup_controller_subscribers": {
+        "description": "Subscribe to /aic_controller/joint_commands (JointMotionUpdate) and /aic_controller/pose_commands (MotionUpdate); publish /aic_controller/controller_state (ControllerState). Per PARITY-09/10/11 + D-01/D-04. Idempotent: re-invocation tears down prior loop.",
+        "parameters": {}
+    },
+    "setup_offlimit_contacts": {
+        "description": "Subscribe to omni.physx contact events on the configured set of off-limit prims and publish ros_gz_interfaces/Contacts on /aic/gazebo/contacts/off_limit. Per PARITY-06 + D-03/D-10. Default prim filter from exts/aic-dt/docs/offlimit-prim-mapping.md; pass prim_paths to override.",
+        "parameters": {
+            "prim_paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional list of USD prim paths to monitor for off-limit contact events. If omitted, uses the default set from offlimit-prim-mapping.md."
+            }
+        }
+    },
     "setup_wrist_cameras": {
         "description": "Create ROS2 action graphs for all 3 built-in wrist cameras (center, left, right) publishing RGB and CameraInfo.",
         "parameters": {}
@@ -357,6 +372,9 @@ MCP_HANDLERS = {
     "setup_force_publisher": "_cmd_setup_force_publisher",
     "setup_tf_publisher": "_cmd_setup_tf_publisher",
     "setup_joint_state_publisher": "_cmd_setup_joint_state_publisher",
+    # Phase 2 — controller-loop atoms (Plan 02-02 skeleton)
+    "setup_controller_subscribers": "_cmd_setup_controller_subscribers",
+    "setup_offlimit_contacts": "_cmd_setup_offlimit_contacts",
     "setup_wrist_cameras": "_cmd_setup_wrist_cameras",
     "add_objects": "_cmd_add_objects",
     # SCENE-01 / DX-02 — Per-component spawn atoms
@@ -440,6 +458,11 @@ class DigitalTwin(omni.ext.IExt):
         # frame_id / joint-name / TF slashed-frame inputs needed for AIC
         # topic parity. See exts/aic-dt/aic_dt/parity_publishers.py.
         self._aic_parity_publishers = None
+
+        # AIC controller loop (rclpy-based command subscribers + state/contacts publishers).
+        # Phase 2 Plan 02-02 skeleton; Plans 02-03..06 fill in callback bodies.
+        # See exts/aic-dt/aic_dt/controller_loop.py.
+        self._aic_controller_loop = None  # Phase 2 — controller loop manager (Plan 02-02)
 
         # MCP socket server state
         self._mcp_socket = None
@@ -549,6 +572,11 @@ class DigitalTwin(omni.ext.IExt):
                         ui.Button("Setup Force Publisher", width=200, height=35, clicked_fn=self.setup_force_publish_action_graph)
                         ui.Button("Setup TF Publisher", width=200, height=35, clicked_fn=self.setup_tf_publish_action_graph)
                         ui.Button("Setup JointState Publisher", width=200, height=35, clicked_fn=self.setup_joint_state_publish_action_graph)
+                        # Phase 2 — controller-loop atoms (Plan 02-02 skeleton; Plans 02-03..06 fill callbacks)
+                        ui.Button("Setup Controller Subscribers", width=220, height=35,
+                                  clicked_fn=lambda: self._cmd_setup_controller_subscribers())
+                        ui.Button("Setup Off-Limit Contacts", width=220, height=35,
+                                  clicked_fn=lambda: self._cmd_setup_offlimit_contacts())
 
             # 4. Cameras
             with ui.CollapsableFrame(title="Cameras", collapsed=False, height=0):
@@ -1021,6 +1049,13 @@ class DigitalTwin(omni.ext.IExt):
         # 3b. Setup JointState publisher (Plan 06 / Phase 1 D-11) — /joint_states
         print("--- Setting up JointState Publisher (/joint_states) ---")
         self.setup_joint_state_publish_action_graph()
+        await app.next_update_async()
+
+        # 3b'. Phase 2 — controller-loop subscribers + state publisher + off-limit contacts
+        # (PARITY-09/10/11 + PARITY-06). Single AicControllerLoop manager handles all 4
+        # topics. Plans 02-03..06 fill in the callback bodies; the skeleton is no-op safe.
+        print("--- Setting up AIC Controller Loop (controller subscribers + off-limit contacts) ---")
+        self._start_aic_controller_loop()
         await app.next_update_async()
 
         # 3c. Conditional bridge to reorder /joint_states_isaac_raw → /joint_states alphabetical
@@ -1557,6 +1592,32 @@ class DigitalTwin(omni.ext.IExt):
         ok = self._aic_parity_publishers.start()
         if not ok:
             print("[AIC-DT][parity] Publisher start() returned False -- check rclpy availability.")
+
+    def _start_aic_controller_loop(self, off_limit_prims: list = None):
+        """Start the shared AicControllerLoop manager (idempotent).
+
+        Mirrors _start_aic_parity_publishers (Phase 1). Both
+        setup_controller_subscribers AND setup_offlimit_contacts atoms delegate
+        here — single manager instance per extension lifecycle. Re-invocation
+        with off_limit_prims=<list> updates the off-limit prim filter; otherwise
+        a single manager owns all 4 controller-loop topics.
+        """
+        try:
+            from .controller_loop import AicControllerLoop
+        except Exception as exc:
+            print(f"[AIC-DT][controller] Failed to import controller_loop: {exc!r}")
+            return
+        if self._aic_controller_loop is None:
+            self._aic_controller_loop = AicControllerLoop(
+                robot_xform_path=self._articulation_root_prim_path,
+                off_limit_prims=off_limit_prims,
+            )
+        elif off_limit_prims is not None:
+            # Allow per-call override of off_limit set when the offlimit atom is invoked
+            self._aic_controller_loop.set_off_limit_prims(off_limit_prims)
+        ok = self._aic_controller_loop.start()
+        if not ok:
+            print("[AIC-DT][controller] start() returned False — check rclpy/aic_control_interfaces availability (see exts/aic-dt/docs/aic-msgs-setup.md).")
 
     # ==================== Wrist Cameras ====================
 
@@ -2743,6 +2804,33 @@ class DigitalTwin(omni.ext.IExt):
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
 
+    def _cmd_setup_controller_subscribers(self) -> Dict[str, Any]:
+        """MCP atom — start the AicControllerLoop's joint_commands + pose_commands + controller_state surfaces.
+
+        Implements PARITY-09 + PARITY-10 + PARITY-11 wiring (Plans 02-03/02-04/02-05 fill in callback bodies).
+        """
+        try:
+            self._start_aic_controller_loop()
+            return {"status": "success",
+                    "message": "AIC controller loop started (subs: /aic_controller/joint_commands + /aic_controller/pose_commands; pub: /aic_controller/controller_state)"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": f"setup_controller_subscribers failed: {str(e)}"}
+
+    def _cmd_setup_offlimit_contacts(self, prim_paths: list = None) -> Dict[str, Any]:
+        """MCP atom — start (or re-configure) the AicControllerLoop's off-limit contact monitoring + Contacts publish surface.
+
+        Implements PARITY-06 wiring (Plan 02-06 fills in omni.physx contact-report subscription + Contacts publish).
+        """
+        try:
+            self._start_aic_controller_loop(off_limit_prims=prim_paths)
+            n = len(prim_paths) if prim_paths else 0
+            return {"status": "success",
+                    "message": f"Off-limit contact subscription active ({n} prim_paths overridden; defaults used otherwise)"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": f"setup_offlimit_contacts failed: {str(e)}"}
+
     def _cmd_setup_wrist_cameras(self) -> Dict[str, Any]:
         try:
             self.setup_wrist_cameras()
@@ -3190,6 +3278,14 @@ class DigitalTwin(omni.ext.IExt):
             except Exception as exc:
                 print(f"[AIC-DT][parity] stop() failed in shutdown: {exc!r}")
             self._aic_parity_publishers = None
+
+        # Stop the rclpy-based AIC controller loop (idempotent). Phase 2 Plan 02-02.
+        if self._aic_controller_loop is not None:
+            try:
+                self._aic_controller_loop.stop()
+            except Exception as exc:
+                print(f"[AIC-DT][controller] stop() failed in shutdown: {exc!r}")
+            self._aic_controller_loop = None
 
         print("ROS2 bridge shutdown handled by Isaac Sim")
 
