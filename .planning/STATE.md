@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Phase 1 Gap A (PARITY-03) + Gap B (PARITY-04) RESOLVED inline via rclpy-based parity publishers. New module exts/aic-dt/aic_dt/parity_publishers.py bypasses OGN ROS2PublishJointState / ROS2PublishTransformTree (which lack frameId / jointNames / slash-frame-name overrides needed for AIC parity) and publishes /joint_states (7 alphabetical joints with frame_id=base_link, literal `gripper/left_finger_joint` slashed entry), /tf (8 dynamic edges), /tf_static (22 static edges) directly via rclpy from a physics-step callback. Live empirical verification: view_frames captures the full 31-frame AIC TF tree with proper slashed names. Phase 1 score now 9/10 must-haves verified. Remaining: Gap C (TEX-03 sweep doc categorization, lower-stakes), Gap E mount-rails (latent for SCENE-01 trial spawn). 2 atomic commits (079afd8 code, 8c17ccb docs).
-last_updated: "2026-05-03T03:15:00.000Z"
-last_activity: 2026-05-03 -- Gap A + Gap B closure landed inline; rclpy parity publishers verified live against running aic-dt extension; ros2 topic echo /joint_states shows 7 alphabetical names with base_link frame_id; ros2 run tf2_tools view_frames captures 30 edges with slashed AIC frame names (gripper/*, cam_mount/*, ati/*, *_camera/*); CLAUDE.md updated with venv-activate launch requirement; VERIFICATION.md status flipped to gaps_resolved with closure_summary + 3-piece resolution_method
+status: between-phases
+stopped_at: Phase 1 CLOSED + flag-cleanup pass landed. All 14 Phase 1 requirements (PARITY-01..05, PARITY-12, TEX-01..03, SCENE-01, SCENE-04, DX-01..04) flipped to [x] in REQUIREMENTS.md with closure citations referencing the responsible plans + smoke test. Phase 2 (Controller-Loop Closure — PARITY-06/09/10/11) ready to discuss. Resuming under autonomous M1 mode per HANDOFF.json — no user prompts unless infrastructure breaks or a decision falls outside documented defaults.
+last_updated: "2026-05-03T09:30:00.000Z"
+last_activity: 2026-05-03 -- HANDOFF.json autonomous-mode resumption; infrastructure verified (Isaac Sim PID 1759990 running, MCP socket 8768 listening, DerivedDataCache 154M, ROS humble env clean, git tree clean); Phase 1 stale-flag cleanup completed — 8 flags flipped (PARITY-01/02/05, TEX-01/02, DX-02/03/04) in both requirement-list section and traceability table; DX-03/DX-04 phase mappings corrected (Phase 3→1, Phase 4→1) since work landed in Plan 01-08; "Last updated" footer rewritten to reflect closure pass
 progress:
   total_phases: 4
   completed_phases: 0
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 
 ## Current Position
 
-Phase: 1 (Foundation Parity) — CODE COMPLETE, verifier loop pending
-Plan: 9 of 9 — all plans complete
-Status: Phase 1 implementation done — verify_phase_1.sh end-to-end gate is the next step (orchestrator / verifier wave)
-Last activity: 2026-05-02 -- Plan 01-08 complete; quick_start refactored per D-12 (TF + JointState + hasattr-guarded reorder + randomize_lighting); Phase 1 CHANGELOG entry shipped (207 lines, 13 requirement IDs, DX-02 audit table); audit_dx02.py shipped (27 PRESENT × 4 surfaces, 2 ABSENT × 4 surfaces — PASS); 3 atomic task commits (a93b0c8/2351ca4/5082ec0); known deferrals (per-frame TF Raw overrides, JointState gripper/left_finger_joint name override) documented in CHANGELOG Known-Phase-3-work-items as expected verifier-surface-up items
+Phase: 1 (Foundation Parity) — CLOSED ✓ (9/10 must-haves verified, 3 small carry-forward items in 01-SUMMARY)
+Plan: 9 of 9 — all plans complete + inline visual fix + inline rclpy parity fix + flag cleanup
+Status: Between Phase 1 and Phase 2. All Phase 1 requirements flipped to [x]. Next concrete step: /gsd-discuss-phase 2 --auto for Controller-Loop Closure (PARITY-06/09/10/11)
+Last activity: 2026-05-03 -- Phase 1 stale-flag cleanup complete; 8 flags (PARITY-01/02/05, TEX-01/02, DX-02/03/04) flipped to [x] with closure citations; DX-03/DX-04 traceability phase mappings corrected to Phase 1; STATE.md status flipped from executing to between-phases. M1 progresses to Phase 2 next.
 
-Progress: [██████████] 100% (Phase 1 plans complete; phase verifier still pending)
+Progress: [█████░░░░░] M1 ~25% (Phase 1 of 4 closed; Phase 2 = Controller-Loop Closure next; Phase 3 = Cable Physics + Object TF; Phase 4 = Trial loader + E2E verification)
 
 ## Performance Metrics
 
@@ -120,9 +120,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-03T03:15:00.000Z
-Stopped at: Phase 1 Gap A (PARITY-03 /joint_states) and Gap B (PARITY-04 /tf + /tf_static) RESOLVED inline. rclpy-based AicParityPublishers in exts/aic-dt/aic_dt/parity_publishers.py bypasses OGN limits (no frameId/jointNames/slash-frame-name inputs) and publishes the canonical AIC topic surface directly: 7 alphabetical joints with base_link frame_id (literal `gripper/left_finger_joint` slashed); 8 dynamic + 22 static TF edges with proper slashed AIC frame names (gripper/*, cam_mount/*, ati/*, *_camera/*); synthesized world->aic_world identity transform. Empirical: ros2 run tf2_tools view_frames captures the full 31-frame AIC TF tree. Three-piece architectural fix: (1) bypass OGN with rclpy publisher reading articulation state + USD world poses each physics tick; (2) source ~/env_isaaclab/bin/activate before launch so workspace's libgeometry_msgs (with polygon_instance_stamped symbol) wins LD over /opt/ros/humble; (3) sys.path swap + sys.modules eviction at start-time to force Python 3.11 ROS workspace ahead of stale 3.10 paths. Visual regression Gap E user-confirmed. 2 atomic commits (079afd8 code, 8c17ccb docs). HANDOFF.json deleted (resolved).
-Resume file: None. Next: address Gap C (TEX-03 sweep findings categorization — lower-stakes documentation work) inline if desired, or close Phase 1 and advance to /gsd-discuss-phase 2 (Controller-Loop Closure). Phase 1 score: 9/10 must-haves verified.
+Last session: 2026-05-03T09:30:00.000Z
+Stopped at: Session resumed via /gsd-resume-work under autonomous M1 mode (HANDOFF.json). Infrastructure verified green. Phase 1 stale-flag cleanup landed (8 flips + traceability table corrections + footer rewrite). Phase 1 fully closed. Proceeding to Phase 2 discuss next.
+Resume file: .planning/HANDOFF.json (autonomous M1 mode persistent — kept until M1 ships, NOT a one-shot per-task handoff). Next concrete action: /gsd-discuss-phase 2 --auto.
 
 ## Phase 1 Outstanding (post-Gap-A/B closure)
 
