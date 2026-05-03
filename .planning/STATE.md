@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 
 ## Current Position
 
-Phase: 1 (Foundation Parity) — CLOSED ✓ (9/10 must-haves verified, 3 small carry-forward items in 01-SUMMARY)
-Plan: 9 of 9 — all plans complete + inline visual fix + inline rclpy parity fix + flag cleanup
-Status: Between Phase 1 and Phase 2. All Phase 1 requirements flipped to [x]. Next concrete step: /gsd-discuss-phase 2 --auto for Controller-Loop Closure (PARITY-06/09/10/11)
-Last activity: 2026-05-03 -- Phase 1 stale-flag cleanup complete; 8 flags (PARITY-01/02/05, TEX-01/02, DX-02/03/04) flipped to [x] with closure citations; DX-03/DX-04 traceability phase mappings corrected to Phase 1; STATE.md status flipped from executing to between-phases. M1 progresses to Phase 2 next.
+Phase: 2 (Controller Loop) — CONTEXT GATHERED ✓; ready for /gsd-plan-phase 2 --auto
+Plan: 0 of N — planning starts next
+Status: 02-CONTEXT.md locked with 13 decisions; researcher + planner have full context. Auto-advancing to plan-phase per --auto chain.
+Last activity: 2026-05-03 -- /gsd-discuss-phase 2 --auto produced 02-CONTEXT.md (13 decisions D-01..D-13) + 02-DISCUSSION-LOG.md (12 areas). All major architectural choices for PARITY-06/09/10/11 locked: rclpy subscribers in physics-tick (mirror Phase 1 inverted); Lula RMPflow IK; omni.physx contact-report; 2-atom decomposition.
 
-Progress: [█████░░░░░] M1 ~25% (Phase 1 of 4 closed; Phase 2 = Controller-Loop Closure next; Phase 3 = Cable Physics + Object TF; Phase 4 = Trial loader + E2E verification)
+Progress: [██████░░░░] M1 ~30% (Phase 1 of 4 closed + Phase 2 context locked; planning + execution + smoke-test + closure pending for Phase 2; Phase 3 SCENE-05 simplified to ~3-4hr USD edit per HANDOFF; Phase 4 = trial loader + E2E)
 
 ## Performance Metrics
 
@@ -120,9 +120,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-03T09:30:00.000Z
-Stopped at: Session resumed via /gsd-resume-work under autonomous M1 mode (HANDOFF.json). Infrastructure verified green. Phase 1 stale-flag cleanup landed (8 flips + traceability table corrections + footer rewrite). Phase 1 fully closed. Proceeding to Phase 2 discuss next.
-Resume file: .planning/HANDOFF.json (autonomous M1 mode persistent — kept until M1 ships, NOT a one-shot per-task handoff). Next concrete action: /gsd-discuss-phase 2 --auto.
+Last session: 2026-05-03T11:00:00.000Z
+Stopped at: Phase 2 context gathered. Auto-advancing chain in progress: /gsd-discuss-phase 2 --auto ✓ → /gsd-plan-phase 2 --auto NEXT.
+Resume file: .planning/HANDOFF.json (autonomous M1 mode persistent — kept until M1 ships). Active per-phase artifact: .planning/phases/02-controller-loop/02-CONTEXT.md.
 
 ## Phase 1 Outstanding (post-Gap-A/B closure)
 
