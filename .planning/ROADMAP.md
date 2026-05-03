@@ -63,7 +63,14 @@ Plans:
   3. Driving the gripper into a flagged off-limit collision body produces a non-empty `/aic/gazebo/contacts/off_limit` message of type `ros_gz_interfaces/Contacts` (exact topic name preserved including the literal "gazebo" segment)
   4. Calling the parametric task-board spawn MCP tool with a `sample_config.yaml` `trial_1` `task_board` block (mount rails + sc/sfp/lc/nic occupancy + per-entity translation/RPY) produces a viewport scene that matches the same parameters spawned by `spawn_task_board.launch.py` in Gazebo
   5. Each new capability ships as one MCP tool entry in `MCP_TOOL_REGISTRY` + matching `_cmd_<name>` handler + one UI button — `MCP_TOOL_REGISTRY` is the only source of tool metadata
-**Plans**: TBD
+**Plans**: 6 plans (sequential waves 1→6 — controller_loop.py is a single shared file across plans 02-03..06, so they serialize)
+Plans:
+- [ ] 02-01-PLAN.md — Workspace rebuild for Python 3.11 ABI (D-05 fix: vendor + build aic_control_interfaces + ros_gz_interfaces) + Open Q1 settlement (snapshot live aic_eval controller topic names + off-limit prim mapping)
+- [ ] 02-02-PLAN.md — controller_loop.py skeleton (AicControllerLoop class, lifecycle, stub callbacks, omni.physx physics-step subscription) + extension.py 2 MCP atoms × 4-surface contract (`setup_controller_subscribers` + `setup_offlimit_contacts`) + `_start_aic_controller_loop` manager helper + on_shutdown teardown + quick_start chain insertion
+- [ ] 02-03-PLAN.md — PARITY-09: `_on_joint_cmd` validation + `_apply_joint_cmd` with name-keyed parser (D-09), per-joint stiffness/damping via `Articulation.set_gains`, positions/feedforward via `Articulation.apply_action(ArticulationActions)` per D-06; gripper/left_finger_joint silently no-op'd
+- [ ] 02-04-PLAN.md — PARITY-10: `_setup_kinematics` (LulaKinematicsSolver + ArticulationKinematicsSolver from bundled UR5e config; `end_effector_frame_name="tool0"` per Pitfall 2) + `_on_pose_cmd` validation + `_apply_pose_cmd` with ROS↔Lula quaternion order conversion (Pitfall 4); D-06 Cartesian impedance fields logged + ignored
+- [ ] 02-05-PLAN.md — PARITY-11: `_publish_controller_state` with FK via `compute_end_effector_pose`, numerical-diff tcp_velocity over 3-sample ring buffer, reference echoes from Plans 02-03/02-04 bookkeeping vars, zero `fts_tare_offset` with `frame_id=ati/tool_link` per D-07
+- [ ] 02-06-PLAN.md — PARITY-06: `_setup_contact_subscription` (omni.physx contact-report per robot-collision-forensics skill; PhysxContactReportAPI threshold=0.0 per Pitfall 8; RigidBodyAPI guard per Pitfall 7) + `_on_contact_event` (physics-thread callback; CONTACT_FOUND only) + `_publish_offlimit_contacts` to `/aic/gazebo/contacts/off_limit` (ros_gz_interfaces/Contacts) + smoke_test_aic_controller.py D-12 7-step verifier + verify_phase_2.sh harness + REQUIREMENTS.md flips + 02-SUMMARY.md (phase closure)
 **UI hint**: yes
 
 ### Phase 3: Cable Physics & Ground-Truth Pose
@@ -100,7 +107,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation Parity | 9/9 | Code complete — pending verifier loop | - |
-| 2. Controller Loop & Parametric Scene | 0/TBD | Not started | - |
+| 2. Controller Loop                       | 0/6   | Planned — execution pending | - |
 | 3. Cable Physics & Ground-Truth Pose | 0/TBD | Not started | - |
 | 4. Trial Loader & End-to-End Verification | 0/TBD | Not started | - |
 

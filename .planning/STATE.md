@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: discussing
-stopped_at: Phase 2 context gathered (autonomous M1 mode --auto). 02-CONTEXT.md written with 13 implementation decisions D-01..D-13 covering rclpy-class subscriber transport (mirror Phase 1 inverted), Lula RMPflow IK with PyKDL fallback, omni.physx contact-report for off-limit (per robot-collision-forensics skill), 2-atom decomposition, PYTHONPATH-link to AIC pixi env for custom message types, per-joint impedance handling, measured-fields ControllerState, physics-tick spin model, name-keyed joint mapping, off-limit prim discovery from live aic_eval, drop-silently failure mode, smoke_test_aic_controller.py closure pattern. 02-DISCUSSION-LOG.md captures all 12 areas + alternatives. Auto-advancing to /gsd-plan-phase 2 --auto.
-last_updated: "2026-05-03T11:00:00.000Z"
-last_activity: 2026-05-03 -- /gsd-discuss-phase 2 --auto completed; .planning/phases/02-controller-loop/ created with 02-CONTEXT.md (13 decisions) + 02-DISCUSSION-LOG.md (12 areas). Architecture locked. Auto-advancing to plan-phase next.
+status: planning_complete
+stopped_at: Phase 2 PLANNING COMPLETE ✓ (autonomous M1 mode). 6 PLAN.md files in 6 sequential waves (controller_loop.py is single-file → forces serialization). Plan-checker VERIFICATION PASSED on iteration 2 (1 real blocker fixed in revision; 1 spurious blocker refuted; 3 of 4 warnings addressed). Critical landmine surfaced + fixed: D-05 PYTHONPATH-link approach is broken (Python 3.12 vs 3.11 ABI mismatch); Plan 02-01 implements workspace rebuild against Python 3.11 humble. Lula path corrected (motion_generation.lula.kinematics, NOT lula). gripper/tcp pose handling implements Pitfall #2 Option A (static SE(3) offset). Off-limit fallback list guaranteed non-empty. Auto-advancing to /gsd-execute-phase 2 --auto.
+last_updated: "2026-05-03T12:30:00.000Z"
+last_activity: 2026-05-03 -- /gsd-plan-phase 2 --auto --skip-ui chain complete: gsd-phase-researcher (02-RESEARCH.md, HIGH confidence, 9 pitfalls + critical D-05 ABI landmine identified), gsd-pattern-mapper (02-PATTERNS.md, 6 files mapped to Phase 1 analogs), gsd-planner (6 PLAN.md files), gsd-plan-checker (iter 1: 2 blockers + 4 warnings; iter 2 after revision: VERIFICATION PASSED). Auto-advancing to execute-phase next.
 progress:
   total_phases: 4
   completed_phases: 0
@@ -25,12 +25,23 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 
 ## Current Position
 
-Phase: 2 (Controller Loop) — CONTEXT GATHERED ✓; ready for /gsd-plan-phase 2 --auto
-Plan: 0 of N — planning starts next
-Status: 02-CONTEXT.md locked with 13 decisions; researcher + planner have full context. Auto-advancing to plan-phase per --auto chain.
-Last activity: 2026-05-03 -- /gsd-discuss-phase 2 --auto produced 02-CONTEXT.md (13 decisions D-01..D-13) + 02-DISCUSSION-LOG.md (12 areas). All major architectural choices for PARITY-06/09/10/11 locked: rclpy subscribers in physics-tick (mirror Phase 1 inverted); Lula RMPflow IK; omni.physx contact-report; 2-atom decomposition.
+Phase: 2 (Controller Loop) — PLANNING COMPLETE ✓; ready for /gsd-execute-phase 2 --auto
+Plan: 0 of 6 — execution starts next
+Status: 6 PLAN.md files validated (PASS on iteration 2). Wave structure: 1→2→3→4→5→6 (sequential due to controller_loop.py file overlap). Architecture locked + research-corrected: D-05 ABI fix (workspace rebuild) + Lula path (motion_generation.lula.kinematics) + Pitfall #2 Option A (gripper/tcp static offset) + non-empty DEFAULT_OFF_LIMIT_PRIMS guarantee.
+Last activity: 2026-05-03 -- /gsd-plan-phase 2 --auto --skip-ui produced 02-RESEARCH.md + 02-PATTERNS.md + 6 PLAN.md files. Plan-checker validated on iteration 2 after targeted revision (Open Questions resolved, Plan 02-04 implements Pitfall #2 Option A static offset, DEFAULT_OFF_LIMIT_PRIMS non-empty fallback). Auto-advancing to execute-phase.
 
-Progress: [██████░░░░] M1 ~30% (Phase 1 of 4 closed + Phase 2 context locked; planning + execution + smoke-test + closure pending for Phase 2; Phase 3 SCENE-05 simplified to ~3-4hr USD edit per HANDOFF; Phase 4 = trial loader + E2E)
+Progress: [███████░░░] M1 ~35% (Phase 1 closed + Phase 2 planned; execution + smoke + closure pending for Phase 2; Phase 3 SCENE-05 = ~3-4hr; Phase 4 = trial loader + E2E)
+
+## Phase 2 Plans
+
+| Plan | Wave | Objective | Requirements |
+|------|------|-----------|--------------|
+| 02-01 | 1 | Custom message workspace rebuild (Python 3.11 humble) + topic-name discovery probe + off-limit prim mapping | (infra for PARITY-06/09/10/11) |
+| 02-02 | 2 | controller_loop.py skeleton + 2 MCP atoms (8 surface additions per DX-02) + manager helper + on_shutdown + quick_start hook | (skeleton infra) |
+| 02-03 | 3 | PARITY-09: joint_commands subscriber + name-keyed parser + per-joint set_gains + apply_action | PARITY-09 |
+| 02-04 | 4 | PARITY-10: pose_commands subscriber + Lula IK + Pitfall #2 Option A static offset for gripper/tcp | PARITY-10 |
+| 02-05 | 5 | PARITY-11: ControllerState publisher (FK + numerical-diff velocity + reference echoes + zero tare) | PARITY-11 |
+| 02-06 | 6 | PARITY-06: omni.physx contact-report + Contacts publish + smoke_test_aic_controller.py + verify_phase_2.sh + 02-SUMMARY + flag flips | PARITY-06 |
 
 ## Performance Metrics
 
@@ -120,9 +131,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-03T11:30:00.000Z
-Stopped at: Strategic pause checkpoint per autonomous-M1 'pause on context exhaustion' clause. Phase 2 discuss complete (02-CONTEXT.md locked). Plan + execute chain (which spawns 6+ subagents) deferred to fresh context. HANDOFF.json updated with new next_action = `/gsd-plan-phase 2 --auto --skip-ui`.
-Resume file: .planning/HANDOFF.json (autonomous M1 mode persistent — kept until M1 ships). Active per-phase artifact: .planning/phases/02-controller-loop/02-CONTEXT.md (13 decisions D-01..D-13).
+Last session: 2026-05-03T12:30:00.000Z
+Stopped at: Phase 2 plan-phase chain complete; auto-advancing to /gsd-execute-phase 2 --auto in same session (1M context model has headroom).
+Resume file: .planning/HANDOFF.json (autonomous M1 mode persistent — kept until M1 ships). Active per-phase artifacts: .planning/phases/02-controller-loop/{02-CONTEXT.md, 02-RESEARCH.md, 02-PATTERNS.md, 02-01..06-PLAN.md}.
 
 ## Phase 1 Outstanding (post-Gap-A/B closure)
 
