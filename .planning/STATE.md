@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: between-phases
-stopped_at: Phase 1 CLOSED + flag-cleanup pass landed. All 14 Phase 1 requirements (PARITY-01..05, PARITY-12, TEX-01..03, SCENE-01, SCENE-04, DX-01..04) flipped to [x] in REQUIREMENTS.md with closure citations referencing the responsible plans + smoke test. Phase 2 (Controller-Loop Closure — PARITY-06/09/10/11) ready to discuss. Resuming under autonomous M1 mode per HANDOFF.json — no user prompts unless infrastructure breaks or a decision falls outside documented defaults.
-last_updated: "2026-05-03T09:30:00.000Z"
-last_activity: 2026-05-03 -- HANDOFF.json autonomous-mode resumption; infrastructure verified (Isaac Sim PID 1759990 running, MCP socket 8768 listening, DerivedDataCache 154M, ROS humble env clean, git tree clean); Phase 1 stale-flag cleanup completed — 8 flags flipped (PARITY-01/02/05, TEX-01/02, DX-02/03/04) in both requirement-list section and traceability table; DX-03/DX-04 phase mappings corrected (Phase 3→1, Phase 4→1) since work landed in Plan 01-08; "Last updated" footer rewritten to reflect closure pass
+status: discussing
+stopped_at: Phase 2 context gathered (autonomous M1 mode --auto). 02-CONTEXT.md written with 13 implementation decisions D-01..D-13 covering rclpy-class subscriber transport (mirror Phase 1 inverted), Lula RMPflow IK with PyKDL fallback, omni.physx contact-report for off-limit (per robot-collision-forensics skill), 2-atom decomposition, PYTHONPATH-link to AIC pixi env for custom message types, per-joint impedance handling, measured-fields ControllerState, physics-tick spin model, name-keyed joint mapping, off-limit prim discovery from live aic_eval, drop-silently failure mode, smoke_test_aic_controller.py closure pattern. 02-DISCUSSION-LOG.md captures all 12 areas + alternatives. Auto-advancing to /gsd-plan-phase 2 --auto.
+last_updated: "2026-05-03T11:00:00.000Z"
+last_activity: 2026-05-03 -- /gsd-discuss-phase 2 --auto completed; .planning/phases/02-controller-loop/ created with 02-CONTEXT.md (13 decisions) + 02-DISCUSSION-LOG.md (12 areas). Architecture locked. Auto-advancing to plan-phase next.
 progress:
   total_phases: 4
   completed_phases: 0
