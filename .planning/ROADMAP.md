@@ -66,7 +66,7 @@ Plans:
 **Plans**: 6 plans (sequential waves 1→6 — controller_loop.py is a single shared file across plans 02-03..06, so they serialize)
 Plans:
 - [x] 02-01-PLAN.md — Workspace rebuild for Python 3.11 ABI (D-05 fix: vendor + build aic_control_interfaces + ros_gz_interfaces) + Open Q1 settlement (snapshot live aic_eval controller topic names + off-limit prim mapping)
-- [ ] 02-02-PLAN.md — controller_loop.py skeleton (AicControllerLoop class, lifecycle, stub callbacks, omni.physx physics-step subscription) + extension.py 2 MCP atoms × 4-surface contract (`setup_controller_subscribers` + `setup_offlimit_contacts`) + `_start_aic_controller_loop` manager helper + on_shutdown teardown + quick_start chain insertion
+- [x] 02-02-PLAN.md — controller_loop.py skeleton (AicControllerLoop class, lifecycle, stub callbacks, omni.physx physics-step subscription) + extension.py 2 MCP atoms × 4-surface contract (`setup_controller_subscribers` + `setup_offlimit_contacts`) + `_start_aic_controller_loop` manager helper + on_shutdown teardown + quick_start chain insertion
 - [ ] 02-03-PLAN.md — PARITY-09: `_on_joint_cmd` validation + `_apply_joint_cmd` with name-keyed parser (D-09), per-joint stiffness/damping via `Articulation.set_gains`, positions/feedforward via `Articulation.apply_action(ArticulationActions)` per D-06; gripper/left_finger_joint silently no-op'd
 - [ ] 02-04-PLAN.md — PARITY-10: `_setup_kinematics` (LulaKinematicsSolver + ArticulationKinematicsSolver from bundled UR5e config; `end_effector_frame_name="tool0"` per Pitfall 2) + `_on_pose_cmd` validation + `_apply_pose_cmd` with ROS↔Lula quaternion order conversion (Pitfall 4); D-06 Cartesian impedance fields logged + ignored
 - [ ] 02-05-PLAN.md — PARITY-11: `_publish_controller_state` with FK via `compute_end_effector_pose`, numerical-diff tcp_velocity over 3-sample ring buffer, reference echoes from Plans 02-03/02-04 bookkeeping vars, zero `fts_tare_offset` with `frame_id=ati/tool_link` per D-07
@@ -107,7 +107,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation Parity | 9/9 | Code complete — pending verifier loop | - |
-| 2. Controller Loop                       | 0/6   | Planned — execution pending | - |
+| 2. Controller Loop                       | 2/6   | Executing — Plan 02-02 done; Plans 02-03..06 pending | - |
 | 3. Cable Physics & Ground-Truth Pose | 0/TBD | Not started | - |
 | 4. Trial Loader & End-to-End Verification | 0/TBD | Not started | - |
 
