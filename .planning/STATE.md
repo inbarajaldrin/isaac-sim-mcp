@@ -120,9 +120,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-03T11:00:00.000Z
-Stopped at: Phase 2 context gathered. Auto-advancing chain in progress: /gsd-discuss-phase 2 --auto ✓ → /gsd-plan-phase 2 --auto NEXT.
-Resume file: .planning/HANDOFF.json (autonomous M1 mode persistent — kept until M1 ships). Active per-phase artifact: .planning/phases/02-controller-loop/02-CONTEXT.md.
+Last session: 2026-05-03T11:30:00.000Z
+Stopped at: Strategic pause checkpoint per autonomous-M1 'pause on context exhaustion' clause. Phase 2 discuss complete (02-CONTEXT.md locked). Plan + execute chain (which spawns 6+ subagents) deferred to fresh context. HANDOFF.json updated with new next_action = `/gsd-plan-phase 2 --auto --skip-ui`.
+Resume file: .planning/HANDOFF.json (autonomous M1 mode persistent — kept until M1 ships). Active per-phase artifact: .planning/phases/02-controller-loop/02-CONTEXT.md (13 decisions D-01..D-13).
 
 ## Phase 1 Outstanding (post-Gap-A/B closure)
 
