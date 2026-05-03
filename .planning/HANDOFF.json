@@ -1,0 +1,44 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-05-03T09:01:32.940Z",
+  "phase": "between-1-and-2",
+  "phase_name": "M1 autonomous-mode locked in; Phase 1 closed; Phase 2 not yet started",
+  "phase_dir": ".planning",
+  "plan": null,
+  "task": null,
+  "total_tasks": null,
+  "status": "paused",
+  "completed_tasks": [
+    {"id": "01-Gap-A", "name": "PARITY-03 /joint_states close via rclpy parity publishers", "status": "done", "commit": "079afd8"},
+    {"id": "01-Gap-B", "name": "PARITY-04 /tf + /tf_static close via rclpy parity publishers", "status": "done", "commit": "079afd8"},
+    {"id": "01-Gap-E", "name": "Visual regression user-confirmed; AIC_OBJECTS reverted earlier in 121244a", "status": "done"},
+    {"id": "01-docs", "name": "VERIFICATION.md flipped to gaps_resolved; CLAUDE.md venv-activate req added", "status": "done", "commit": "8c17ccb"},
+    {"id": "01-state", "name": "STATE.md updated; old HANDOFF.json deleted (resolved)", "status": "done", "commit": "a70ef52"},
+    {"id": "01-close", "name": "01-SUMMARY.md + smoke_test_aic_parity.py + REQUIREMENTS.md PARITY-03/04 [~]→[x]", "status": "done", "commit": "c1f40ae"},
+    {"id": "cable-rediscovery", "name": "D-04 empirically disproven; cable wedge no longer reproduces under current launch; CLAUDE.md cable note revised; probe_cable_wedge.py + probe_cable_behavior.py added", "status": "done", "commit": "408accd"}
+  ],
+  "remaining_tasks": [
+    {"id": "phase-1-flag-cleanup", "name": "Flip 6 stale [~] flags (PARITY-01, PARITY-02, PARITY-05, TEX-01, TEX-02, DX-02) and 2 stale [ ] flags (DX-03, DX-04) in REQUIREMENTS.md to [x] with closure citations — they were substantively complete but never flipped during Phase 1 plans", "status": "not_started", "estimate": "10 min"},
+    {"id": "phase-2-discuss", "name": "/gsd-discuss-phase 2 --auto — Controller-Loop Closure (PARITY-06/09/10/11)", "status": "not_started"},
+    {"id": "phase-2-plan-execute", "name": "/gsd-plan-phase 2 → /gsd-execute-phase 2 → smoke test → close (mirror Phase 1 closure pattern)", "status": "not_started"},
+    {"id": "phase-3-discuss", "name": "/gsd-discuss-phase 3 --auto — Cable Physics + Object TF (SCENE-02/03/05/06, PARITY-07/08). SCENE-05 is now mechanical USD mass/inertia edit per NVIDIA RigidBodyRopeDemo.py template, NOT research-gated.", "status": "not_started"},
+    {"id": "phase-3-plan-execute", "name": "/gsd-plan-phase 3 → /gsd-execute-phase 3 → smoke test → close", "status": "not_started"},
+    {"id": "phase-4", "name": "Phase 4: trial loader + end-to-end M1 verification under live aic_engine + CheatCode (DX-03 final + DX-04 + the actual 'every trial passes' bar)", "status": "not_started"},
+    {"id": "m1-ship", "name": "M1 deliverable: every sample_config.yaml trial passes under CheatCode against Isaac Sim with the same per-trial outcomes Gazebo produces", "status": "not_started"}
+  ],
+  "blockers": [],
+  "human_actions_pending": [],
+  "decisions": [
+    {"decision": "Lock in autonomous M1 execution. No questions to user until milestone deliverable produced. User's only intervention: pause/resume on context exhaustion.", "rationale": "User explicitly authorized; Phase 1 closure pattern (this session) is the template; all major architectural decisions surfaced and addressed; defaults documented for the few autonomous calls (cable physics, IK library, trial-pass tolerance, Docker autonomy).", "phase": "milestone"},
+    {"decision": "SCENE-05 cable physics strategy = mechanical USD mass/inertia edit (D-06 in-place USD edit policy) per NVIDIA RigidBodyRopeDemo.py template — NOT research-gated cable-physics-strategy decision", "rationale": "Empirical re-test 2026-05-03 disproved D-04: with cable SetActive(True) and current launch path (postload + warm cache + venv-activate), play_scene returns instantly, sim time advances at 0.67x realtime, no main-thread block, MCP latency <30ms. Cable wedge no longer reproduces. Remaining issue is mass=0/inertia=0 → PhysX skips the bodies (decorative only). Solution: author proper mass/inertia per rope-demo template (~3-4 hrs).", "phase": "3"},
+    {"decision": "Cable physics fallback hierarchy: (1) author mass/inertia in-place; (2) if wedge returns under non-zero mass, investigate aic-dt extension Kit env-specific init order; (3) re-author rope using NVIDIA's PhysxPhysicsJointInstancer template; (4) hybrid rigid-plug-with-visual-cable as deepest fallback. Skip deformable bodies entirely.", "rationale": "Bisection from prior session 29ca157f showed cable plays fine in bare Kit. Three approaches tried + failed: runtime override, bake-before-load, and old D-04 workaround. NVIDIA's rope demo is the validated template never tried. Hybrid is sufficient for CheatCode (only plug pose matters for trial pass/fail).", "phase": "3"},
+    {"decision": "IK library for PARITY-10 (/aic_controller/pose_commands) = Lula RMPflow first, fall back to PyKDL. Skip cuMotion as overkill.", "rationale": "aic_controller does the impedance math; Isaac Sim just applies resolved motion. Simplest IK that works.", "phase": "2"},
+    {"decision": "Phase 2 controller wiring = direct articulation drive from rclpy subscriber, no ros2_control plugin layer. Mirror Phase 1's rclpy publisher pattern but inverted (sink, not source).", "rationale": "aic_controller IS the controller; Isaac Sim is the 'hardware' sink. Don't double up the controller layer.", "phase": "2"},
+    {"decision": "Trial-pass tolerance = iterate until 20/20 sample_config.yaml trials pass. Don't ship M1 with partial passes.", "rationale": "Core Value bar is 'every trial passes' — partial-pass is not M1.", "phase": "4"},
+    {"decision": "Docker autonomy = OK to bring up aic_eval + aic_model containers via docker run when Phase 4 verification needs them. Tear down after each round.", "rationale": "Per CLAUDE.md the Docker bringup is at ~/Documents/aic/scripts/run_cheatcode.sh; standard docker run, no system service modification.", "phase": "4"},
+    {"decision": "Resume etiquette: pick up from HANDOFF.json with no preamble; just continue.", "rationale": "User explicitly requested silent autonomous execution.", "phase": "milestone"}
+  ],
+  "uncommitted_files": [],
+  "next_action": "On resume, verify infrastructure state (Isaac Sim still RUNNING + RESPONSIVE on 8768; ROS network clean; DerivedDataCache ≥100MB; venv-activate sourced for any future Isaac Sim restart). Then begin Phase 1 flag cleanup (flip 8 stale flags in REQUIREMENTS.md), then /gsd-discuss-phase 2 --auto. No user prompts unless infrastructure is broken or a decision falls outside the documented defaults.",
+  "context_notes": "Mental state at pause: M1 plan is fully locked in. Phase 1 closure pattern is the template (smoke test + SUMMARY.md + flag flip + atomic commits). Phase 2 is straightforward (rclpy subscriber → articulation write each tick, mirror Phase 1 architecture inverted). Phase 3 collapsed dramatically after D-04 disproof — SCENE-05 is now ~3-4hrs mechanical USD edit, not research-gated. Phase 4 is integration + Docker verification. Total M1 estimate: ~28-33 hrs focused work. The 8 stale Phase 1 flags are a 10-minute cleanup — don't skip, do it before Phase 2 discuss so REQUIREMENTS.md is accurate. The autonomous mode commitment from the user is real — they want zero questions. If something genuinely undecided comes up, write it to HANDOFF.json and continue with the best-effort default rather than pausing for input. The cable physics surprise (D-04 stale) is the kind of finding that would normally require user decision; here it actually simplifies the plan, so document and proceed. If the cable wedge DOES return under non-zero mass authoring, fall back through the documented hierarchy — investigate Kit env, try rope-demo template, finally hybrid."
+}
