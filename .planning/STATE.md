@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 2 Plan 04 EXECUTED ✓ (autonomous M1 mode, 3 min). PARITY-10 wired end-to-end in code — controller_loop.py grew 565→839 LOC (+274). 2 task commits (cc5ec52: _setup_kinematics with LulaKinematicsSolver from bundled UR5e config + ArticulationKinematicsSolver(end_effector_frame_name='tool0') + UsdGeom.XformCache.GetLocalToWorldTransform capture of static tool0<->gripper/tcp SE(3) offsets, both directions cached as 4x4 numpy.float64 — Pitfall 2 Option A; b31732b: _on_pose_cmd validation per aic_controller.cpp:218-227 (frame_id ∈ {base_link, gripper/tcp}, mode ≠ UNSPECIFIED) + _apply_pose_cmd full body with gripper/tcp ingress transform via cached self._tcp_to_tool0_offset_xform pre-multiplication, ROS->Lula quat order conversion at boundary per Pitfall 4, D-06 ignored-field debug-log discipline for target_stiffness/feedforward_wrench_at_tip, D-11 try/except spam-guarded apply_action, bookkeeping _last_reference_tcp_pose + _last_target_mode = TARGET_MODE_CARTESIAN populated for Plan 02-05). 0 deviations from plan (defensive __init__/stop() init of SE(3) matrix attrs to None matches existing skeleton discipline; not a behavioral change). All 22 verification gates PASS. End-to-end runtime verification deferred to Plan 02-06 smoke test. Auto-advancing to Plan 02-05 (PARITY-11 ControllerState publisher) next — note Plan 02-05 reuses self._kinematics for FK and self._tool0_to_tcp_offset_xform for tcp_pose egress.
-last_updated: "2026-05-03T20:40:03.000Z"
-last_activity: 2026-05-03 -- /gsd-execute-phase 2 Plan 04 complete: PARITY-10 implementation (pose_commands subscriber + Lula IK + Pitfall 2 Option A static SE(3) offset for gripper/tcp). 0 deviations. Files: 1 modified (controller_loop.py +274/-6).
+stopped_at: Phase 2 Plan 05 EXECUTED ✓ (autonomous M1 mode, ~2 min). PARITY-11 wired end-to-end in code — controller_loop.py grew 837→965 LOC (+128/-2). 1 task commit (cd925b8: _publish_controller_state full body per D-07: header.frame_id="base_link" + sim-clock stamp; tcp_pose via FK on self._kinematics.compute_end_effector_pose() with rot_matrices_to_quats wxyz->ROS xyzw boundary reorder per Pitfall 4; tcp_velocity.linear via 3-sample ring-buffer numerical-diff on self._tcp_pose_buffer with dt floor=1e-6 (angular left at 0 first-cut, documented inline as deferred); reference_tcp_pose passthrough echo from self._last_reference_tcp_pose set by Plan 02-04; tcp_error[0..2] = current - reference for x/y/z with defensive array.array vs list rosidl backend handling, [3..5] = 0 first-cut documented as deferred; reference_joint_state passthrough echo from self._last_reference_joint_state set by Plan 02-03; target_mode.mode = self._last_target_mode (TARGET_MODE_* enum re-verified against TargetMode.msg source-of-truth — exact match, no Plan 02-03-style inversion bug); fts_tare_offset zero WrenchStamped with frame_id="ati/tool_link" per D-07 Isaac-Sim-doesn't-tare policy; D-11 try/except + log-once via self._logged_publish_error around FK + publish call). 0 deviations from plan (the implementation transcribes the plan body verbatim; +128 LOC vs ~70-100 estimate is pure docstring overhead documenting the "tcp_pose at tool0 frame" decision + the two deferred items inline). All 13 plan acceptance gates PASS (AST parse + 12 grep checks). End-to-end runtime verification deferred to Plan 02-06 smoke test. PARITY-09/10/11 callback chain now end-to-end at the code level. Auto-advancing to Plan 02-06 (PARITY-06 contact-report + smoke test + phase closure) next.
+last_updated: "2026-05-03T20:46:48.000Z"
+last_activity: 2026-05-03 -- /gsd-execute-phase 2 Plan 05 complete: PARITY-11 implementation (ControllerState publisher with FK + numerical-diff velocity + reference echoes + zero tare). 0 deviations. Files: 1 modified (controller_loop.py +128/-2).
 progress:
   total_phases: 4
   completed_phases: 0
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 
 ## Current Position
 
-Phase: 2 (Controller Loop) — EXECUTING; Plan 4 of 6 complete
-Plan: 02-04 ✓ → 02-05 next
-Status: PARITY-10 wired in code. controller_loop.py grew 565→839 LOC (+274). _setup_kinematics initializes LulaKinematicsSolver from bundled UR5e config + ArticulationKinematicsSolver(end_effector_frame_name="tool0") + caches static tool0<->gripper/tcp SE(3) offsets via UsdGeom.XformCache (Pitfall 2 Option A; both directions, 4x4 numpy.float64). _on_pose_cmd validates frame_id ∈ {base_link, gripper/tcp} + non-UNSPECIFIED mode (drop-silently per D-11). _apply_pose_cmd: gripper/tcp ingress pre-multiplies by self._tcp_to_tool0_offset_xform; ROS->Lula quat order conversion at boundary (Pitfall 4); D-06 ignored-field discipline (target_stiffness, feedforward_wrench_at_tip log+ignore); compute_inverse_kinematics + apply_action; bookkeeping _last_reference_tcp_pose + _last_target_mode = TARGET_MODE_CARTESIAN populated for Plan 02-05. PyKDL fallback documented inline but not implemented (D-02). All 22 verification gates PASS. End-to-end runtime verification deferred to Plan 02-06 smoke test. Wave structure unchanged: 1→2→3→4✓→5→6.
-Last activity: 2026-05-03 -- /gsd-execute-phase 2 Plan 04 (3 min): PARITY-10 pose_commands subscriber + Lula IK + Pitfall 2 Option A static SE(3) offset for gripper/tcp. 0 deviations. Files: 1 modified (controller_loop.py +274/-6). Auto-advancing to Plan 02-05.
+Phase: 2 (Controller Loop) — EXECUTING; Plan 5 of 6 complete
+Plan: 02-05 ✓ → 02-06 next
+Status: PARITY-11 wired in code. controller_loop.py grew 837→965 LOC (+128/-2). _publish_controller_state populated per D-07: header.frame_id="base_link" + sim-clock stamp; tcp_pose via FK reusing Plan 02-04's self._kinematics (compute_end_effector_pose returns ee_pos+ee_rot; rot_matrices_to_quats wxyz reordered to ROS xyzw at boundary per Pitfall 4); tcp_velocity.linear via 3-sample ring-buffer numerical-diff on self._tcp_pose_buffer (dt floor=1e-6; angular=0 first-cut documented as deferred); reference_tcp_pose echo from Plan 02-04 bookkeeping; tcp_error[0..2] = pos delta with defensive array.array/list rosidl handling, [3..5] = 0 first-cut deferred; reference_joint_state echo from Plan 02-03 bookkeeping; target_mode.mode = self._last_target_mode (enum re-verified against TargetMode.msg — exact match); fts_tare_offset = zero WrenchStamped with frame_id="ati/tool_link" per D-07 (Isaac Sim doesn't tare; aic_controller does from /fts_broadcaster/wrench history per aic_controller.cpp:1275). D-11 try/except + log-once via self._logged_publish_error wraps FK + publish call. 0 deviations. All 13 plan acceptance gates PASS. PARITY-09/10/11 callback chain now end-to-end at the code level. End-to-end runtime verification deferred to Plan 02-06 smoke test. Wave structure unchanged: 1→2→3→4→5✓→6.
+Last activity: 2026-05-03 -- /gsd-execute-phase 2 Plan 05 (~2 min): PARITY-11 ControllerState publisher (FK + numerical-diff velocity + reference echoes + zero tare). 0 deviations. Files: 1 modified (controller_loop.py +128/-2). Auto-advancing to Plan 02-06.
 
 Progress: [█████████░] M1 ~50% (Phase 1 closed + Phase 2 plans 1-4 of 6 done; execution pending for plans 02-05..06; Phase 3 SCENE-05 = ~3-4hr; Phase 4 = trial loader + E2E)
 
@@ -40,28 +40,28 @@ Progress: [█████████░] M1 ~50% (Phase 1 closed + Phase 2 pla
 | 02-02 ✓ | 2 | controller_loop.py skeleton + 2 MCP atoms (8 surface additions per DX-02) + manager helper + on_shutdown + quick_start hook | (skeleton infra) |
 | 02-03 ✓ | 3 | PARITY-09: joint_commands subscriber + name-keyed parser + per-joint set_gains + apply_action | PARITY-09 |
 | 02-04 ✓ | 4 | PARITY-10: pose_commands subscriber + Lula IK + Pitfall #2 Option A static offset for gripper/tcp | PARITY-10 |
-| 02-05 | 5 | PARITY-11: ControllerState publisher (FK + numerical-diff velocity + reference echoes + zero tare) | PARITY-11 |
+| 02-05 ✓ | 5 | PARITY-11: ControllerState publisher (FK + numerical-diff velocity + reference echoes + zero tare) | PARITY-11 |
 | 02-06 | 6 | PARITY-06: omni.physx contact-report + Contacts publish + smoke_test_aic_controller.py + verify_phase_2.sh + 02-SUMMARY + flag flips | PARITY-06 |
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 13
-- Average duration: 9.1 min
-- Total execution time: 118 min
+- Total plans completed: 14
+- Average duration: 8.6 min
+- Total execution time: 120 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | Phase 1 | 9 | 59 min | 6.6 min |
-| Phase 2 | 4 | 59 min | 14.8 min |
+| Phase 2 | 5 | 61 min | 12.2 min |
 
 **Recent Trend:**
 
-- Last 13 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min), 01-06 (6 min), 01-07 (10 min), 01-09 (8 min), 01-08 (10 min), 02-01 (49 min), 02-02 (5 min), 02-03 (2 min), 02-04 (3 min)
-- Trend: 02-04 finished in 3 min — second-fastest plan, just behind 02-03. Two reasons: (a) the skeleton + 02-03 had already established the _on_*/_apply_* pair pattern, lifecycle hooks, and bookkeeping discipline so 02-04 was pure pattern-fill; (b) the plan body's verification gates were exhaustive (22 grep checks + AST parse) and all passed first try, so no fix-retry-fix cycle. Hand-off to Plan 02-05 (PARITY-11): same `controller_loop.py`; reuses self._kinematics for FK and self._tool0_to_tcp_offset_xform for tcp_pose egress (post-multiply on FK tool0 pose).
+- Last 14 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min), 01-06 (6 min), 01-07 (10 min), 01-09 (8 min), 01-08 (10 min), 02-01 (49 min), 02-02 (5 min), 02-03 (2 min), 02-04 (3 min), 02-05 (~2 min)
+- Trend: 02-05 finished in ~2 min — fastest plan to date, tied with 02-03. Same pattern as 02-04: skeleton + Plans 02-02/03/04 had already established (a) the lifecycle plumbing, (b) the bookkeeping vars (_last_reference_*, _last_target_mode, _tcp_pose_buffer, _logged_publish_error all already initialized in __init__/stop), and (c) the lazy-import-inside-callback contract — so Plan 02-05 was pure pattern-fill against an established surface. The plan body specified the full ~100-LOC method literally; transcription + 13 grep gate verification was the only work. Hand-off to Plan 02-06 (PARITY-06): same `controller_loop.py`; the omni.physx contact-report subscription is a new surface (not pattern-fill), so expect closer to 02-04's 3-min duration than 02-03/05's 2-min. Plan 02-06 also writes the smoke_test_aic_controller.py D-12 verifier, verify_phase_2.sh harness, REQUIREMENTS.md flag flips, and 02-SUMMARY.md (phase closure) — biggest plan in Phase 2 by surface area.
 
 *Updated after each plan completion*
 
@@ -129,6 +129,12 @@ Decisions are logged in PROJECT.md Key Decisions table. Recent decisions affecti
 - Plan 02-03: Lazy `import numpy` + `from isaacsim.core.utils.types import ArticulationActions` inside `_apply_joint_cmd` (NOT at module top). Preserves Plan 02-02's contract that the class definition is loadable offline (no Kit / no Isaac Sim core imports at module load). Plans 02-04 / 02-05 should follow the same lazy-import pattern.
 - Plan 02-03: `set_gains` and `apply_action` wrapped in INDEPENDENT try/except (not a single shared one). Reason: Pitfall 6 — `set_gains` is a silent no-op pre-play, and if it raises (physics_sim_view not ready), we still want positions to apply. Both share `_logged_apply_error` log-once flag (no spam, but each path can fail independently).
 - Plan 02-03: Bookkeeping (`_last_reference_joint_state` + `_last_target_mode`) set ONLY after `apply_action` succeeds, not after `set_gains`. ControllerState.last_target_mode should reflect what was actually applied to the articulation, not what the validator accepted. If apply_action raises, bookkeeping stays stale until next successful command — Plan 02-05 publishes the previous target until then, which is correct behavior (controller_state mirrors the most-recently-applied command).
+- Plan 02-05: tcp_pose published at tool0 frame (FK direct), NOT post-multiplied by self._tool0_to_tcp_offset_xform. The cached offset is *available* but the tool0 frame matches the rest of the AIC topic surface (e.g. /tcp_pose_broadcaster/pose from Phase 1); aic_controller's Cartesian impedance loop handles the tool0->tcp tip transform on its end. The cached offset stays available for any future plan that needs tcp-frame egress without re-computing.
+- Plan 02-05: tcp_velocity.angular and tcp_error[3..5] (rx,ry,rz) deferred to a later phase, set to 0 first-cut. Quaternion finite-difference and axis-angle delta from quaternion difference both have finicky cases (axis-flip, half-revolution wrap-around); aic_controller doesn't consume these for any current trial. Documented inline at the code site so a future planner sees the path forward.
+- Plan 02-05: TARGET_MODE_* enum values re-verified against ~/Documents/aic/aic_interfaces/aic_control_interfaces/msg/TargetMode.msg source-of-truth (MODE_UNSPECIFIED=0, MODE_CARTESIAN=1, MODE_JOINT=2) — exact match with controller_loop.py:120-122 constants block. No Plan 02-03-style enum-inversion bug here. Source-of-truth verification is part of the "fill in" task even when the constants block was set up by an earlier plan.
+- Plan 02-05: Defensive rosidl `tcp_error` typing — try `msg.tcp_error[i]=v` indexed assignment first (works for `array.array`, the rosidl-generated default for `float64[6]` in humble), fall back to list assignment. Static analysis confirms the indexed path runs first and succeeds; fallback is preserved as defensive scaffolding for non-standard rosidl backends or future ros2 releases. Plan 02-06's smoke test is the first runtime exercise.
+- Plan 02-05: `_publish_controller_state` is a pure consumer of bookkeeping state set by sibling _apply_*_cmd methods — added zero new state fields. Pattern: setup-once state lives in __init__/stop reset; per-tick state read by the publisher is owned by whoever populates it. Plan 02-06 will follow the same: contact-event state lives in self._contact_events buffer populated by omni.physx callback, drained by _publish_offlimit_contacts. Single-writer/single-reader simplifies the physics-thread + rclpy-thread boundary.
+- Plan 02-05: LOC overage (+128 vs plan's ~70-100 estimate) is pure documentation — extended docstring framing the "tcp_pose at tool0 frame" decision + the two deferred items + the D-07 field policy as a complete reference at the code site. Pattern: when the implementation is ~100 LOC of code, ~30 LOC of docstring is correct ratio for a future reader who lands on the function cold. Don't trim docstrings to hit estimate bands.
 
 ### Pending Todos
 
@@ -148,9 +154,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-03T20:31:42.000Z
-Stopped at: Plan 02-03 EXECUTED ✓ (2 min). controller_loop.py grew 393→565 LOC (+177/-5): module constants block + _on_joint_cmd validation body + _apply_joint_cmd full implementation per D-06/D-09/D-11. PARITY-09 wired in code; runtime verification deferred to Plan 02-06 smoke test. 1 deviation Rule 1 (TrajectoryGenerationMode enum corrected to message source-of-truth). Auto-advancing to Plan 02-04 next.
-Resume file: .planning/HANDOFF.json (autonomous M1 mode persistent — kept until M1 ships). Active per-phase artifacts: .planning/phases/02-controller-loop/{02-CONTEXT.md, 02-RESEARCH.md, 02-PATTERNS.md, 02-01-SUMMARY.md ✓, 02-02-SUMMARY.md ✓, 02-03-SUMMARY.md ✓, 02-01..06-PLAN.md, snapshot/}.
+Last session: 2026-05-03T20:46:48.000Z
+Stopped at: Plan 02-05 EXECUTED ✓ (~2 min). controller_loop.py grew 837→965 LOC (+128/-2): _publish_controller_state full body per D-07 (header+FK tcp_pose+numerical-diff tcp_velocity+reference echoes+zero tare with ati/tool_link frame). PARITY-09/10/11 callback chain now end-to-end at the code level; runtime verification deferred to Plan 02-06 smoke test. 0 deviations from plan (literal transcription). All 13 plan acceptance gates PASS. Auto-advancing to Plan 02-06 next.
+Resume file: .planning/HANDOFF.json (autonomous M1 mode persistent — kept until M1 ships). Active per-phase artifacts: .planning/phases/02-controller-loop/{02-CONTEXT.md, 02-RESEARCH.md, 02-PATTERNS.md, 02-01-SUMMARY.md ✓, 02-02-SUMMARY.md ✓, 02-03-SUMMARY.md ✓, 02-04-SUMMARY.md ✓, 02-05-SUMMARY.md ✓, 02-01..06-PLAN.md, snapshot/}.
 
 ## Phase 1 Outstanding (post-Gap-A/B closure)
 
