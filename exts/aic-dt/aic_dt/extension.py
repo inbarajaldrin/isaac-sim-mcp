@@ -435,6 +435,12 @@ class DigitalTwin(omni.ext.IExt):
         self._force_pub_node = None
         self._force_warmup = 0
 
+        # AIC parity publisher (rclpy-based /joint_states + /tf + /tf_static).
+        # Replaces OGN-based publishers from Plan 06; the OGN nodes lacked
+        # frame_id / joint-name / TF slashed-frame inputs needed for AIC
+        # topic parity. See exts/aic-dt/aic_dt/parity_publishers.py.
+        self._aic_parity_publishers = None
+
         # MCP socket server state
         self._mcp_socket = None
         self._mcp_server_thread = None
@@ -1423,252 +1429,134 @@ class DigitalTwin(omni.ext.IExt):
     # ==================== TF Publisher (PARITY-04) ====================
 
     def setup_tf_publish_action_graph(self):
-        """Create OmniGraph for /tf (dynamic) and /tf_static (TRANSIENT_LOCAL).
+        """Start the rclpy-based AIC TF publisher (/tf + /tf_static).
 
-        PARITY-04 contract (Plan 06 Task 1):
+        PARITY-04 contract:
           Topics:        /tf, /tf_static
           Message types: tf2_msgs/msg/TFMessage (both)
-          QoS:           /tf       = RELIABLE / VOLATILE / KEEP_LAST(10)   (staticPublisher=False)
-                         /tf_static = RELIABLE / TRANSIENT_LOCAL / KEEP_LAST(1) (staticPublisher=True)
-          Source nodes:  isaacsim.ros2.bridge.ROS2PublishTransformTree (one per topic)
-          Articulation:  parentPrim=/World, targetPrims=/World/UR5e/aic_unified_robot
-                         (per Plan 04 prim-path fix; resolves to the unified-robot Xform
-                         which TransformTree walks to publish all descendant frames)
+          QoS:           /tf       = RELIABLE / VOLATILE / KEEP_LAST(10)
+                         /tf_static = RELIABLE / TRANSIENT_LOCAL / KEEP_LAST(1)
+          Frame names:   slashed AIC form (`gripper/hande_finger_link_l`,
+                         `cam_mount/cam_mount_link`, etc.) per
+                         exts/aic-dt/docs/topic-parity-reference.md.
 
-        Per Phase 1 D-10: native isaacsim.ros2.bridge OmniGraph nodes only -- NO external
-        robot_state_publisher ROS node. Two PublishTransformTree nodes share the same graph,
-        one with staticPublisher=True for TRANSIENT_LOCAL /tf_static QoS.
+        IMPLEMENTATION NOTE (2026-05-03 Gap-B inline fix):
+          The OGN-based ROS2PublishTransformTree node from Plan 06 cannot
+          deliver this contract: (a) frame_ids derive from USD prim leaf
+          names, but USD prim names cannot legally contain '/' so AIC's
+          slashed frame names are unrepresentable; (b) empirical Stage 1
+          test showed the node emitted only the single
+          World->aic_unified_robot edge even when targetPrims pointed at
+          the actual articulation root prim
+          (/World/UR5e/aic_unified_robot/root_joint), so articulation
+          traversal documented in the 5.0 OGN spec was not firing for
+          this articulation. Decision: bypass OGN and publish directly
+          via rclpy from a physics-step callback.
 
-        Open question (RESEARCH.md A2 / Pitfall #3) -- DEFERRED PER PLAN BODY:
-          ROS2PublishTransformTree publishes USD-prim-leaf names as frame_ids. AIC's frames
-          use slash-style names (e.g. `gripper/hande_base_link`) but USD prim names cannot
-          contain '/' -- the unified USD has `gripper_hande_base_link` (underscore). Plan 05
-          probe (usd_prim_inventory.txt, Strategy: PER-FRAME-RAW-OVERRIDE) documented 16
-          underscore->slash mismatches + 1 synthesized aic_world edge. The OGN spec for
-          ROS2PublishRawTransformTree (Isaac Sim 4.2 doc, kept-API in 5.0) takes static
-          translation/rotation inputs -- it does NOT read prim transforms directly, so the
-          per-frame Raw override design needs additional pose-source nodes. Plan 06 PLAN.md
-          line 51, 302 explicitly defers: "This plan creates the TF publisher with default
-          prim-name -> frame_id mapping and accepts the iteration loop." Plan 06 Task 3 (verify
-          harness, separate plan) surfaces the diff_tf_tree.py mismatch list; a follow-up plan
-          authors the per-frame Raw publishers backed by IsaacReadOdometry/OgnGetPrimWorldPose.
+          AIC-frame -> USD-prim mapping + parent/child edge list +
+          dynamic-vs-static partitioning live in
+          exts/aic-dt/aic_dt/parity_publishers.py. This setup atom and
+          setup_joint_state_publish_action_graph share the same
+          AicParityPublishers backend (one rclpy node, two publishers);
+          calling either is idempotent and starts both surfaces.
 
-        Verify (Plan 07/08 verify_phase_1.sh executes once Isaac Sim is running):
+        Verify (Plan 07/08 verify_phase_1.sh):
             ros2 topic list | grep -E "^/tf(_static)?$"
-              -> /tf
-              -> /tf_static
             ros2 topic info /tf --verbose
-              -> Type: tf2_msgs/msg/TFMessage
-              -> Reliability: RELIABLE
-              -> Durability: VOLATILE
+              -> Type: tf2_msgs/msg/TFMessage / RELIABLE / VOLATILE
             ros2 topic info /tf_static --verbose
-              -> Reliability: RELIABLE
-              -> Durability: TRANSIENT_LOCAL  (from staticPublisher=True)
+              -> Reliability: RELIABLE / Durability: TRANSIENT_LOCAL
+            ros2 run tf2_tools view_frames
+              -> 31 frames including aic_world, world, tabletop,
+                 base_link..wrist_3_link, gripper/*, cam_mount/*, ati/*,
+                 *_camera/* in slashed form.
         """
-        from isaacsim.core.utils.extensions import enable_extension
-
-        print("Setting up UR5e TF Publisher (/tf + /tf_static)...")
-
-        enable_extension("isaacsim.ros2.bridge")
-        enable_extension("isaacsim.core.nodes")
-        enable_extension("omni.graph.action")
-
-        graph_path = "/Graph/ActionGraph_UR5e_TFPublish"
-        keys = og.Controller.Keys
-        stage = omni.usd.get_context().get_stage()
-
-        # Idempotent cleanup -- remove any prior graph at this path
-        if stage.GetPrimAtPath(graph_path):
-            stage.RemovePrim(graph_path)
-
-        (graph, nodes, _, _) = og.Controller.edit(
-            {"graph_path": graph_path, "evaluator_name": "execution"},
-            {
-                keys.CREATE_NODES: [
-                    ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
-                    ("ros2_context", "isaacsim.ros2.bridge.ROS2Context"),
-                    ("isaac_read_simulation_time", "isaacsim.core.nodes.IsaacReadSimulationTime"),
-                    ("publish_tf", "isaacsim.ros2.bridge.ROS2PublishTransformTree"),
-                    ("publish_tf_static", "isaacsim.ros2.bridge.ROS2PublishTransformTree"),
-                ],
-                keys.SET_VALUES: [
-                    ("ros2_context.inputs:useDomainIDEnvVar", True),
-                    ("ros2_context.inputs:domain_id", 0),
-                    # Dynamic TF -> /tf (default QoS: RELIABLE / VOLATILE)
-                    ("publish_tf.inputs:topicName", "tf"),
-                    ("publish_tf.inputs:nodeNamespace", ""),
-                    ("publish_tf.inputs:staticPublisher", False),
-                    # Static TF -> /tf_static (TRANSIENT_LOCAL via staticPublisher=True)
-                    ("publish_tf_static.inputs:topicName", "tf_static"),
-                    ("publish_tf_static.inputs:nodeNamespace", ""),
-                    ("publish_tf_static.inputs:staticPublisher", True),
-                    ("isaac_read_simulation_time.inputs:resetOnStop", False),
-                ],
-                keys.CONNECT: [
-                    ("on_playback_tick.outputs:tick", "publish_tf.inputs:execIn"),
-                    ("on_playback_tick.outputs:tick", "publish_tf_static.inputs:execIn"),
-                    ("ros2_context.outputs:context", "publish_tf.inputs:context"),
-                    ("ros2_context.outputs:context", "publish_tf_static.inputs:context"),
-                    ("isaac_read_simulation_time.outputs:simulationTime", "publish_tf.inputs:timeStamp"),
-                    ("isaac_read_simulation_time.outputs:simulationTime", "publish_tf_static.inputs:timeStamp"),
-                ],
-            },
-        )
-
-        # Set relationship inputs (parentPrim, targetPrims) AFTER og.Controller.edit --
-        # OGN treats them as USD relationships, not values. Pattern matches
-        # ur5e-dt/extension.py:4625-4637 (create_action_graph_with_transforms).
-        articulation_root = self._articulation_root_prim_path  # /World/UR5e/aic_unified_robot (Plan 04)
-        for node_name in ("publish_tf", "publish_tf_static"):
-            node_path = f"{graph_path}/{node_name}"
-            node_prim = stage.GetPrimAtPath(node_path)
-            if not node_prim or not node_prim.IsValid():
-                print(f"[AIC-DT] Warning: TF node {node_name} not created at {node_path}")
-                continue
-
-            parent_rel = node_prim.GetRelationship("inputs:parentPrim")
-            if not parent_rel:
-                parent_rel = node_prim.CreateRelationship("inputs:parentPrim", custom=True)
-            parent_rel.SetTargets([Sdf.Path("/World")])
-
-            target_rel = node_prim.GetRelationship("inputs:targetPrims")
-            if not target_rel:
-                target_rel = node_prim.CreateRelationship("inputs:targetPrims", custom=True)
-            target_rel.SetTargets([Sdf.Path(articulation_root)])
-
-        print(f"[AIC-DT] TF publisher action graph created at {graph_path} (/tf + /tf_static)")
-        print(f"[AIC-DT]   parentPrim=/World, targetPrims={articulation_root}")
-        print("[AIC-DT]   NOTE: frame_id underscore->slash overrides for 16 frames + 1 synthesized")
-        print("[AIC-DT]   aic_world edge are deferred (per Plan 06 PLAN.md L51/L302) -- a follow-up")
-        print("[AIC-DT]   plan addresses via Raw publishers + prim-pose source nodes.")
-
-    # ==================== JointState Publisher (PARITY-03) ====================
+        print("[AIC-DT] Setting up TF Publisher via rclpy (/tf + /tf_static)...")
+        # Remove prior OGN-based action graph if present (Plan 06 leftover); the
+        # rclpy publisher takes its place on the same topic names.
+        self._remove_legacy_publish_graphs()
+        self._start_aic_parity_publishers()
 
     def setup_joint_state_publish_action_graph(self):
-        """Create OmniGraph for /joint_states publishing.
+        """Start the rclpy-based AIC JointState publisher (/joint_states).
 
-        PARITY-03 contract (Plan 06 Task 2):
+        PARITY-03 contract:
           Topic:         /joint_states
           Message type:  sensor_msgs/msg/JointState
-          QoS:           default (RELIABLE / VOLATILE / KEEP_LAST(10))
-          Source node:   isaacsim.ros2.bridge.ROS2PublishJointState
-          targetPrim:    /World/UR5e/aic_unified_robot/root_joint
-                         (per RESEARCH.md Pattern 1 line 466 -- the PhysicsFixedJoint root,
-                         NOT the Xform parent; verified by Task 0 probe_root_joint.py)
+          QoS:           RELIABLE / VOLATILE / KEEP_LAST(42)
+          Joint names:   7 alphabetical -- 6 UR5e arm DOFs + the literal
+                         `gripper/left_finger_joint` (slashed) per the live
+                         Gazebo /joint_states snapshot in
+                         exts/aic-dt/docs/topic-parity-reference.md.
+          frame_id:      `base_link`
 
-        Plan 05 Task 2 verdict (joint_ordering_probe.txt) -- NAME-INDEXED, NO-WRAPPER-NEEDED:
-          aic_adapter::ReorderJointState reorders /joint_states by NAME via joint_sort_order_
-          map (aic_adapter.cpp:80-86). Isaac Sim's natural articulation order is functionally
-          fine -- no _isaac_raw rename, no reorder bridge.
+        IMPLEMENTATION NOTE (2026-05-03 Gap-A inline fix):
+          The OGN-based ROS2PublishJointState node from Plan 06 cannot
+          deliver this contract: (a) no jointNames / nameOverrides input,
+          so it publishes USD-prim-leaf names (`gripper_left_finger_joint`
+          underscore form, not `gripper/left_finger_joint`); (b) no frameId
+          input, so header.frame_id is empty string; (c) only emits the
+          articulation's natural DOF order (URDF kinematic-chain), not
+          alphabetical; (d) cannot include the `gripper/left_finger_joint`
+          7th name -- the Hand-E finger is a PhysicsFixedJoint with zero
+          DOF and is not part of the articulation. aic_adapter::ReorderJointState
+          is name-indexed against literal `gripper/left_finger_joint`
+          (aic_adapter.cpp:86), so the slashed name is non-negotiable.
 
-        Open question (RESEARCH.md A1) -- DEFERRED PER PLAN BODY:
-          ROS2PublishJointState OGN spec (Isaac Sim 4.2 doc, kept-API in 5.0) has NO
-          jointNames or nameOverrides input -- the joint name is the USD joint-prim leaf.
-          aic_adapter (line 86) expects `gripper/left_finger_joint` (with slash) but
-          Isaac Sim publishes `gripper_left_finger_joint` (USD prim leaf, with underscore --
-          USD prim names cannot legally contain '/'). aic_adapter silently drops unexpected
-          joint names. Plan 06 PLAN.md L302 documents this as the "follow-up plan" deferral
-          (open question A1 surfacing) -- a wrapper or USD-side rename is required, but it's
-          architecturally outside this plan's 4-surface contract.
+          Solution: bypass OGN and publish via rclpy. The 7th joint is
+          published with a constant 0.0 position (the Hand-E gripper does
+          not animate in the unified USD; matches the FixedJoint reality
+          while satisfying aic_adapter's name-indexed reorder). 6 arm DOFs
+          read live from the Articulation API.
 
-          The verify harness (Plan 07/08 verify_phase_1.sh) MUST surface this gap with:
-              ros2 topic echo /joint_states --once | yq '.name'
-            and assert all 7 expected names are present (including gripper/left_finger_joint).
-            If gripper_left_finger_joint surfaces instead -> a follow-up plan addresses.
-
-        Verify (Plan 07/08 verify_phase_1.sh executes once Isaac Sim is running):
+        Verify (Plan 07/08 verify_phase_1.sh):
             ros2 topic info /joint_states --verbose
               -> Type: sensor_msgs/msg/JointState
-            ros2 topic echo /joint_states --once
-              -> name: ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
-                        'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint',
-                        'gripper/left_finger_joint']  # the slashed name -- expected to FAIL
-                                                      # pre-follow-up (surfaces deferral).
+            ros2 topic echo /joint_states --once | yq '.name'
+              -> [elbow_joint, gripper/left_finger_joint, shoulder_lift_joint,
+                  shoulder_pan_joint, wrist_1_joint, wrist_2_joint, wrist_3_joint]
+            ros2 topic echo /joint_states --once | yq '.header.frame_id'
+              -> base_link
         """
-        from isaacsim.core.utils.extensions import enable_extension
+        print("[AIC-DT] Setting up JointState Publisher via rclpy (/joint_states)...")
+        self._remove_legacy_publish_graphs()
+        self._start_aic_parity_publishers()
 
-        print("Setting up UR5e JointState Publisher (/joint_states)...")
+    def _remove_legacy_publish_graphs(self):
+        """Tear down OGN action graphs from Plan 06 if any remain.
 
-        enable_extension("isaacsim.ros2.bridge")
-        enable_extension("isaacsim.core.nodes")
-        enable_extension("omni.graph.action")
-
-        graph_path = "/Graph/ActionGraph_UR5e_JointStatePublish"
-        keys = og.Controller.Keys
+        Idempotent. Prevents the legacy OGN nodes from racing the rclpy
+        publishers on /tf and /joint_states topic ownership.
+        """
         stage = omni.usd.get_context().get_stage()
+        for path in ("/Graph/ActionGraph_UR5e_TFPublish",
+                     "/Graph/ActionGraph_UR5e_JointStatePublish"):
+            if stage.GetPrimAtPath(path):
+                stage.RemovePrim(path)
+                print(f"[AIC-DT][parity] Removed legacy OGN graph: {path}")
 
-        # Idempotent cleanup
-        if stage.GetPrimAtPath(graph_path):
-            stage.RemovePrim(graph_path)
+    def _start_aic_parity_publishers(self):
+        """Start the shared AicParityPublishers manager (idempotent).
 
-        # Plan 05 Task 2 contract -- topicName is conditional on the joint-ordering probe verdict.
-        # Read the verdict from the .txt at runtime so re-running the probe with a different
-        # outcome (e.g. AIC repo refactors aic_adapter into positional access) flips the topic
-        # without an extension code edit. NO-WRAPPER-NEEDED -> "joint_states";
-        # ADD-TASK-4-WRAPPER -> "joint_states_isaac_raw" (consumed by a downstream reorder bridge).
-        import os as _os
-        _verdict_path = _os.path.join(
-            _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))),
-            "..",
-            ".planning",
-            "phases",
-            "01-foundation-parity",
-            "joint_ordering_probe.txt",
-        )
-        _topic = "joint_states"  # default per Plan 05 verdict (NO-WRAPPER-NEEDED)
+        Both setup_tf_publish_action_graph and
+        setup_joint_state_publish_action_graph delegate here. The manager
+        owns the rclpy node, /joint_states + /tf + /tf_static publishers,
+        and the physics-step callback that computes and publishes each
+        tick. Safe to call multiple times -- internally tears down prior
+        state before re-initializing.
+        """
         try:
-            if _os.path.exists(_verdict_path):
-                with open(_verdict_path, "r") as _f:
-                    _content = _f.read()
-                if "Action: ADD-TASK-4-WRAPPER" in _content:
-                    _topic = "joint_states_isaac_raw"
-        except Exception as _exc:
-            print(f"[AIC-DT] Warning: could not read joint_ordering_probe.txt: {_exc}")
-            print("[AIC-DT]   Using default topic 'joint_states' per Plan 05 verdict.")
-
-        (graph, nodes, _, _) = og.Controller.edit(
-            {"graph_path": graph_path, "evaluator_name": "execution"},
-            {
-                keys.CREATE_NODES: [
-                    ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
-                    ("ros2_context", "isaacsim.ros2.bridge.ROS2Context"),
-                    ("isaac_read_simulation_time", "isaacsim.core.nodes.IsaacReadSimulationTime"),
-                    ("publish_joint_state", "isaacsim.ros2.bridge.ROS2PublishJointState"),
-                ],
-                keys.SET_VALUES: [
-                    ("ros2_context.inputs:useDomainIDEnvVar", True),
-                    ("ros2_context.inputs:domain_id", 0),
-                    ("publish_joint_state.inputs:topicName", _topic),
-                    ("publish_joint_state.inputs:nodeNamespace", ""),
-                    ("isaac_read_simulation_time.inputs:resetOnStop", False),
-                ],
-                keys.CONNECT: [
-                    ("on_playback_tick.outputs:tick", "publish_joint_state.inputs:execIn"),
-                    ("ros2_context.outputs:context", "publish_joint_state.inputs:context"),
-                    ("isaac_read_simulation_time.outputs:simulationTime", "publish_joint_state.inputs:timeStamp"),
-                ],
-            },
-        )
-
-        # targetPrim relationship -> /World/UR5e/aic_unified_robot/root_joint
-        # (per RESEARCH.md Pattern 1 line 466 -- the PhysicsFixedJoint, not the Xform parent;
-        # verified existent by Task 0 probe_root_joint.py)
-        articulation_root = f"{self._articulation_root_prim_path}/root_joint"
-        js_node_path = f"{graph_path}/publish_joint_state"
-        js_prim = stage.GetPrimAtPath(js_node_path)
-        if js_prim and js_prim.IsValid():
-            target_rel = js_prim.GetRelationship("inputs:targetPrim")
-            if not target_rel:
-                target_rel = js_prim.CreateRelationship("inputs:targetPrim", custom=True)
-            target_rel.SetTargets([Sdf.Path(articulation_root)])
-        else:
-            print(f"[AIC-DT] Warning: JointState publish node not created at {js_node_path}")
-
-        print(f"[AIC-DT] JointState publisher action graph created at {graph_path} (/{_topic})")
-        print(f"[AIC-DT]   targetPrim={articulation_root}")
-        print("[AIC-DT]   NOTE: gripper_left_finger_joint -> gripper/left_finger_joint name override")
-        print("[AIC-DT]   is deferred (per Plan 06 PLAN.md L302) -- aic_adapter will silently drop")
-        print("[AIC-DT]   the un-slashed joint until a follow-up plan adds the rename surface.")
+            from .parity_publishers import AicParityPublishers
+        except Exception as exc:
+            print(f"[AIC-DT][parity] Failed to import parity_publishers: {exc!r}")
+            return
+        if self._aic_parity_publishers is None:
+            self._aic_parity_publishers = AicParityPublishers(
+                robot_xform_path=self._articulation_root_prim_path
+            )
+        ok = self._aic_parity_publishers.start()
+        if not ok:
+            print("[AIC-DT][parity] Publisher start() returned False -- check rclpy availability.")
 
     # ==================== Wrist Cameras ====================
 
@@ -3294,6 +3182,14 @@ class DigitalTwin(omni.ext.IExt):
 
         self._stop_mcp_server()
         self._stop_force_publish()
+
+        # Stop the rclpy-based AIC parity publishers (idempotent).
+        if self._aic_parity_publishers is not None:
+            try:
+                self._aic_parity_publishers.stop()
+            except Exception as exc:
+                print(f"[AIC-DT][parity] stop() failed in shutdown: {exc!r}")
+            self._aic_parity_publishers = None
 
         print("ROS2 bridge shutdown handled by Isaac Sim")
 
