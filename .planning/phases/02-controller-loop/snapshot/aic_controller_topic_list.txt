@@ -1,0 +1,7 @@
+/aic/gazebo/contacts/off_limit
+/aic_controller/controller_state
+/aic_controller/joint_commands
+/aic_controller/joint_motion_update
+/aic_controller/motion_update
+/aic_controller/pose_commands
+/aic_controller/transition_event

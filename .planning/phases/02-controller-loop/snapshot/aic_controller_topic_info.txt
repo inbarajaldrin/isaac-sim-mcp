@@ -1,0 +1,103 @@
+--- /aic_controller/joint_commands ---
+Type: aic_control_interfaces/msg/JointMotionUpdate
+
+Publisher count: 0
+
+Subscription count: 1
+
+Node name: aic_controller
+Node namespace: /
+Topic type: aic_control_interfaces/msg/JointMotionUpdate
+Topic type hash: RIHS01_baaae2a983e673e191e3a692eb2d7df38052371ec0076880da37cfe5ff142abd
+Endpoint type: SUBSCRIPTION
+GID: 68.6e.8c.68.b9.79.9b.0c.9a.6a.fa.8d.9e.7d.37.42
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): KEEP_LAST (10)
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+--- /aic_controller/pose_commands ---
+Type: aic_control_interfaces/msg/MotionUpdate
+
+Publisher count: 0
+
+Subscription count: 1
+
+Node name: aic_controller
+Node namespace: /
+Topic type: aic_control_interfaces/msg/MotionUpdate
+Topic type hash: RIHS01_cb386f5a55dc82be690c2061e0b0028a0688df13ec3ef66321b601e3c0a474b0
+Endpoint type: SUBSCRIPTION
+GID: fd.91.c6.d5.64.1c.33.aa.8a.2f.b7.22.7e.2b.0c.ad
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): KEEP_LAST (10)
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+--- /aic_controller/controller_state ---
+Type: aic_control_interfaces/msg/ControllerState
+
+Publisher count: 1
+
+Node name: aic_controller
+Node namespace: /
+Topic type: aic_control_interfaces/msg/ControllerState
+Topic type hash: RIHS01_2c327810f97c344f802e4700c65ee0a2a14c6d7a648d612b502f7a5268bcc742
+Endpoint type: PUBLISHER
+GID: 43.34.fd.09.9c.0e.31.62.a0.83.82.46.3a.1f.5b.e4
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): KEEP_LAST (42)
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 1
+
+Node name: aic_adapter_node
+Node namespace: /
+Topic type: aic_control_interfaces/msg/ControllerState
+Topic type hash: RIHS01_2c327810f97c344f802e4700c65ee0a2a14c6d7a648d612b502f7a5268bcc742
+Endpoint type: SUBSCRIPTION
+GID: 88.38.8b.a3.63.24.e8.79.f5.07.95.24.54.71.c0.82
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): KEEP_LAST (5)
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+--- /aic/gazebo/contacts/off_limit ---
+Type: ros_gz_interfaces/msg/Contacts
+
+Publisher count: 1
+
+Node name: ros_gz_bridge
+Node namespace: /
+Topic type: ros_gz_interfaces/msg/Contacts
+Topic type hash: RIHS01_2cf36dd51e105580839fb7d6c028846a6342a8dfd62fde733d05f3e0c9ec4b5b
+Endpoint type: PUBLISHER
+GID: 50.92.48.94.be.14.04.5a.01.07.a1.ee.25.73.7f.00
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): KEEP_LAST (10)
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 0
+
