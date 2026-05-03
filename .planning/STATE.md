@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 2 Plan 03 EXECUTED ✓ (autonomous M1 mode, 2 min). PARITY-09 wired end-to-end in code — controller_loop.py grew 393→565 LOC: module-level constants block (ARM_JOINTS, GRIPPER_NOOP, MODE_*/TARGET_MODE_*, N_ARM_JOINTS); _on_joint_cmd validation body (mode/positions/velocities/stiffness/damping size checks per aic_controller.cpp:236-330; drop-silently per D-11); _apply_joint_cmd full body (name-keyed parser per D-09 with gripper FixedJoint silent no-op + unknown-name warn-skip; Articulation.set_gains for per-joint kps/kds; Articulation.apply_action(ArticulationActions(joint_positions=..., joint_efforts=..., joint_names=...)) per D-06; Cartesian fields untouched as MotionUpdate-side); bookkeeping fields (_last_reference_joint_state + _last_target_mode = TARGET_MODE_JOINT) populated for Plan 02-05's ControllerState publish. 1 deviation auto-fixed (Rule 1 — TrajectoryGenerationMode enum values inverted in plan body; corrected to message-source-of-truth VELOCITY=1, POSITION=2). 1 task commit (4428b68) + metadata commit pending. End-to-end runtime verification deferred to Plan 02-06 smoke test (canonical phase plan gate). Auto-advancing to Plan 02-04 next.
-last_updated: "2026-05-03T20:31:42.000Z"
-last_activity: 2026-05-03 -- /gsd-execute-phase 2 Plan 03 complete: PARITY-09 implementation (joint_commands subscriber + applier + name-keyed parser + Articulation.set_gains + apply_action). 1 deviation auto-fixed (Rule 1 enum values). Files: 1 modified (controller_loop.py +177/-5).
+stopped_at: Phase 2 Plan 04 EXECUTED ✓ (autonomous M1 mode, 3 min). PARITY-10 wired end-to-end in code — controller_loop.py grew 565→839 LOC (+274). 2 task commits (cc5ec52: _setup_kinematics with LulaKinematicsSolver from bundled UR5e config + ArticulationKinematicsSolver(end_effector_frame_name='tool0') + UsdGeom.XformCache.GetLocalToWorldTransform capture of static tool0<->gripper/tcp SE(3) offsets, both directions cached as 4x4 numpy.float64 — Pitfall 2 Option A; b31732b: _on_pose_cmd validation per aic_controller.cpp:218-227 (frame_id ∈ {base_link, gripper/tcp}, mode ≠ UNSPECIFIED) + _apply_pose_cmd full body with gripper/tcp ingress transform via cached self._tcp_to_tool0_offset_xform pre-multiplication, ROS->Lula quat order conversion at boundary per Pitfall 4, D-06 ignored-field debug-log discipline for target_stiffness/feedforward_wrench_at_tip, D-11 try/except spam-guarded apply_action, bookkeeping _last_reference_tcp_pose + _last_target_mode = TARGET_MODE_CARTESIAN populated for Plan 02-05). 0 deviations from plan (defensive __init__/stop() init of SE(3) matrix attrs to None matches existing skeleton discipline; not a behavioral change). All 22 verification gates PASS. End-to-end runtime verification deferred to Plan 02-06 smoke test. Auto-advancing to Plan 02-05 (PARITY-11 ControllerState publisher) next — note Plan 02-05 reuses self._kinematics for FK and self._tool0_to_tcp_offset_xform for tcp_pose egress.
+last_updated: "2026-05-03T20:40:03.000Z"
+last_activity: 2026-05-03 -- /gsd-execute-phase 2 Plan 04 complete: PARITY-10 implementation (pose_commands subscriber + Lula IK + Pitfall 2 Option A static SE(3) offset for gripper/tcp). 0 deviations. Files: 1 modified (controller_loop.py +274/-6).
 progress:
   total_phases: 4
   completed_phases: 0
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 
 ## Current Position
 
-Phase: 2 (Controller Loop) — EXECUTING; Plan 3 of 6 complete
-Plan: 02-03 ✓ → 02-04 next
-Status: PARITY-09 wired in code. controller_loop.py grew 393→565 LOC: module-level constants (ARM_JOINTS / GRIPPER_NOOP / MODE_*/TARGET_MODE_* / N_ARM_JOINTS) + _on_joint_cmd validation body (mode-gated size checks; drop-silently per D-11) + _apply_joint_cmd full body (name-keyed parser per D-09 with gripper noop + unknown-name warn; Articulation.set_gains + apply_action per D-06; bookkeeping fields populated for Plan 02-05). End-to-end runtime verification deferred to Plan 02-06 smoke test (canonical phase plan gate per the plan body). Wave structure unchanged: 1→2→3✓→4→5→6.
-Last activity: 2026-05-03 -- /gsd-execute-phase 2 Plan 03 (2 min): PARITY-09 joint_commands subscriber + name-keyed applier (Articulation.set_gains + apply_action). 1 deviation Rule 1 (TrajectoryGenerationMode enum values inverted in plan body — corrected to message source-of-truth). Files: 1 modified (controller_loop.py +177/-5). Auto-advancing to Plan 02-04.
+Phase: 2 (Controller Loop) — EXECUTING; Plan 4 of 6 complete
+Plan: 02-04 ✓ → 02-05 next
+Status: PARITY-10 wired in code. controller_loop.py grew 565→839 LOC (+274). _setup_kinematics initializes LulaKinematicsSolver from bundled UR5e config + ArticulationKinematicsSolver(end_effector_frame_name="tool0") + caches static tool0<->gripper/tcp SE(3) offsets via UsdGeom.XformCache (Pitfall 2 Option A; both directions, 4x4 numpy.float64). _on_pose_cmd validates frame_id ∈ {base_link, gripper/tcp} + non-UNSPECIFIED mode (drop-silently per D-11). _apply_pose_cmd: gripper/tcp ingress pre-multiplies by self._tcp_to_tool0_offset_xform; ROS->Lula quat order conversion at boundary (Pitfall 4); D-06 ignored-field discipline (target_stiffness, feedforward_wrench_at_tip log+ignore); compute_inverse_kinematics + apply_action; bookkeeping _last_reference_tcp_pose + _last_target_mode = TARGET_MODE_CARTESIAN populated for Plan 02-05. PyKDL fallback documented inline but not implemented (D-02). All 22 verification gates PASS. End-to-end runtime verification deferred to Plan 02-06 smoke test. Wave structure unchanged: 1→2→3→4✓→5→6.
+Last activity: 2026-05-03 -- /gsd-execute-phase 2 Plan 04 (3 min): PARITY-10 pose_commands subscriber + Lula IK + Pitfall 2 Option A static SE(3) offset for gripper/tcp. 0 deviations. Files: 1 modified (controller_loop.py +274/-6). Auto-advancing to Plan 02-05.
 
-Progress: [█████████░] M1 ~46% (Phase 1 closed + Phase 2 plans 1-3 of 6 done; execution pending for plans 02-04..06; Phase 3 SCENE-05 = ~3-4hr; Phase 4 = trial loader + E2E)
+Progress: [█████████░] M1 ~50% (Phase 1 closed + Phase 2 plans 1-4 of 6 done; execution pending for plans 02-05..06; Phase 3 SCENE-05 = ~3-4hr; Phase 4 = trial loader + E2E)
 
 ## Phase 2 Plans
 
@@ -39,7 +39,7 @@ Progress: [█████████░] M1 ~46% (Phase 1 closed + Phase 2 pla
 | 02-01 ✓ | 1 | Custom message workspace rebuild (Python 3.11 humble) + topic-name discovery probe + off-limit prim mapping | (infra for PARITY-06/09/10/11) |
 | 02-02 ✓ | 2 | controller_loop.py skeleton + 2 MCP atoms (8 surface additions per DX-02) + manager helper + on_shutdown + quick_start hook | (skeleton infra) |
 | 02-03 ✓ | 3 | PARITY-09: joint_commands subscriber + name-keyed parser + per-joint set_gains + apply_action | PARITY-09 |
-| 02-04 | 4 | PARITY-10: pose_commands subscriber + Lula IK + Pitfall #2 Option A static offset for gripper/tcp | PARITY-10 |
+| 02-04 ✓ | 4 | PARITY-10: pose_commands subscriber + Lula IK + Pitfall #2 Option A static offset for gripper/tcp | PARITY-10 |
 | 02-05 | 5 | PARITY-11: ControllerState publisher (FK + numerical-diff velocity + reference echoes + zero tare) | PARITY-11 |
 | 02-06 | 6 | PARITY-06: omni.physx contact-report + Contacts publish + smoke_test_aic_controller.py + verify_phase_2.sh + 02-SUMMARY + flag flips | PARITY-06 |
 
@@ -47,21 +47,21 @@ Progress: [█████████░] M1 ~46% (Phase 1 closed + Phase 2 pla
 
 **Velocity:**
 
-- Total plans completed: 12
-- Average duration: 9.6 min
-- Total execution time: 115 min
+- Total plans completed: 13
+- Average duration: 9.1 min
+- Total execution time: 118 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | Phase 1 | 9 | 59 min | 6.6 min |
-| Phase 2 | 3 | 56 min | 18.7 min |
+| Phase 2 | 4 | 59 min | 14.8 min |
 
 **Recent Trend:**
 
-- Last 12 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min), 01-06 (6 min), 01-07 (10 min), 01-09 (8 min), 01-08 (10 min), 02-01 (49 min), 02-02 (5 min), 02-03 (2 min)
-- Trend: 02-03 was the fastest plan to date (1 task, 1 file modified). The skeleton's lifecycle wiring meant only callback bodies needed authoring; the in-context source-of-truth message file caught the plan-body enum inversion at constants-block authoring time (Rule 1 deviation). Hand-off to Plan 02-04: same `controller_loop.py` file, same lifecycle hooks; will follow the exact same _on_*/_apply_* pair pattern for MotionUpdate (pose_commands).
+- Last 13 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min), 01-06 (6 min), 01-07 (10 min), 01-09 (8 min), 01-08 (10 min), 02-01 (49 min), 02-02 (5 min), 02-03 (2 min), 02-04 (3 min)
+- Trend: 02-04 finished in 3 min — second-fastest plan, just behind 02-03. Two reasons: (a) the skeleton + 02-03 had already established the _on_*/_apply_* pair pattern, lifecycle hooks, and bookkeeping discipline so 02-04 was pure pattern-fill; (b) the plan body's verification gates were exhaustive (22 grep checks + AST parse) and all passed first try, so no fix-retry-fix cycle. Hand-off to Plan 02-05 (PARITY-11): same `controller_loop.py`; reuses self._kinematics for FK and self._tool0_to_tcp_offset_xform for tcp_pose egress (post-multiply on FK tool0 pose).
 
 *Updated after each plan completion*
 
