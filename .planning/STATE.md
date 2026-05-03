@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Phase 2 Plan 05 EXECUTED ✓ (autonomous M1 mode, ~2 min). PARITY-11 wired end-to-end in code — controller_loop.py grew 837→965 LOC (+128/-2). 1 task commit (cd925b8: _publish_controller_state full body per D-07: header.frame_id="base_link" + sim-clock stamp; tcp_pose via FK on self._kinematics.compute_end_effector_pose() with rot_matrices_to_quats wxyz->ROS xyzw boundary reorder per Pitfall 4; tcp_velocity.linear via 3-sample ring-buffer numerical-diff on self._tcp_pose_buffer with dt floor=1e-6 (angular left at 0 first-cut, documented inline as deferred); reference_tcp_pose passthrough echo from self._last_reference_tcp_pose set by Plan 02-04; tcp_error[0..2] = current - reference for x/y/z with defensive array.array vs list rosidl backend handling, [3..5] = 0 first-cut documented as deferred; reference_joint_state passthrough echo from self._last_reference_joint_state set by Plan 02-03; target_mode.mode = self._last_target_mode (TARGET_MODE_* enum re-verified against TargetMode.msg source-of-truth — exact match, no Plan 02-03-style inversion bug); fts_tare_offset zero WrenchStamped with frame_id="ati/tool_link" per D-07 Isaac-Sim-doesn't-tare policy; D-11 try/except + log-once via self._logged_publish_error around FK + publish call). 0 deviations from plan (the implementation transcribes the plan body verbatim; +128 LOC vs ~70-100 estimate is pure docstring overhead documenting the "tcp_pose at tool0 frame" decision + the two deferred items inline). All 13 plan acceptance gates PASS (AST parse + 12 grep checks). End-to-end runtime verification deferred to Plan 02-06 smoke test. PARITY-09/10/11 callback chain now end-to-end at the code level. Auto-advancing to Plan 02-06 (PARITY-06 contact-report + smoke test + phase closure) next.
-last_updated: "2026-05-03T20:46:48.000Z"
-last_activity: 2026-05-03 -- /gsd-execute-phase 2 Plan 05 complete: PARITY-11 implementation (ControllerState publisher with FK + numerical-diff velocity + reference echoes + zero tare). 0 deviations. Files: 1 modified (controller_loop.py +128/-2).
+status: between-phases
+stopped_at: Phase 2 CLOSED ✓ (autonomous M1 mode). Plan 02-06 EXECUTED — PARITY-06 (omni.physx contact-report subscription per robot-collision-forensics skill) wired end-to-end in code; smoke_test_aic_controller.py (D-12 7-step verifier; 291 LOC) + verify_phase_2.sh (5-step harness; 132 LOC) shipped; REQUIREMENTS.md PARITY-06/09/10/11 flipped [ ] -> [x] with citations + traceability table updated; 02-SUMMARY.md + 02-06-SUMMARY.md written. controller_loop.py grew 965→1196 LOC (+231/-7). 4 task commits (962bd8d feat 02-06 contact-report; 08bba68 test 02-06 smoke; b147231 test 02-06 harness; closure commit pending). 4 deviations (all Rule 1 auto-fixes documented in 02-06-SUMMARY): (1) DEFAULT_OFF_LIMIT_PRIMS replaced fictional plan fallback with offlimit-prim-mapping.md canonical 3 prefixes (/World/Enclosure, /World/Enclosure_Walls, /World/TaskBoard); (2) prefix-startswith filter on contact actor paths instead of `in` set check (handles descendant collider paths correctly); (3) smoke test trajectory_generation_mode.mode=2 not 1 (MODE_POSITION per TrajectoryGenerationMode.msg, not the plan's literal which would be MODE_VELOCITY); (4) verify_phase_2.sh WS_INSTALL path uses per-package layout not merged-install assumption. Phase 2 score: 4/4 must-haves implemented in code; runtime smoke gated on next session's quick_start (Isaac Sim still on PID 3170454, MCP socket 8768 live, but pre-Plan-02-06 stage state). Auto-pause between Phases 2 and 3 per autonomous-mode locked-in policy. Next: /gsd-discuss-phase 3 (Cable Physics — SCENE-05/06 + PARITY-07/08).
+last_updated: "2026-05-03T21:00:00.000Z"
+last_activity: 2026-05-03 -- /gsd-execute-phase 2 Plan 06 + Phase 2 closure complete: PARITY-06 omni.physx contact-report + smoke + harness + 4 PARITY flag flips + 02-SUMMARY.md. 4 Rule 1 auto-fixes (offlimit list canonical replacement, prefix-startswith filter, MODE_POSITION enum value, per-package WS_INSTALL path). Files: 1 modified (controller_loop.py +231/-7), 4 created (smoke_test_aic_controller.py, verify_phase_2.sh, 02-06-SUMMARY.md, 02-SUMMARY.md).
 progress:
   total_phases: 4
-  completed_phases: 0
-  total_plans: 12
-  completed_plans: 12
-  percent: 100
+  completed_phases: 2
+  total_plans: 15
+  completed_plans: 15
+  percent: 50
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-01)
 
 **Core value:** When the same `aic_controller` + `aic_example_policies/CheatCode.py` + `sample_config.yaml` that pass AIC trials in Gazebo are pointed at this Isaac Sim digital twin, every trial passes with the same outcome.
-**Current focus:** Phase 1 — Foundation Parity
+**Current focus:** Between phases — Phase 2 (Controller Loop) closed; Phase 3 (Cable Physics) next via `/gsd-discuss-phase 3`.
 
 ## Current Position
 
-Phase: 2 (Controller Loop) — EXECUTING; Plan 5 of 6 complete
-Plan: 02-05 ✓ → 02-06 next
-Status: PARITY-11 wired in code. controller_loop.py grew 837→965 LOC (+128/-2). _publish_controller_state populated per D-07: header.frame_id="base_link" + sim-clock stamp; tcp_pose via FK reusing Plan 02-04's self._kinematics (compute_end_effector_pose returns ee_pos+ee_rot; rot_matrices_to_quats wxyz reordered to ROS xyzw at boundary per Pitfall 4); tcp_velocity.linear via 3-sample ring-buffer numerical-diff on self._tcp_pose_buffer (dt floor=1e-6; angular=0 first-cut documented as deferred); reference_tcp_pose echo from Plan 02-04 bookkeeping; tcp_error[0..2] = pos delta with defensive array.array/list rosidl handling, [3..5] = 0 first-cut deferred; reference_joint_state echo from Plan 02-03 bookkeeping; target_mode.mode = self._last_target_mode (enum re-verified against TargetMode.msg — exact match); fts_tare_offset = zero WrenchStamped with frame_id="ati/tool_link" per D-07 (Isaac Sim doesn't tare; aic_controller does from /fts_broadcaster/wrench history per aic_controller.cpp:1275). D-11 try/except + log-once via self._logged_publish_error wraps FK + publish call. 0 deviations. All 13 plan acceptance gates PASS. PARITY-09/10/11 callback chain now end-to-end at the code level. End-to-end runtime verification deferred to Plan 02-06 smoke test. Wave structure unchanged: 1→2→3→4→5✓→6.
-Last activity: 2026-05-03 -- /gsd-execute-phase 2 Plan 05 (~2 min): PARITY-11 ControllerState publisher (FK + numerical-diff velocity + reference echoes + zero tare). 0 deviations. Files: 1 modified (controller_loop.py +128/-2). Auto-advancing to Plan 02-06.
+Phase: 2 (Controller Loop) — CLOSED; all 6 plans complete; 4 PARITY flags flipped
+Plan: 02-06 ✓ (Phase 2 closure landed)
+Status: Phase 2 fully closed. PARITY-06/09/10/11 wired end-to-end in code. controller_loop.py final: 1196 LOC (vs 0 at Phase 2 start). smoke_test_aic_controller.py (291 LOC) + verify_phase_2.sh (132 LOC) ship. REQUIREMENTS.md flipped + traceability table updated + footer rewritten. Per-plan SUMMARY (02-06-SUMMARY.md) and per-phase SUMMARY (02-SUMMARY.md) written. 4 Rule 1 auto-fixes documented (offlimit canonical list, prefix-startswith filter, MODE_POSITION enum value, per-package WS_INSTALL path). End-to-end runtime smoke gated on next session's new_stage + quick_start (Isaac Sim still on PID 3170454 with MCP socket 8768 live, but stage state is pre-Plan-02-06).
+Last activity: 2026-05-03 -- /gsd-execute-phase 2 Plan 06 + Phase 2 closure complete (~12 min): PARITY-06 omni.physx contact-report subscription + D-12 smoke + verify harness + 4 PARITY flag flips + 02-SUMMARY.md. Auto-paused between Phases 2 and 3 per autonomous-mode locked-in policy.
 
-Progress: [█████████░] M1 ~50% (Phase 1 closed + Phase 2 plans 1-4 of 6 done; execution pending for plans 02-05..06; Phase 3 SCENE-05 = ~3-4hr; Phase 4 = trial loader + E2E)
+Progress: [██████████░] M1 ~50% (Phase 1 + Phase 2 closed; Phase 3 SCENE-05 cable physics + SCENE-06 object TF + PARITY-07/08 ~3-4hr; Phase 4 trial loader + E2E)
 
 ## Phase 2 Plans
 
@@ -41,27 +41,27 @@ Progress: [█████████░] M1 ~50% (Phase 1 closed + Phase 2 pla
 | 02-03 ✓ | 3 | PARITY-09: joint_commands subscriber + name-keyed parser + per-joint set_gains + apply_action | PARITY-09 |
 | 02-04 ✓ | 4 | PARITY-10: pose_commands subscriber + Lula IK + Pitfall #2 Option A static offset for gripper/tcp | PARITY-10 |
 | 02-05 ✓ | 5 | PARITY-11: ControllerState publisher (FK + numerical-diff velocity + reference echoes + zero tare) | PARITY-11 |
-| 02-06 | 6 | PARITY-06: omni.physx contact-report + Contacts publish + smoke_test_aic_controller.py + verify_phase_2.sh + 02-SUMMARY + flag flips | PARITY-06 |
+| 02-06 ✓ | 6 | PARITY-06: omni.physx contact-report + Contacts publish + smoke_test_aic_controller.py + verify_phase_2.sh + 02-SUMMARY + flag flips | PARITY-06 |
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 14
-- Average duration: 8.6 min
-- Total execution time: 120 min
+- Total plans completed: 15
+- Average duration: 8.8 min
+- Total execution time: 132 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | Phase 1 | 9 | 59 min | 6.6 min |
-| Phase 2 | 5 | 61 min | 12.2 min |
+| Phase 2 | 6 | 73 min | 12.2 min |
 
 **Recent Trend:**
 
-- Last 14 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min), 01-06 (6 min), 01-07 (10 min), 01-09 (8 min), 01-08 (10 min), 02-01 (49 min), 02-02 (5 min), 02-03 (2 min), 02-04 (3 min), 02-05 (~2 min)
-- Trend: 02-05 finished in ~2 min — fastest plan to date, tied with 02-03. Same pattern as 02-04: skeleton + Plans 02-02/03/04 had already established (a) the lifecycle plumbing, (b) the bookkeeping vars (_last_reference_*, _last_target_mode, _tcp_pose_buffer, _logged_publish_error all already initialized in __init__/stop), and (c) the lazy-import-inside-callback contract — so Plan 02-05 was pure pattern-fill against an established surface. The plan body specified the full ~100-LOC method literally; transcription + 13 grep gate verification was the only work. Hand-off to Plan 02-06 (PARITY-06): same `controller_loop.py`; the omni.physx contact-report subscription is a new surface (not pattern-fill), so expect closer to 02-04's 3-min duration than 02-03/05's 2-min. Plan 02-06 also writes the smoke_test_aic_controller.py D-12 verifier, verify_phase_2.sh harness, REQUIREMENTS.md flag flips, and 02-SUMMARY.md (phase closure) — biggest plan in Phase 2 by surface area.
+- Last 15 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min), 01-06 (6 min), 01-07 (10 min), 01-09 (8 min), 01-08 (10 min), 02-01 (49 min), 02-02 (5 min), 02-03 (2 min), 02-04 (3 min), 02-05 (~2 min), 02-06 (~12 min)
+- Trend: 02-06 took ~12 min — the predicted hand-off pattern played out. ~5x longer than the pure-pattern-fill plans (02-03/04/05) because PARITY-06 introduces a genuinely new surface (omni.physx contact-report subscription pipeline, ros_gz_interfaces/Contacts message construction) AND the closure pass writes 5 new artifacts (smoke_test_aic_controller.py 291 LOC, verify_phase_2.sh 132 LOC, 02-06-SUMMARY.md, 02-SUMMARY.md, REQUIREMENTS.md edits). 4 Rule 1 auto-fixes during execution: (1) DEFAULT_OFF_LIMIT_PRIMS canonical replacement vs plan's fictional fallback list; (2) prefix-startswith filter for actor paths (plan's `in` check would silently no-op on descendant collider paths); (3) MODE_POSITION enum value 2 (not plan's literal 1 = MODE_VELOCITY); (4) per-package WS_INSTALL path (plan assumed merged-install layout that doesn't exist on disk). All caught and fixed at write-time; 0 caused harness re-runs. Phase 2 now closed; auto-paused per autonomous-mode locked-in policy. Hand-off to Phase 3 (Cable Physics): different surface entirely (USD-side mass/inertia authoring + ros2 publishers for cable-link TF + scoring topics). Per CLAUDE.md SCENE-05 guidance, Phase 3 is now a smaller in-place USD edit (mass/inertia authoring on cable subtree) since the cable wedge no longer reproduces under current launch path — not the full deformable-vs-articulated research-gated decision the original ROADMAP scoped.
 
 *Updated after each plan completion*
 
