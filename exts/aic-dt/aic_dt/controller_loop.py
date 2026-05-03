@@ -90,6 +90,41 @@ def _ensure_rclpy_clean_import():
                 break
 
 
+# ----------------------------------------------------------------------
+# Joint mapping constants (D-09)
+# ----------------------------------------------------------------------
+# UR5e arm DOFs — exact joint names from aic_adapter::joint_sort_order_
+# (see ~/Documents/aic/aic_adapter/src/aic_adapter.cpp:80-86).
+ARM_JOINTS = {
+    "shoulder_pan_joint",
+    "shoulder_lift_joint",
+    "elbow_joint",
+    "wrist_1_joint",
+    "wrist_2_joint",
+    "wrist_3_joint",
+}
+# AIC's slashed gripper joint name (FixedJoint zero-DOF in the unified USD).
+# Silently no-op'd per D-09 — gripper opens via /gripper_command (String),
+# not /aic_controller/joint_commands.
+GRIPPER_NOOP = "gripper/left_finger_joint"
+
+# TrajectoryGenerationMode enum (mirrors aic_control_interfaces/TrajectoryGenerationMode.msg).
+# NOTE: source-of-truth ordering — VELOCITY=1, POSITION=2 (NOT the inverse).
+# Verified against ~/Documents/aic/aic_interfaces/aic_control_interfaces/msg/TrajectoryGenerationMode.msg.
+MODE_UNSPECIFIED = 0
+MODE_VELOCITY = 1
+MODE_POSITION = 2
+
+# TargetMode enum (mirrors aic_control_interfaces/TargetMode.msg) —
+# used by ControllerState publish (Plan 02-05 reads self._last_target_mode).
+TARGET_MODE_UNSPECIFIED = 0
+TARGET_MODE_CARTESIAN = 1
+TARGET_MODE_JOINT = 2
+
+# UR5e arm DOF count
+N_ARM_JOINTS = 6
+
+
 class AicControllerLoop:
     """Phase 2 controller-side rclpy class.
 
@@ -351,9 +386,49 @@ class AicControllerLoop:
     # ------------------------------------------------------------------ #
 
     def _on_joint_cmd(self, msg):
-        """STUB — Plan 02-03 implements validation + buffering per D-09/D-11."""
-        # Default skeleton behavior: buffer the message; Plan 02-03 adds validation.
-        self._latest_joint_cmd = msg
+        """Validate incoming JointMotionUpdate per aic_controller.cpp:236-330 and buffer for next physics tick.
+
+        Per D-11: bad commands log debug + return; never raise into the physics callback.
+        Per D-08: callbacks MUST NOT apply commands directly — only buffer to self._latest_joint_cmd.
+
+        Validation mirrors the C++ controller's input checks: MODE_UNSPECIFIED is
+        silently dropped; MODE_POSITION requires positions vector of size n=6;
+        MODE_VELOCITY requires velocities vector of size n=6; if target_stiffness or
+        target_damping is non-empty, it MUST be size n=6 (D-06 per-joint contract).
+        """
+        try:
+            n = N_ARM_JOINTS
+            mode = msg.trajectory_generation_mode.mode
+            if mode == MODE_UNSPECIFIED:
+                self._node.get_logger().debug(
+                    "Dropped joint_cmd: trajectory_generation_mode UNSPECIFIED")
+                return
+            if mode == MODE_POSITION:
+                if len(msg.target_state.positions) != n:
+                    self._node.get_logger().debug(
+                        f"Dropped joint_cmd: positions.size()={len(msg.target_state.positions)} != {n}")
+                    return
+            elif mode == MODE_VELOCITY:
+                if len(msg.target_state.velocities) != n:
+                    self._node.get_logger().debug(
+                        f"Dropped joint_cmd: velocities.size()={len(msg.target_state.velocities)} != {n}")
+                    return
+            # If stiffness or damping vectors are present, they MUST match n (D-06).
+            if msg.target_stiffness and len(msg.target_stiffness) != n:
+                self._node.get_logger().debug(
+                    f"Dropped joint_cmd: target_stiffness.size()={len(msg.target_stiffness)} != {n}")
+                return
+            if msg.target_damping and len(msg.target_damping) != n:
+                self._node.get_logger().debug(
+                    f"Dropped joint_cmd: target_damping.size()={len(msg.target_damping)} != {n}")
+                return
+            # Validation passed — buffer for the physics tick.
+            self._latest_joint_cmd = msg
+        except Exception as exc:
+            # Per D-11: never raise from the callback; log once.
+            if not self._logged_apply_error:
+                self._node.get_logger().debug(f"_on_joint_cmd validation error: {exc!r}")
+                self._logged_apply_error = True
 
     def _on_pose_cmd(self, msg):
         """STUB — Plan 02-04 implements validation + buffering per D-02/D-11."""
@@ -364,8 +439,105 @@ class AicControllerLoop:
     # ------------------------------------------------------------------ #
 
     def _apply_joint_cmd(self, msg):
-        """STUB — Plan 02-03 implements per D-06/D-09."""
-        pass
+        """Apply a validated JointMotionUpdate to the UR5e articulation.
+
+        Per D-09: name-keyed parser. gripper/left_finger_joint silently no-op'd
+                  (FixedJoint zero-DOF). Unknown joint names log a warning and skip
+                  (don't fail the whole message).
+        Per D-06: target_stiffness + target_damping → Articulation.set_gains(joint_names=...);
+                  target_state.positions  → Articulation.apply_action(joint_positions=..., joint_names=...);
+                  target_feedforward_torque → joint_efforts inside the same ArticulationActions.
+                  Cartesian impedance fields (target_pose, target_twist, etc.) are MotionUpdate-side
+                  and are explicitly NOT touched here.
+        Per D-11: this method is wrapped by _on_physics_step's try/except. Any internal
+                  Isaac Sim API failure (set_gains pre-play, apply_action shape mismatch)
+                  is also caught here and log-once'd to avoid log spam.
+        """
+        if self._articulation is None:
+            return  # Pre-play / load_robot not yet run
+
+        import numpy as np
+        from isaacsim.core.utils.types import ArticulationActions
+
+        # Build a name-keyed view of the message's per-joint data. We iterate the
+        # incoming joint_names list (D-09: name-keyed; do NOT assume positional
+        # alignment with Isaac Sim's articulation DOF order — apply_action handles
+        # the index resolution internally via joint_names=...).
+        arm_names = []
+        arm_positions = []
+        arm_efforts = []
+        arm_kps = []
+        arm_kds = []
+
+        msg_joint_names = list(msg.target_state.joint_names)
+        n_msg = len(msg_joint_names)
+
+        # has_* flags require the per-joint vector to align with the message's
+        # joint_names list (one value per joint). Stiffness/damping at the
+        # JointMotionUpdate level are a parallel array indexed by joint_names.
+        has_positions = bool(msg.target_state.positions) and len(msg.target_state.positions) == n_msg
+        has_efforts = bool(msg.target_feedforward_torque) and len(msg.target_feedforward_torque) == n_msg
+        has_stiffness = bool(msg.target_stiffness) and len(msg.target_stiffness) == n_msg
+        has_damping = bool(msg.target_damping) and len(msg.target_damping) == n_msg
+
+        for i, name in enumerate(msg_joint_names):
+            if name == GRIPPER_NOOP:
+                # D-09: FixedJoint zero-DOF — silently no-op
+                continue
+            if name not in ARM_JOINTS:
+                # Unknown joint — warn but don't fail the whole message (D-09).
+                self._node.get_logger().warn(
+                    f"Unknown joint name in joint_cmd: {name!r} — skipping")
+                continue
+            arm_names.append(name)
+            if has_positions:
+                arm_positions.append(float(msg.target_state.positions[i]))
+            if has_efforts:
+                arm_efforts.append(float(msg.target_feedforward_torque[i]))
+            if has_stiffness:
+                arm_kps.append(float(msg.target_stiffness[i]))
+            if has_damping:
+                arm_kds.append(float(msg.target_damping[i]))
+
+        if not arm_names:
+            return  # No valid arm joints in this message
+
+        # Apply gains FIRST so the next PD step uses the new stiffness/damping.
+        # set_gains is a no-op pre-play (Pitfall 6) — wrapped to swallow the
+        # silent-fail signal as a debug log rather than error spam.
+        if (arm_kps and arm_kds
+                and len(arm_kps) == len(arm_names)
+                and len(arm_kds) == len(arm_names)):
+            try:
+                kps = np.array([arm_kps], dtype=np.float32)
+                kds = np.array([arm_kds], dtype=np.float32)
+                self._articulation.set_gains(kps=kps, kds=kds, joint_names=arm_names)
+            except Exception as exc:
+                if not self._logged_apply_error:
+                    self._node.get_logger().debug(f"set_gains failed: {exc!r}")
+                    self._logged_apply_error = True
+
+        # Apply positions + (optional) feedforward efforts via apply_action.
+        # apply_action handles name→DOF-index resolution internally — we only
+        # pass the subset of joints we have data for.
+        if arm_positions and len(arm_positions) == len(arm_names):
+            action_kwargs = {
+                "joint_positions": np.array([arm_positions], dtype=np.float32),
+                "joint_names": arm_names,
+            }
+            if arm_efforts and len(arm_efforts) == len(arm_names):
+                action_kwargs["joint_efforts"] = np.array([arm_efforts], dtype=np.float32)
+            try:
+                self._articulation.apply_action(ArticulationActions(**action_kwargs))
+            except Exception as exc:
+                if not self._logged_apply_error:
+                    self._node.get_logger().debug(f"apply_action failed: {exc!r}")
+                    self._logged_apply_error = True
+                return
+
+        # Bookkeeping for ControllerState publish (Plan 02-05 reads these).
+        self._last_reference_joint_state = msg.target_state
+        self._last_target_mode = TARGET_MODE_JOINT
 
     def _apply_pose_cmd(self, msg):
         """STUB — Plan 02-04 implements per D-02/D-06."""
