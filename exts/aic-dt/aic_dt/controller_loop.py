@@ -707,8 +707,134 @@ class AicControllerLoop:
         # ChainIkSolverPos_LMA / TRAC-IK fallback would slot in.
 
     def _publish_controller_state(self):
-        """STUB — Plan 02-05 implements per D-07."""
-        pass
+        """Publish /aic_controller/controller_state at physics-tick rate per PARITY-11 + D-07.
+
+        D-07 field policy:
+          - MEASURED fields populated: tcp_pose (FK), tcp_velocity (numerical-diff)
+          - REFERENCE fields echo last command: reference_tcp_pose (Plan 02-04),
+            reference_joint_state (Plan 02-03), target_mode
+          - TARE field zero per D-07: fts_tare_offset is zero WrenchStamped with
+            frame_id "ati/tool_link" (Isaac Sim doesn't tare; aic_controller does
+            from /fts_broadcaster/wrench history)
+          - tcp_error: 6-vector (x,y,z) populated; (rx,ry,rz) zero first cut
+            (axis-angle delta is finicky; can be filled later if a CheatCode
+            trial reveals it's needed)
+          - tcp_velocity.angular left at zero first cut (quaternion-diff is finicky)
+
+        Frame conventions:
+          - msg.header.frame_id = "base_link" (matches Phase 1 publisher convention)
+          - tcp_pose: FK on the same self._kinematics Plan 02-04 set up
+            (ArticulationKinematicsSolver, end_effector_frame_name="tool0").
+            NOTE: this returns the tool0 pose; the static tool0->tcp offset is
+            available as self._tool0_to_tcp_offset_xform if a future revision
+            wants tcp-frame egress. First-cut publishes the tool0 FK directly,
+            consistent with the rest of the AIC topic surface (which expresses
+            EE pose at tool0; the Cartesian impedance loop in aic_controller
+            handles the tool0->tcp tip transform on its end).
+
+        Per D-11: any internal failure is caught and log-once'd; never raises
+        into the physics-step callback.
+        """
+        if self._node is None or self._ctrl_state_pub is None:
+            return
+
+        try:
+            from aic_control_interfaces.msg import ControllerState
+        except ImportError:
+            return  # Plan 02-01's workspace rebuild is the prereq; warn-once already in start()
+
+        msg = ControllerState()
+
+        # Header per Phase 1 publisher convention
+        now = self._node.get_clock().now().to_msg()
+        msg.header.stamp = now
+        msg.header.frame_id = "base_link"
+
+        # tcp_pose via FK (D-07: measured field; uses Plan 02-04's self._kinematics)
+        if self._kinematics is not None:
+            try:
+                ee_pos, ee_rot = self._kinematics.compute_end_effector_pose()
+                msg.tcp_pose.position.x = float(ee_pos[0])
+                msg.tcp_pose.position.y = float(ee_pos[1])
+                msg.tcp_pose.position.z = float(ee_pos[2])
+                # Convert rotation matrix to quaternion (returns wxyz)
+                from isaacsim.core.utils.numpy.rotations import rot_matrices_to_quats
+                import numpy as np
+                q_wxyz = rot_matrices_to_quats(np.asarray(ee_rot)[None, :, :])[0]
+                # ROS Quaternion is (x, y, z, w); Pitfall 4 — reorder at boundary
+                msg.tcp_pose.orientation.w = float(q_wxyz[0])
+                msg.tcp_pose.orientation.x = float(q_wxyz[1])
+                msg.tcp_pose.orientation.y = float(q_wxyz[2])
+                msg.tcp_pose.orientation.z = float(q_wxyz[3])
+            except Exception as exc:
+                if not self._logged_publish_error:
+                    self._node.get_logger().debug(f"FK compute_end_effector_pose failed: {exc!r}")
+                    self._logged_publish_error = True
+
+        # tcp_velocity via numerical-diff (D-07; 3-sample ring buffer per CONTEXT discretion).
+        # First 1-2 samples will produce zero velocity (warmup); after that we have at least
+        # two samples in the buffer and can compute a finite difference.
+        t_sec = self._node.get_clock().now().nanoseconds * 1e-9
+        # Snapshot the just-computed tcp_pose position (cheap tuple copy)
+        self._tcp_pose_buffer.append((t_sec, (
+            msg.tcp_pose.position.x, msg.tcp_pose.position.y, msg.tcp_pose.position.z,
+        )))
+        if len(self._tcp_pose_buffer) > 3:
+            self._tcp_pose_buffer.pop(0)
+        if len(self._tcp_pose_buffer) >= 2:
+            (t0, p0), (t1, p1) = self._tcp_pose_buffer[-2], self._tcp_pose_buffer[-1]
+            dt = max(t1 - t0, 1e-6)
+            msg.tcp_velocity.linear.x = (p1[0] - p0[0]) / dt
+            msg.tcp_velocity.linear.y = (p1[1] - p0[1]) / dt
+            msg.tcp_velocity.linear.z = (p1[2] - p0[2]) / dt
+            # Angular velocity left at zero first cut — quaternion-diff is finicky
+            # and aic_controller doesn't consume tcp_velocity.angular for any
+            # current trial. Defer to a later phase if a CheatCode trial reveals it.
+
+        # reference_tcp_pose echoes last MotionUpdate.pose (Plan 02-04 set this)
+        if self._last_reference_tcp_pose is not None:
+            msg.reference_tcp_pose = self._last_reference_tcp_pose
+
+        # tcp_error: 6-vector (x,y,z populated; rx,ry,rz zero first cut)
+        if self._last_reference_tcp_pose is not None:
+            try:
+                err = [
+                    float(msg.tcp_pose.position.x - self._last_reference_tcp_pose.position.x),
+                    float(msg.tcp_pose.position.y - self._last_reference_tcp_pose.position.y),
+                    float(msg.tcp_pose.position.z - self._last_reference_tcp_pose.position.z),
+                    0.0,  # rx — defer (axis-angle delta finicky; not used by current trial)
+                    0.0,  # ry
+                    0.0,  # rz
+                ]
+                # Some rosidl bindings expose tcp_error as array.array, others as list — handle both.
+                try:
+                    for i, v in enumerate(err):
+                        msg.tcp_error[i] = v
+                except (TypeError, AttributeError):
+                    msg.tcp_error = err
+            except Exception:
+                pass  # Leave at zero-init
+
+        # reference_joint_state echoes last JointMotionUpdate.target_state (Plan 02-03 set this)
+        if self._last_reference_joint_state is not None:
+            msg.reference_joint_state = self._last_reference_joint_state
+
+        # target_mode (Plan 02-03 sets TARGET_MODE_JOINT; Plan 02-04 sets TARGET_MODE_CARTESIAN)
+        msg.target_mode.mode = self._last_target_mode
+
+        # fts_tare_offset: zero WrenchStamped with frame_id ati/tool_link per D-07.
+        # Isaac Sim doesn't tare the F/T sensor; aic_controller computes the tare
+        # offset from /fts_broadcaster/wrench history (matches aic_controller.cpp:1275).
+        msg.fts_tare_offset.header.frame_id = "ati/tool_link"
+        msg.fts_tare_offset.header.stamp = msg.header.stamp
+        # All Wrench fields default to 0.0 in the rosidl-generated dataclass
+
+        try:
+            self._ctrl_state_pub.publish(msg)
+        except Exception as exc:
+            if not self._logged_publish_error:
+                self._node.get_logger().debug(f"_ctrl_state_pub.publish failed: {exc!r}")
+                self._logged_publish_error = True
 
     def _publish_offlimit_contacts(self):
         """STUB — Plan 02-06 implements per D-03/D-10."""
