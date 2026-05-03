@@ -180,9 +180,17 @@ Each MCP tool name + parameters lives in `MCP_TOOL_REGISTRY` (extension.py top).
 - `execute_python_code` — works. Use `result = <value>` (not `print()`) to return data; arbitrary Omniverse APIs available.
 - Other atomic tools (`load_robot`, `setup_action_graph`, `setup_force_publisher`, `setup_wrist_cameras`, `add_objects`, `setup_pose_publisher`, `randomize_object_poses`, `randomize_lighting`, `save_scene_state`, `restore_scene_state`, `sync_real_poses`) — assume working as part of the `quick_start` chain; verify individually before relying. The current `objects_poses_sim` / `sync_real_poses` pair will be replaced with Gazebo-native topic names in Phase 1.
 
-### Cable note
+### Cable note (REVISED 2026-05-03)
 
-`load_robot` calls `cable_prim.SetActive(False)` on `/World/UR5e/cable` as a workaround — the 21-segment cable rope chain (mass=0/inertia=0 D6 joints) wedges PhysX simulation post-play when active. Cable subtree alone in any sim plays fine; the wedge only manifests inside the aic-dt extension Kit env. There's a partial USD-rebake attempt in the prior session's chat history (`bake_cable_fix.py`, never committed, marked NOT FUNCTIONAL by its own author) that documents the diagnostic trail. Final cable-physics fix is Phase 3 work (SCENE-05 in REQUIREMENTS.md).
+`load_robot` still calls `cable_prim.SetActive(False)` on `/World/UR5e/cable` — but the underlying wedge problem **no longer reproduces under current launch conditions** (venv-activate sourced + warm `DerivedDataCache` + postload script when needed). Empirically verified 2026-05-03: with cable activated and the 21-segment chain at its as-authored mass=0/inertia=0 state, `play_scene` returns instantly, sim time advances at ~0.67x realtime, MCP latency stays <30ms, no main-thread block. Diagnostic probes are at `exts/aic-dt/scripts/probe_cable_wedge.py` and `probe_cable_behavior.py`.
+
+What changed since D-04 was written: the launch path got better (postload script for cold cache, snapshot-and-restore cache discipline, venv-activate before launch). The wedge that prior sessions chased was a symptom of cooking / cache state, not an inherent cable USD issue. **D-04's `SetActive(False)` is now a workaround for a problem that no longer manifests.**
+
+What's *still* broken about the cable: with `mass=0` / `inertia=0` on every link, PhysX trivially skips the bodies (treats them as kinematic). Probe shows zero motion across all sampled cable links over 2s of sim time. The cable is decorative until proper mass + inertia are authored.
+
+**SCENE-05 in REQUIREMENTS.md is therefore now a much smaller piece of work**: in-place USD edit (D-06 policy) to author non-zero mass/inertia on the cable links, then verify (a) cable bends under gravity, (b) the wedge stays gone under non-zero-mass conditions, (c) plug end can be grabbed by the gripper. NOT a research-gated cable-physics-strategy decision. Recovery scaffolding for the failed `bake_cable_fix.py` lives in chat session 29ca157f if needed; the simpler approach is just per-link `MassAPI.CreateDensityAttr(0.00005)` per NVIDIA's `RigidBodyRopeDemo.py` template.
+
+If the wedge does return when non-zero mass is authored: the prior session's bisection (29ca157f) showed the cable plays fine in bare Kit but not in the aic-dt extension's Kit env — that's an env-specific init-order issue to investigate (World setup order, post-play tick pumping, async event loop). Hybrid rigid-plug-with-visual-cable is the deepest fallback (D-04 evolution).
 
 ---
 
