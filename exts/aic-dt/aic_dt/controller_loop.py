@@ -124,6 +124,49 @@ TARGET_MODE_JOINT = 2
 # UR5e arm DOF count
 N_ARM_JOINTS = 6
 
+# ---------------------------------------------------------------------- #
+# Off-limit contact pipeline constants (PARITY-06 / D-03 / D-10)
+# ---------------------------------------------------------------------- #
+from collections import deque
+
+# Off-limit prim filter — sourced from exts/aic-dt/docs/offlimit-prim-mapping.md
+# (Plan 02-01 output). Per Plan 02-01's settlement of Open Q1, the canonical
+# off-limit set is "any contact involving the enclosure, enclosure-walls, or
+# task-board models" — derived from the OffLimitContactsPlugin SDF block in
+# `~/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro` lines 122-130:
+#
+#     <off_limit_models>
+#       <model>enclosure</model>
+#       <model>enclosure walls</model>
+#       <model>task_board</model>
+#     </off_limit_models>
+#
+# These map to Isaac Sim USD top-level prims as follows (from offlimit-prim-mapping.md):
+#   enclosure        -> /World/Enclosure         (extension.py: _setup_aic_enclosure)
+#   enclosure walls  -> /World/Enclosure_Walls   (extension.py: _setup_aic_enclosure)
+#   task_board       -> /World/TaskBoard         (add_objects atom)
+#
+# The list is prefix-based — a contact whose actor_path starts with any of
+# these three prefixes is treated as off-limit. Descendant collider paths are
+# USD-driven; the contact callback receives (actor0_path, actor1_path) tuples
+# from the physx contact event and the filter is "startswith any prefix".
+# Each entry below corresponds 1:1 with a Gazebo off-limit model name:
+#   "/World/Enclosure"        -> Gazebo "enclosure" model
+#   "/World/Enclosure_Walls"  -> Gazebo "enclosure walls" model
+#   "/World/TaskBoard"        -> Gazebo "task_board" model
+DEFAULT_OFF_LIMIT_PRIMS = [
+    "/World/Enclosure",
+    "/World/Enclosure_Walls",
+    "/World/TaskBoard",
+]
+
+# Physics-thread contact event collector (per robot-collision-forensics skill).
+# Module-level deque so the omni.physx callback (which runs on the physics thread)
+# can append O(1) and the per-tick drain (which runs on the same physics thread
+# via subscribe_physics_step_events) can pop without contention. maxlen=2048
+# bounds memory in case the publisher falls behind the physics tick.
+CONTACT_EVENTS = deque(maxlen=2048)
+
 
 class AicControllerLoop:
     """Phase 2 controller-side rclpy class.
@@ -388,7 +431,7 @@ class AicControllerLoop:
                 self._logged_contact_error = True
 
     # ------------------------------------------------------------------ #
-    # Subscriber callbacks — STUBS (Plans 02-03 / 02-04 implement bodies).
+    # Subscriber callbacks — implemented across Plans 02-03 (joint) / 02-04 (pose).
     # Callbacks MUST NOT raise — buffer to self._latest_*_cmd only.
     # ------------------------------------------------------------------ #
 
@@ -462,7 +505,7 @@ class AicControllerLoop:
                 self._logged_apply_error = True
 
     # ------------------------------------------------------------------ #
-    # Apply / publish — STUBS (Plans 02-03..06 implement bodies).
+    # Apply / publish — implemented across Plans 02-03..06.
     # ------------------------------------------------------------------ #
 
     def _apply_joint_cmd(self, msg):
@@ -837,11 +880,63 @@ class AicControllerLoop:
                 self._logged_publish_error = True
 
     def _publish_offlimit_contacts(self):
-        """STUB — Plan 02-06 implements per D-03/D-10."""
-        pass
+        """Drain CONTACT_EVENTS deque and publish a ros_gz_interfaces/Contacts message.
+
+        Per robot-collision-forensics skill: only report CONTACT_FOUND events; suppress
+        CONTACT_PERSIST and CONTACT_LOST as noise (they generate enormous traffic on
+        sustained contacts and downstream consumers don't act on them).
+
+        Per D-11: never raise into physics callback (outer try/except in _on_physics_step
+        catches; this method also wraps publish in try/except).
+        """
+        if self._node is None or self._contacts_pub is None:
+            return
+        if not CONTACT_EVENTS:
+            return
+
+        # Drain everything available this tick
+        events = []
+        n = len(CONTACT_EVENTS)
+        for _ in range(n):
+            try:
+                events.append(CONTACT_EVENTS.popleft())
+            except IndexError:
+                break
+
+        try:
+            from ros_gz_interfaces.msg import Contacts, Contact, Entity
+        except ImportError:
+            return  # Plan 02-01 workspace rebuild is the prereq
+
+        msg = Contacts()
+        msg.header.stamp = self._node.get_clock().now().to_msg()
+        # frame_id = "world" — confirmed against live aic_eval snapshot (Plan 02-01).
+        msg.header.frame_id = "world"
+
+        for e in events:
+            if e.get("type") != "CONTACT_FOUND":
+                continue   # skill: PERSIST/LOST suppressed
+            c = Contact()
+            c.collision1 = Entity(name=e["a0"], type=Entity.LINK)
+            c.collision2 = Entity(name=e["a1"], type=Entity.LINK)
+            c.positions = []
+            c.normals = []
+            c.depths = []
+            c.wrenches = []
+            msg.contacts.append(c)
+
+        if not msg.contacts:
+            return
+
+        try:
+            self._contacts_pub.publish(msg)
+        except Exception as exc:
+            if not self._logged_contact_error:
+                self._node.get_logger().debug(f"_contacts_pub.publish failed: {exc!r}")
+                self._logged_contact_error = True
 
     # ------------------------------------------------------------------ #
-    # Setup helpers — STUBS (Plans 02-04 / 02-06 implement bodies).
+    # Setup helpers — implemented across Plans 02-04 (kinematics) / 02-06 (contacts).
     # ------------------------------------------------------------------ #
 
     def _setup_kinematics(self) -> bool:
@@ -961,5 +1056,134 @@ class AicControllerLoop:
             return True
 
     def _setup_contact_subscription(self) -> bool:
-        """STUB — Plan 02-06 implements omni.physx contact-report subscription per D-03."""
-        return True
+        """Subscribe to omni.physx contact events on the configured off-limit prims.
+
+        Per D-03 + robot-collision-forensics skill:
+          - Apply PhysxSchema.PhysxContactReportAPI(threshold=0.0) to each off-limit prim.
+          - Skip + warn if the prim lacks UsdPhysics.RigidBodyAPI (Pitfall 7).
+          - Subscribe via omni.physx.get_physx_simulation_interface() (NOT ContactSensor —
+            broken in 5.0).
+          - Per Pitfall 8: explicit threshold=0.0 (default suppresses gentle contacts).
+        """
+        try:
+            import omni.physx
+            import omni.usd
+            from pxr import UsdPhysics, PhysxSchema
+        except ImportError as exc:
+            self._node.get_logger().warn(
+                f"_setup_contact_subscription: omni.physx unavailable: {exc!r}"
+            )
+            return False
+
+        # If atom didn't override, fall back to the module-level default
+        prim_paths = self._off_limit_prims if self._off_limit_prims else set(DEFAULT_OFF_LIMIT_PRIMS)
+        if not prim_paths:
+            self._node.get_logger().warn(
+                "_setup_contact_subscription: no off-limit prims configured "
+                "(DEFAULT_OFF_LIMIT_PRIMS empty and no per-call override) — PARITY-06 "
+                "will silently no-op. See exts/aic-dt/docs/offlimit-prim-mapping.md."
+            )
+            return False
+        self._off_limit_prims = set(prim_paths)
+
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            self._node.get_logger().warn("_setup_contact_subscription: no USD stage open")
+            return False
+
+        watched = set()
+        skipped_no_rb = []
+        skipped_missing = []
+        for path in self._off_limit_prims:
+            prim = stage.GetPrimAtPath(path)
+            if not prim or not prim.IsValid():
+                skipped_missing.append(path)
+                continue
+            if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                # Pitfall 7: contacts won't fire on this prim
+                skipped_no_rb.append(path)
+                continue
+            # Apply or update PhysxContactReportAPI with threshold=0.0 (Pitfall 8)
+            if not prim.HasAPI(PhysxSchema.PhysxContactReportAPI):
+                cr = PhysxSchema.PhysxContactReportAPI.Apply(prim)
+                cr.CreateThresholdAttr().Set(0.0)
+            else:
+                cr = PhysxSchema.PhysxContactReportAPI(prim)
+                thr = cr.GetThresholdAttr()
+                if thr is None or thr.Get() is None or thr.Get() > 0.0:
+                    cr.CreateThresholdAttr().Set(0.0)
+            watched.add(path)
+
+        if skipped_missing:
+            self._node.get_logger().warn(
+                f"_setup_contact_subscription: {len(skipped_missing)} off-limit prims "
+                f"missing in stage: {skipped_missing}"
+            )
+        if skipped_no_rb:
+            self._node.get_logger().warn(
+                f"_setup_contact_subscription: {len(skipped_no_rb)} off-limit prims lack "
+                f"RigidBodyAPI (Pitfall 7 — contacts won't fire). Skipping: {skipped_no_rb}"
+            )
+
+        if not watched:
+            self._node.get_logger().warn(
+                "_setup_contact_subscription: no off-limit prims survived API checks; "
+                "no contact subscription installed"
+            )
+            return False
+
+        try:
+            sim_iface = omni.physx.get_physx_simulation_interface()
+            self._contact_sub = sim_iface.subscribe_contact_report_events(self._on_contact_event)
+            self._node.get_logger().info(
+                f"_setup_contact_subscription: watching {len(watched)} off-limit prims "
+                f"for contact events"
+            )
+            return True
+        except Exception as exc:
+            self._node.get_logger().error(
+                f"_setup_contact_subscription: subscribe_contact_report_events failed: {exc!r}"
+            )
+            return False
+
+    def _on_contact_event(self, headers, data):
+        """Physics-thread callback per robot-collision-forensics skill.
+
+        Runs on the physics thread — must be O(fast). Swallow per-event errors so
+        one malformed header doesn't kill the subscription (D-11 + skill guidance).
+
+        Filters events: at least one side of the contact pair must be in
+        self._off_limit_prims. Appends survivors to module-level CONTACT_EVENTS deque
+        for the per-tick drain to consume.
+        """
+        try:
+            from pxr import PhysicsSchemaTools
+        except ImportError:
+            return
+
+        for h in headers:
+            try:
+                a0 = str(PhysicsSchemaTools.intToSdfPath(int(h.actor0)))
+                a1 = str(PhysicsSchemaTools.intToSdfPath(int(h.actor1)))
+                if not (
+                    any(a0.startswith(p) for p in self._off_limit_prims)
+                    or any(a1.startswith(p) for p in self._off_limit_prims)
+                ):
+                    continue
+                ix = iy = iz = 0.0
+                for k in range(int(h.num_contact_data)):
+                    d = data[int(h.contact_data_offset) + k]
+                    ix += float(d.impulse[0])
+                    iy += float(d.impulse[1])
+                    iz += float(d.impulse[2])
+                CONTACT_EVENTS.append({
+                    "type": str(h.type).rsplit(".", 1)[-1],   # CONTACT_FOUND / PERSIST / LOST
+                    "a0": a0,
+                    "a1": a1,
+                    "impulse": [ix, iy, iz],
+                    "n_contacts": int(h.num_contact_data),
+                })
+            except Exception:
+                # Per skill: swallow per-event errors silently
+                continue
+
