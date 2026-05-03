@@ -1,10 +1,55 @@
 ---
 phase: 01-foundation-parity
 verified: 2026-05-02T22:00:00Z
-status: gaps_found
-score: 5/10 must-haves verified
+status: gaps_resolved
+score: 9/10 must-haves verified (TEX-03 sweep doc + categorization remains)
 overrides_applied: 0
 revised: 2026-05-02T22:30:00Z (added Gap E — visual viewport regression, surfaced by user during live verify run)
+revised_2: 2026-05-03T03:00:00Z (Gap A + Gap B closed inline via rclpy parity publishers; Gap E visually confirmed)
+closure_summary: |
+  - Gap A (PARITY-03 /joint_states): RESOLVED. New rclpy-based publisher in
+    exts/aic-dt/aic_dt/parity_publishers.py emits 7 alphabetical joints
+    including `gripper/left_finger_joint` (slashed) with frame_id="base_link".
+    Empirical: ros2 topic echo /joint_states --once shows the 7 names in
+    alphabetical order, frame_id=base_link, position[1]=0.0 (gripper fake).
+  - Gap B (PARITY-04 /tf + /tf_static): RESOLVED. Same publisher emits 8
+    dynamic edges (6 arm + 2 gripper finger) and 22 static edges with all
+    slashed AIC frame names (gripper/*, cam_mount/*, ati/*, *_camera/*).
+    Empirical: ros2 run tf2_tools view_frames captures the full 31-frame
+    AIC TF tree with parent-child relationships matching topic-parity-reference.md.
+  - Gap E (visual regression): RESOLVED inline (commit 121244a). User
+    visually confirmed object scale/shape correct after AIC_OBJECTS revert
+    to m+Z-up originals.
+  - Gap C (TEX-03 sweep findings + fix log): NOT YET ADDRESSED. The 921
+    sweep hits exist in texture-sweep.md but are not yet categorized into
+    a fix log per TEX-03's "shipping documentation" bar. Lower-stakes than
+    A/B; can be addressed inline or deferred.
+  - Gap E mount-rails (latent): NOT ADDRESSED. Plan 09 mount-rail USDs
+    remain mPU=0.01+Y-up; required for SCENE-01 trial-spawn correctness
+    when sample_config.yaml specifies present=True for any mount.
+  - PARITY-05 rate verifiability: minor doc gap; Gazebo wrench rate not
+    snapshotted in parity_05_wrench_framing.txt.
+gap_a_b_resolution_method: |
+  Three architectural pieces:
+  (1) Bypassed OGN ROS2PublishJointState / ROS2PublishTransformTree entirely.
+      The 5.0 OGN spec confirms NO frameId, NO jointNames overrides on
+      JointState; TransformTree derives frame_ids from USD prim leaf names
+      which cannot legally contain '/' (AIC needs slashed frame names). New
+      rclpy-based AicParityPublishers reads articulation state and stage
+      world poses each physics tick and publishes via rclpy directly.
+  (2) Workspace's libgeometry_msgs__rosidl_generator_c.so (with
+      polygon_instance_stamped symbol) must win LD ordering over
+      /opt/ros/humble's older lib. Achieved by sourcing
+      ~/env_isaaclab/bin/activate (which prepends workspace lib dir to
+      LD_LIBRARY_PATH per exts/aic-dt/docs/rclpy-setup.md) before launching
+      Isaac Sim. Project CLAUDE.md updated with this requirement.
+  (3) Python 3.11 ROS workspace dist-packages must come ahead of
+      /opt/ros/humble/local/lib/python3.10/dist-packages on sys.path AND
+      cached ROS modules must be evicted from sys.modules before re-import,
+      so message-type lookups resolve to the 3.11 build (not the broken
+      Python 3.10 build that Isaac Sim's startup-time bridge attempt loaded).
+      Both handled inside parity_publishers._force_python311_ros_paths and
+      _ensure_rclpy_clean_import.
 gaps:
   - truth: "ros2 topic echo /joint_states --once returns the same joint names in the same ordering Gazebo's /joint_states publishes (live snapshot: 7 joints alphabetical, including gripper/left_finger_joint)"
     status: failed

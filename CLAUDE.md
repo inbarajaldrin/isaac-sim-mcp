@@ -4,6 +4,18 @@ This repo hosts Isaac Sim Kit extensions that expose MCP socket servers for agen
 
 > **Use the `isaac-sim-extension-dev` skill first** for anything Isaac Sim related — extension lifecycle, USD/physics, action graphs, MCP socket protocol, troubleshooting, the canonical asset workflow. The skill encodes hard-won knowledge (cooking deadlock workaround, post-play wedge anti-pattern, real-Kit-log location, etc.) that is the source of truth when this file goes stale.
 
+> **Canonical references for ALL agents — research, planning, execution, debugging, verification — not just research phases.** When any GSD agent (`gsd-phase-researcher`, `gsd-planner`, `gsd-executor`, `gsd-debugger`, `gsd-verifier`, `gsd-plan-checker`) encounters questions about the NVIDIA stack — Isaac Sim 5.0 API surface, OpenUSD authoring (composition / references / sublayers / MDL / Pixar Usd Python API), Omniverse Kit (extension lifecycle, settings, RTX, materials), `isaacsim.ros2.bridge` OmniGraph nodes, articulation drives, sensors, rendering, Replicator, Isaac Lab, Isaac ROS, Warp — they MUST consult `~/.claude/skills/nvidia-suite-docs/SKILL.md` (the meta-router for live NVIDIA docs) **before** guessing from training data. The NVIDIA stack evolves monthly and cached LLM knowledge is routinely stale or wrong.
+>
+> **For project-specific knowledge** (extension patterns in this repo, cache management discipline, MCP socket protocol, prim-path bug history, cable physics workaround, postload launcher, sibling extensions `ur5e-dt`/`soarm101-dt`), consult `~/.claude/skills/isaac-sim-extension-dev/SKILL.md`.
+>
+> **Execution-time recovery sequence** (when a task fails — USD reference unresolved, OmniGraph node not found, articulation drives don't apply, MDL warnings, sim wedges post-play, MCP socket times out, etc.):
+> 1. Read the **real Kit log** at `~/.nvidia-omniverse/logs/Kit/"Isaac-Sim Full"/5.0/kit_*.log` for actual error text — staleness in this log = main loop blocked.
+> 2. Consult `nvidia-suite-docs` skill for the relevant API surface (it routes to the right sub-skill — Isaac Sim, OpenUSD, OmniGraph, etc. — and fetches live docs / forum threads).
+> 3. Consult `isaac-sim-extension-dev` skill for project-specific gotchas and the cache-management discipline (`prime_usd_cache.py status` first when `quick_start` hangs).
+> 4. Only THEN propose a fix.
+>
+> Do NOT guess from training-data assumptions about Isaac Sim 4.x APIs, deprecated OmniGraph node IDs, or generic Omniverse Python patterns — they are routinely wrong for 5.0. Live docs > cached knowledge, every time.
+
 ## Where to look first
 
 | When you want to … | Read |
@@ -30,8 +42,16 @@ There are two launch paths and they handle different cache states:
 | **Lifecycle helper** | `DerivedDataCache` is populated (warm cache, normal day-to-day) | `isaacsim --ext-folder … --enable aic-dt` | hangs PhysX cooking if cache is empty |
 | **Postload script** | `DerivedDataCache` is empty/stale, OR you just cleared it | boots Kit first, then enables aic-dt via `extension_manager.set_extension_enabled_immediate(...)` | safe; will cook from scratch if needed |
 
+> **⚠️ ALWAYS source the venv before launch (Phase 1 PARITY-03/04 requirement).** The aic-dt extension's rclpy-based parity publishers (`/joint_states`, `/tf`, `/tf_static`) require the Python 3.11 ROS Humble workspace to be on `LD_LIBRARY_PATH` (so the workspace's `libgeometry_msgs__rosidl_generator_c.so` with the `polygon_instance_stamped` symbol wins over `/opt/ros/humble`'s older lib) AND on `PYTHONPATH` / `AMENT_PREFIX_PATH` (so message-type imports resolve to the 3.11 build, not the broken Python 3.10 build that Isaac Sim's startup-time bridge attempt loads). The launcher script invokes `isaacsim` directly without sourcing activate, so wrap the call: `bash -c 'source ~/env_isaaclab/bin/activate && DISPLAY=${DISPLAY:-:0} bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch aic-dt'`. Without this, `quick_start` fails at `setup_tf_publish_action_graph` with `UnsupportedTypeSupport: Could not import 'rosidl_typesupport_c' for package 'geometry_msgs'`. See `exts/aic-dt/docs/rclpy-setup.md` for the workspace build instructions.
+
 ```bash
 # Default path (after the cache has been primed at least once):
+# IMPORTANT: source ~/env_isaaclab/bin/activate first, or wrap the call:
+bash -c 'source ~/env_isaaclab/bin/activate && DISPLAY=${DISPLAY:-:0} bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch aic-dt'
+
+# (Without the source, you can still launch but rclpy parity publishers fail.
+#  Useful for sessions that don't need /joint_states + /tf parity, e.g. testing
+#  the MCP socket surface or OGN nodes alone.)
 DISPLAY=${DISPLAY:-:0} bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch aic-dt
 
 # Other lifecycle commands:
@@ -243,6 +263,25 @@ This project is managed with `/gsd-*` slash commands. Standard flow:
 ```
 
 Workflow config (`.planning/config.json`): `mode=yolo`, `granularity=coarse`, `model_profile=quality`, research / plan-check / verifier all on, sequential execution. Change via `/gsd-settings`.
+
+### Phase scope is by surface, not capability
+
+This project deviates from default GSD phase discipline. **Before planning a phase, scan future-phase requirements** in `.planning/REQUIREMENTS.md` and `.planning/ROADMAP.md`. **Pull a future-phase requirement into the current phase if all of these are true:**
+
+1. **Surface adjacency** — its primary edit surface (files, data structures, UI atoms) overlaps what the current phase is already touching.
+2. **Dependencies met** — no upstream research decision, prior phase, or external review is still pending for it.
+3. **No new research needed** — pulling it in doesn't expand the research scope or invalidate the discuss-phase decisions already locked.
+
+The cost of splitting requirements that share a surface is invisible at plan time but real at execution: editor focus, mental model, and review surface all get re-paid weeks later. Pulling forward avoids that re-entry tax.
+
+**When pulling forward:** edit `.planning/REQUIREMENTS.md` traceability table to remap the IDs to the current phase, edit `.planning/ROADMAP.md` to add them to the phase's `Requirements:` list, then re-run `/gsd-plan-phase N` (with `--research` if the new IDs need fresh investigation, otherwise without). The CONTEXT.md and existing research stay valid; the planner produces additional plans for the pulled-forward IDs.
+
+**When NOT to pull forward:**
+- The requirement is research-gated (e.g., cable physics in Phase 3 awaits `nvidia-suite-docs` evaluation of deformable / articulated / hybrid strategies — pulling it in fakes the decision).
+- Its surface is meaningfully separate (e.g., the `aic_controller` command-loop surface vs. the passive-publisher surface — they share `extension.py` but the architectural concerns are distinct).
+- The phase is already at its context budget (a planner returning `## PHASE SPLIT RECOMMENDED` is signal to NOT pull more in).
+
+This rule applies recursively: when planning Phase 2, scan Phase 3+ for the same overlap criteria; same for Phase 3 looking at Phase 4. The roadmap is the *plan*, not a *contract*.
 
 ---
 
