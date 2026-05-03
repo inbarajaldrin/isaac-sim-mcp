@@ -1,0 +1,58 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-05-03T01:56:27.157Z",
+  "phase": "1",
+  "phase_name": "Foundation Parity",
+  "phase_dir": ".planning/phases/01-foundation-parity",
+  "plan": "01-G02 (gap-closure, Gap E)",
+  "task": null,
+  "total_tasks": null,
+  "status": "paused",
+  "completed_tasks": [
+    {"id": "01-01", "name": "Snapshot infrastructure + topic-parity-reference.md + PARITY-12 audit table", "status": "done", "commit": "5dc5b75..2a1c636"},
+    {"id": "01-02", "name": "Asset vendoring (capitalized AIC layout + sibling textures)", "status": "done", "commit": "7858369..e56ab9d"},
+    {"id": "01-03", "name": "RG2 -> Robotiq Hand-E doc fix", "status": "done", "commit": "be59b05..86822fc"},
+    {"id": "01-04", "name": "extension.py renames + prim-path bug + atom deletes + AIC_OBJECTS update + PARITY-05 wrench framing", "status": "done", "commit": "de0a8d7..cde6a1a"},
+    {"id": "01-05", "name": "USD prim probe + aic_controller subscriber probe (verdicts: PER-FRAME-RAW-OVERRIDE, NAME-INDEXED)", "status": "done", "commit": "8a89890..56500f5"},
+    {"id": "01-06", "name": "TF + JointState publisher MCP atoms (4-surface, root_joint targetPrim, staticPublisher=True for /tf_static)", "status": "done", "commit": "f3dd646..721ae0a"},
+    {"id": "01-07", "name": "diff_tf_tree.py + sweep_textures.py + verify_phase_1.sh + texture-sweep.md", "status": "done", "commit": "fea9efd..beafec1"},
+    {"id": "01-08", "name": "quick_start refactor + Phase 1 CHANGELOG + DX-02 final audit", "status": "done", "commit": "a93b0c8..def50be"},
+    {"id": "01-09", "name": "Per-component spawn atoms (SCENE-01) + SCENE-04 pose params", "status": "done", "commit": "424d44b..22e1395"},
+    {"id": "verifier", "name": "Phase 1 verification (5/9 must-haves, 4 gaps + 1 user-reported regression = 5 gaps)", "status": "done", "commit": "f42e095..f09bec7"},
+    {"id": "01-G02-Task-1-fix-only", "name": "AIC_OBJECTS USD path revert (m+Z-up originals — visual regression closure)", "status": "done", "commit": "121244a"}
+  ],
+  "remaining_tasks": [
+    {"id": "Gap-A", "name": "PARITY-03: /joint_states publishes 6 joints not 7 (gripper/left_finger_joint missing); URDF order not alphabetical; frame_id empty (Gazebo expects base_link)", "status": "diagnosed_empirically_not_fixed"},
+    {"id": "Gap-B", "name": "PARITY-04: /tf publishes nothing observable (only static World->aic_unified_robot edge from /tf_static); Plan 06 OmniGraph wiring needs nvidia-suite-docs consult on ROS2PublishTransformTree parentPrim/targetPrims/articulation traversal", "status": "diagnosed_empirically_not_fixed"},
+    {"id": "Gap-C", "name": "TEX-01/02/03: 921 sweep hits — mostly cosmetic ISO_4762/V1015120 screw sub-references (43 unresolved) + 8 camera-prim-path bugs in setup_wrist_cameras (pre-Plan-09) + ~13 actual MDL/texture/fallback. Sweep doc populated; needs categorized fix log.", "status": "documented_not_fixed"},
+    {"id": "Gap-E-mount-rails", "name": "Plan 09 mount-rail USDs (LC/SFP/SC Mount + vendored NIC Card Mount/nic_card_mount_visual.usd) all mPU=0.01 + Y-up — would spawn 100x smaller + rotated when SCENE-01 trial runs explicitly call them with present=True. Latent for Phase 1 default; required for SCENE-01 trial-spawn correctness.", "status": "latent_known"},
+    {"id": "01-G01-PLAN", "name": "Visual regression diagnosis (Gap E) — superseded by inline empirical work (commit 121244a). Plan file present but not executed via GSD.", "status": "superseded"},
+    {"id": "01-G02-PLAN", "name": "Visual regression fix (Gap E) — Task 1 (AIC_OBJECTS revert) done inline (commit 121244a). Tasks 2-3 not run.", "status": "partially_done_inline"},
+    {"id": "01-G03-PLAN", "name": "TF tree completion (Gap B) — not executed; needs revisit after empirical TF investigation.", "status": "not_started"},
+    {"id": "01-G04-PLAN", "name": "JointState completion (Gap A) — not executed; empirical evidence shows scope is bigger than originally framed (gripper joint missing from articulation, not just renamed).", "status": "not_started"},
+    {"id": "01-G05-PLAN", "name": "Texture sweep + verify_phase_1.sh hot-fixes (Gap C) — not executed; verify_phase_1.sh Step 8 path-with-spaces bug confirmed; sweep findings categorized but not fixed.", "status": "not_started"}
+  ],
+  "blockers": [
+    {"description": "Phase 1 closure depends on resolving Gap A (JointState gripper joint + ordering + frame_id) and Gap B (TF dynamic publisher empty)", "type": "technical", "workaround": "Visual regression already fixed inline (commit 121244a). Phase 1 PARITY-01/02/05/12 + TEX-01/02 (vendoring side) + DX-01/02 are done. Only PARITY-03/04 + TEX-03 final + SCENE-01 trial-correctness remain."},
+    {"description": "Plan 06 OmniGraph node configuration for ROS2PublishTransformTree and ROS2PublishJointState is not actually publishing the joint chain — needs nvidia-suite-docs sub-skill consult to find correct parentPrim/targetPrims input wiring for Isaac Sim 5.0", "type": "technical", "workaround": "Empirical investigation showed dynamic /tf has no joint frames; /joint_states only sees UR5e arm articulation (not Hand-E). Wiring needs revision."},
+    {"description": "User has paused inline diagnosis after Gap E visual fix landed; awaiting direction on continuing TF/JointState OmniGraph fixes vs. accepting partial Phase 1 vs. separate session", "type": "human_action", "workaround": null}
+  ],
+  "human_actions_pending": [
+    {"action": "Visually confirm in the running Isaac Sim viewport that objects are at correct real-world scales after the AIC_OBJECTS path revert (commit 121244a)", "context": "User reported 'major mismatch in object size' before the fix. Empirical bbox readings now match real AIC components (task_board ~34cm, SC ports ~3-4cm, NIC card ~16x8x18cm, UR5e ~1m). Visual confirmation closes Gap E definitively.", "blocking": false},
+    {"action": "Decide direction for Gap A (JointState gripper joint missing) and Gap B (TF dynamic publisher empty): continue inline with nvidia-suite-docs, or pause Phase 1 here and resume in a fresh session.", "context": "These are real Isaac Sim API configuration gaps surfaced by empirical investigation after the polluting ROS launch was killed. They need OmniGraph node wiring corrections, not just code edits.", "blocking": true}
+  ],
+  "decisions": [
+    {"decision": "Pull SCENE-01, SCENE-04, PARITY-05, PARITY-12, DX-02 forward into Phase 1 (was Phase 2/3)", "rationale": "Surface-adjacency rule added to CLAUDE.md: same edit surface (extension.py + AIC_OBJECTS + asset tree), cheaper to combine than re-enter later", "phase": "1"},
+    {"decision": "AIC_OBJECTS USD paths reverted to m+Z-up originals (task_board_rigid.usd, sc_port.usd, nic_card.usd) — Plan 04 had silently swapped to *_visual.usd cm+Y-up variants", "rationale": "USD property-level pxr inspection: *_visual.usd are mPU=0.01+Y-up, originals are mPU=1.0+Z-up; parent stage is m+Z-up; Isaac Sim doesn't auto-rescale on AddReference, so visuals imported 100x smaller and rotated 90deg", "phase": "1"},
+    {"decision": "Visual regression diagnosis done inline (commit 121244a) instead of via GSD gap-closure plans 01-G01/02", "rationale": "User explicitly directed inline approach: 'no need to go through the gsd phase for this this has to be done inline'", "phase": "1"},
+    {"decision": "Killed leftover ROS2 launch from ros-mcp-server/compliant_insertion_studio that was publishing competing /joint_states (6 joints, ros2_control), /tf (rg2_state_publisher), /tf_static (tool0_to_rg2_base_link) — DDS aggregation was masking Isaac Sim's actual publishers during verification", "rationale": "verify_phase_1.sh Step 6 reported missing TF frames that actually existed in the OTHER process's publish; once isolated, Isaac Sim's own publishers showed different (worse) gaps", "phase": "1"},
+    {"decision": "Mount-rail USDs (LC/SFP/SC Mount + NIC Card Mount/nic_card_mount_visual.usd) at mPU=0.01+Y-up — fix deferred to follow-up, latent because spawn_*_mount_rail atoms default to present=False", "rationale": "Default add_objects clubbing path doesn't call them; user-visible scene is correct without them. Required for SCENE-01 trial-spawn correctness when sample_config.yaml specifies present=True for any mount.", "phase": "1"}
+  ],
+  "uncommitted_files": [
+    "CLAUDE.md (working-tree dirty pre-Plan-03 — preserved across all plan executions per stash/restore precedent; contains Phase scope rule + canonical refs additions)",
+    ".planning/ROADMAP.md (modified by gap-closure planner — added G01-G05 plan list entries)",
+    ".planning/phases/01-foundation-parity/01-G01-PLAN.md through 01-G05-PLAN.md (created by /gsd-plan-phase 1 --gaps; not executed via GSD per user direction)"
+  ],
+  "next_action": "User decides whether to continue inline TF/JointState OmniGraph fix work (consult nvidia-suite-docs for ROS2PublishTransformTree proper parentPrim/targetPrims wiring + ROS2PublishJointState configuration to capture both UR5e arm + Hand-E gripper articulations), or accept Phase 1 partial state and tackle in a fresh session.",
+  "context_notes": "Phase 1 expanded from 8 to 9 plans with SCENE-01/04 + PARITY-05/12 + DX-02 pulled forward. All 9 plans landed code-complete. Verifier reported gaps_found 5/9. User reported additional visual regression (Gap E). Inline diagnosis found TWO regressions: (1) Plan 04 silently swapped AIC_OBJECTS to *_visual.usd variants (cm+Y-up vs parent m+Z-up) — fixed inline (commit 121244a) by reverting paths to m+Z-up originals (now byte-identical to pre-Plan-02 originals because Plan 02's vendoring just moved files into capitalized folders). (2) Plan 09 mount-rail USDs are also cm+Y-up but only fire on explicit present=True. After fixing AIC_OBJECTS, empirical Isaac Sim probe (with polluting ROS launch killed) showed real Phase 1 gaps: /joint_states has 6 joints not 7 (gripper missing from articulation that targetPrim sees), /tf publishes nothing observable beyond /tf_static's World->aic_unified_robot edge. These need OmniGraph wiring corrections, not just code edits. Critical insight: original verifier ran with polluting ROS launch active, saw aggregated topics, mis-attributed gaps to Isaac Sim — ground truth was different. Visual fix is committed. Isaac Sim still running on port 8768 with corrected scene. Ready for resumption with empirical data in hand."
+}

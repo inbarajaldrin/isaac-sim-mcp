@@ -35,7 +35,7 @@ Milestone 1 (Platform Transfer) takes the existing `aic-dt` extension scaffold f
   7. Calling the per-component spawn atoms with a `sample_config.yaml` `task_board` block (mount rails + sc/sfp/lc/nic occupancy + per-entity translation/RPY + robot/board pose) produces a viewport scene equivalent to the same parameters spawned by `spawn_task_board.launch.py` in Gazebo (SCENE-01, SCENE-04)
   8. `exts/aic-dt/docs/topic-parity-reference.md` contains a complete cross-phase parity audit table mapping every Gazebo topic to its Isaac Sim equivalent with phase status (implemented / Phase-N-deferred / not-applicable) and proof-of-publish per implemented row (PARITY-12)
   9. Every new MCP capability lands as one `MCP_TOOL_REGISTRY` entry + matching `_cmd_<name>` handler + one UI button — `MCP_TOOL_REGISTRY` is the only source of tool metadata (DX-02)
-**Plans**: 9 plans (6 waves)
+**Plans**: 9 plans + 5 gap-closure plans (verifier loop, 3 waves)
 Plans:
 - [x] 01-01-PLAN.md — Snapshot infrastructure: live aic_eval Docker capture script + topic-parity-reference.md (D-01, D-14) + cross-phase audit table (PARITY-12)
 - [x] 01-02-PLAN.md — Asset vendoring: capitalized AIC layout with sibling textures/ folders (D-05); retire snake_case objects/
@@ -46,6 +46,11 @@ Plans:
 - [x] 01-07-PLAN.md — Verify harness: diff_tf_tree.py (D-08; 71 lines, regex-only) + sweep_textures.py (D-07/TEX-01/02/03; D-07 baseline + 4 augmented Isaac-Sim asset-failure patterns) + verify_phase_1.sh (D-15; 441 lines, 10-step hybrid runtime gate) + texture-sweep.md (TEX-03 scaffold). Smoke-tested: diff PASS 31/30, sweep 267 hits caught sc_port_visual broken sub-refs, verify bash -n clean.
 - [x] 01-08-PLAN.md — quick_start refactor per D-12 + Phase 1 CHANGELOG entry + DX-02 final-audit table (presents 9 new atoms × 4 surfaces, 2 deleted atoms × 0 surfaces)
 - [x] 01-09-PLAN.md — SCENE-01 + SCENE-04: 7 per-component spawn atoms (spawn_task_board_base / spawn_<lc|sfp|sc>_mount_rail / spawn_sc_port / spawn_nic_card_mount / spawn_nic_card) mirroring spawn_task_board.launch.py parameter surface; robot/board/cable pose params with Gazebo defaults; LC/SFP/SC Mount asset vendoring from aic_assets/models/; backwards-compatible add_objects clubbing
+- [ ] 01-G01-PLAN.md — Gap E diagnosis: pxr-based per-prim worldbox capture + diff (pre-Plan-02 baseline @ 2be9e0c vs current HEAD), metersPerUnit audit, spawn-atom transform comparison; produces visual-regression-diagnosis.md with verdict token (METERSPERUNIT_DRIFT / SPAWN_ATOM_TRANSFORM_DRIFT / GLB_USD_SCALE_BAKED_WRONG / ADD_REFERENCE_UNIT_DRIFT / COMPOUND / INCONCLUSIVE) + recommended fix
+- [ ] 01-G02-PLAN.md — Gap E fix: apply verdict-specific fix from G01 (USD edit / spawn-atom defaults / build_mount_rail_usds.py re-author / explicit xformOp:scale); human-verify viewport renders correctly; CHANGELOG + REQUIREMENTS sync
+- [ ] 01-G03-PLAN.md — Gap B closure (PARITY-04 deferral): wire 17 per-frame ROS2PublishRawTransformTree publishers (16 underscore→slash overrides + 1 synthesized aic_world static edge) backed by OgnGetPrimWorldPose source nodes; preserves 14 MATCH frames via existing default-mapping publishers; closes diff_tf_tree.py to zero diff
+- [ ] 01-G04-PLAN.md — Gap A closure (PARITY-03 deferral): probe_articulation_joints.py picks strategy (ARTICULATION_RESTRUCTURE / SUPPLEMENTARY_PUBLISHER_SUBGRAPH / WRAPPER_REPUBLISHER / HEADER_FRAME_ID_ONLY); applies fix so /joint_states publishes 7 names with gripper/left_finger_joint (slash) and frame_id=base_link
+- [ ] 01-G05-PLAN.md — Gap C closure (TEX-01/02/03): verify_phase_1.sh Step 8 path-with-spaces hot-fix; sweep_textures.py noise filter (4 EXCLUDE_PATTERNS); setup_wrist_cameras prim path correction (camera-prim-not-found warnings); texture-sweep.md verdict section with row classification
 **UI hint**: yes
 
 ### Phase 2: Controller Loop
