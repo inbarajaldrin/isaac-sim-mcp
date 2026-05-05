@@ -2,8 +2,9 @@
 phase: 02-controller-loop
 verified: 2026-05-03T22:30:00Z
 re_verified: 2026-05-03T23:30:00Z  # after live-runtime smoke + 3 partial fixes
-status: gaps_found
-score: 5/5 static-level + 13/13 Phase 1 regression + 3/7 Phase 2 smoke (Steps 3/4/5 fail — joint_cmd/pose_cmd/ControllerState callbacks not firing despite subscriber count=1)
+status: passed_with_carry_forward
+score: 5/5 static-level + 13/13 Phase 1 regression (under ROS_DOMAIN_ID=7) + 6/7 Phase 2 smoke (Step 3 PARITY-09 single-shot tracks ~50% of commanded; Step 4 PARITY-10 + Step 5 PARITY-11 both fully working)
+re_verification_2026_05_05: 2026-05-05T10:30:00Z (Bug 4 root caused as 5+3 layered bugs; all major fixes landed in commits a3b207b + c9283ae + 6ef405a)
 overrides_applied: 0
 re_verification: 2026-05-03T23:30:00Z (smoke surfaced 3 runtime bugs; 2 fixed cleanly, 1 partial — see Live Runtime Findings section)
 human_verification:
