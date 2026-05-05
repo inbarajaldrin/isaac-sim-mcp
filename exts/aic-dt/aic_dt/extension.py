@@ -1109,6 +1109,14 @@ class DigitalTwin(omni.ext.IExt):
         self.add_objects()
         await app.next_update_async()
 
+        # Phase 3 Plan 03-04+05: scoring publishers (after task_board prims exist).
+        print("--- Setting up AIC scoring publishers (/scoring/tf + /objects_poses_real + /scoring/insertion_event) ---")
+        try:
+            self._start_aic_scoring_publishers()
+        except Exception as exc:
+            print(f"[AIC-DT][scoring] _start_aic_scoring_publishers failed: {exc!r}")
+        await app.next_update_async()
+
         # 7b. Randomize lighting (best-effort — present from earlier work)
         if hasattr(self, 'randomize_lighting'):
             print("--- Randomizing Lighting ---")
@@ -1686,6 +1694,27 @@ class DigitalTwin(omni.ext.IExt):
         ok = self._aic_parity_publishers.start()
         if not ok:
             print("[AIC-DT][parity] Publisher start() returned False -- check rclpy availability.")
+
+    def _start_aic_scoring_publishers(self):
+        """Start the AicScoringPublishers manager (Phase 3 Plan 03-04+05). Idempotent.
+
+        Owns rclpy node + /scoring/tf + /objects_poses_real + /scoring/insertion_event
+        publishers + omni.physx contact subscription for plug-port detection.
+        Mirrors _start_aic_parity_publishers pattern. Should be called from
+        quick_start AFTER add_objects so task_board prims exist for TF lookup.
+        """
+        try:
+            from .scoring_publishers import AicScoringPublishers
+        except Exception as exc:
+            print(f"[AIC-DT][scoring] Failed to import scoring_publishers: {exc!r}")
+            return
+        if not hasattr(self, "_aic_scoring_publishers") or self._aic_scoring_publishers is None:
+            self._aic_scoring_publishers = AicScoringPublishers(
+                robot_xform_path=self._articulation_root_prim_path
+            )
+        ok = self._aic_scoring_publishers.start()
+        if not ok:
+            print("[AIC-DT][scoring] Publisher start() returned False -- check rclpy availability.")
 
     def _start_aic_controller_loop(self, off_limit_prims: list = None):
         """Start the shared AicControllerLoop manager (idempotent).
