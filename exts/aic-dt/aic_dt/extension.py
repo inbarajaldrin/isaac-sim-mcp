@@ -1162,7 +1162,10 @@ class DigitalTwin(omni.ext.IExt):
                          robot_x: float = None, robot_y: float = None, robot_z: float = None,
                          robot_roll: float = 0.0, robot_pitch: float = 0.0, robot_yaw: float = 0.0,
                          cable_x: float = 0.172, cable_y: float = 0.024, cable_z: float = 1.518,
-                         cable_roll: float = 0.4432, cable_pitch: float = -0.48, cable_yaw: float = 1.3303):
+                         cable_roll: float = 0.4432, cable_pitch: float = -0.48, cable_yaw: float = 1.3303,
+                         cable_type: str = "sfp_sc_cable",
+                         attach_cable_to_gripper: bool = False,
+                         gripper_initial_pos: float = 0.00655):
         """Load the unified UR5e + Robotiq Hand-E + cable USD into /World/UR5e.
 
         SCENE-04: Robot base + cable poses are configurable via the same parameter
@@ -1188,6 +1191,15 @@ class DigitalTwin(omni.ext.IExt):
         """
         asset_path = _local_asset("robot/aic_unified_robot_cable_sdf.usd")
         prim_path = self._robot_prim_path
+
+        # SCENE-02 Plan 03-03: cable_type variants. Same vendored cable USD;
+        # sfp_sc_cable_reversed = cable_yaw rotated π.
+        if cable_type == "sfp_sc_cable_reversed":
+            import math as _math
+            cable_yaw = float(cable_yaw) + _math.pi
+            print(f"SCENE-02: cable_type=sfp_sc_cable_reversed → cable_yaw rotated π → {cable_yaw:.4f}")
+        elif cable_type != "sfp_sc_cable":
+            print(f"[AIC-DT] Unknown cable_type {cable_type!r}; defaulting to sfp_sc_cable")
 
         # Ensure World exists
         world = World.instance()
@@ -1274,6 +1286,30 @@ class DigitalTwin(omni.ext.IExt):
         World.instance().scene.add(self._robot_view)
         await World.instance().reset_async()
         self._timeline.stop()
+
+        # SCENE-03 Plan 03-03: optionally attach cable plug-end → gripper finger.
+        # Done AFTER articulation setup so the gripper finger exists.
+        if attach_cable_to_gripper:
+            try:
+                self._attach_cable_to_gripper_impl(gripper_initial_pos=gripper_initial_pos)
+            except Exception as exc:
+                print(f"[AIC-DT] SCENE-03 attach_cable_to_gripper failed: {exc!r}")
+
+    def _attach_cable_to_gripper_impl(self, gripper_initial_pos: float = 0.00655):
+        """SCENE-03 Plan 03-03 — attach cable plug-end (link_20) to gripper finger via FixedJoint.
+
+        Plug-end discovered by Plan 03-01 cable topology probe — link_20 is closest to
+        sc_plug_visual at d=0.033m. Gripper finger left = aic_unified_robot/gripper_hande_finger_link_l.
+        Idempotent: removes prior CableAttachJoint before authoring new one.
+
+        TODO Plan 03-03: full implementation pending — currently stub. The contract:
+          1. Find /World/UR5e/cable/Rope/Rope/link_20 (plug-end RigidBody)
+          2. Find /World/UR5e/aic_unified_robot/gripper_hande_finger_link_l (gripper finger)
+          3. RemovePrim any existing /World/UR5e/aic_unified_robot/gripper_hande_finger_link_l/CableAttachJoint
+          4. Author UsdPhysics.FixedJoint at that path with body0=finger_link, body1=link_20
+          5. Optionally set gripper_initial_pos via Articulation.set_joint_positions on gripper joint
+        """
+        print(f"[AIC-DT] SCENE-03 attach_cable_to_gripper STUB — gripper_initial_pos={gripper_initial_pos} (impl pending Plan 03-03)")
 
         self._articulation = Articulation(prim_path)
 

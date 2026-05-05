@@ -1,35 +1,41 @@
 {
   "version": "1.0",
-  "timestamp": "2026-05-05T10:35:00.000Z",
+  "timestamp": "2026-05-05T11:00:00.000Z",
   "phase": "3-cable-physics-object-tf",
-  "phase_name": "Phase 3 kickoff: cable physics + object TF + per-object PARITY",
+  "phase_name": "Phase 3 mid-execution: 03-01 + 03-02 done; 03-03 partial; 03-04/05/06 pending",
   "phase_dir": ".planning/phases/03-cable-physics",
-  "plan": null,
-  "task": "phase-3-discuss",
-  "total_tasks": null,
+  "plan": "03-03",
+  "task": "phase-3-03-03-attach-cable-to-gripper-impl",
+  "total_tasks": 6,
   "status": "in_progress_autonomous",
   "completed_tasks": [
-    {"id": "phase-2-bug4-debug", "name": "Bug 4 root caused as 8 layered bugs (was diagnosed as 1 by prior verifier)", "status": "done", "commits": ["a3b207b", "c9283ae", "6ef405a", "b772756"]},
-    {"id": "phase-2-close", "name": "Phase 2 closed at 6/7 smoke (Step 3 carry-forward); Phase 1 13/13 maintained", "status": "done", "commit": "b772756"},
-    {"id": "autonomous-mode-setup", "name": "Autonomous M1 mode infrastructure: hooks + scripts + CLAUDE.md bootstrap + marker", "status": "done", "commit": "a3b207b"}
+    {"id": "phase-2-bug4-debug", "name": "Bug 4 = 8 layered bugs", "status": "done", "commits": ["a3b207b","c9283ae","6ef405a","b772756"]},
+    {"id": "phase-2-close", "name": "Phase 2 closed at 6/7 smoke", "status": "done"},
+    {"id": "autonomous-mode-setup", "name": "Hooks + scripts + CLAUDE.md autonomous-mode block", "status": "done"},
+    {"id": "phase-3-context", "name": "Phase 3 CONTEXT.md authored autonomously (6 D-decisions)", "status": "done", "commit": "11a7b0c"},
+    {"id": "phase-3-plans-authored", "name": "All 6 Phase 3 PLAN.md files authored", "status": "done"},
+    {"id": "phase-3-01", "name": "Plan 03-01: aic_eval scoring snapshot — MAJOR FINDING /scoring/* topics don't exist live; PARITY-07 deferred, PARITY-08 re-pointed to /objects_poses_real", "status": "done"},
+    {"id": "phase-3-02", "name": "Plan 03-02: SCENE-05 cable physics — per-link MassAPI(density=5e-5) + per-joint DriveAPI authored on 53 links + 26 joints in cable USD; cable activated; Phase 1 13/13 smoke maintained", "status": "done"}
   ],
   "remaining_tasks": [
-    {"id": "phase-3-discuss", "name": "/gsd-discuss-phase 3 --auto — Cable Physics SCENE-05 + Object TF SCENE-06 + PARITY-07/08. Per CLAUDE.md SCENE-05 guidance: in-place USD edit (D-06 policy) per NVIDIA RigidBodyRopeDemo.py template (~3-4 hr) — NOT research-gated.", "status": "in_progress"},
-    {"id": "phase-3-plan", "name": "/gsd-plan-phase 3", "status": "not_started"},
-    {"id": "phase-3-execute", "name": "/gsd-execute-phase 3 → smoke test → close", "status": "not_started"},
-    {"id": "phase-4-trial-loader", "name": "Phase 4: trial loader + end-to-end M1 verification under live aic_engine + CheatCode (against Isaac Sim on ROS_DOMAIN_ID=7)", "status": "not_started"},
-    {"id": "m1-ship", "name": "M1 deliverable: every sample_config.yaml trial passes under CheatCode against Isaac Sim. touch .planning/.m1_shipped to disable autonomous mode.", "status": "not_started"}
+    {"id": "phase-3-03-finish", "name": "Plan 03-03: SCENE-02 cable_type variants + SCENE-03 attach_cable_to_gripper. SIGNATURE + cable_yaw flip + AUTO-INVOKE wired to extension.py load_robot. _attach_cable_to_gripper_impl is currently STUB. NEEDS: (1) full impl — RemovePrim + UsdPhysics.FixedJoint at /World/UR5e/aic_unified_robot/gripper_hande_finger_link_l/CableAttachJoint with body0=finger_link, body1=/World/UR5e/cable/Rope/Rope/link_20 (plug-end discovered by Plan 03-01 probe). (2) New MCP atom 4 surfaces (registry + handler-map + _cmd + UI button). (3) Test via execute_python_code that FixedJoint exists after attach.", "status": "in_progress", "estimate": "1-2h"},
+    {"id": "phase-3-04", "name": "Plan 03-04 (RE-SCOPED): publish /objects_poses_real (TFMessage of cable + plug + port poses) from parity_publishers. Original /scoring/tf was a sample_config ghost.", "status": "not_started", "estimate": "2h"},
+    {"id": "phase-3-05", "name": "Plan 03-05: PARITY-07 /scoring/insertion_event — DEFERRED to Phase 4 per Plan 03-01 finding (no live analog).", "status": "deferred"},
+    {"id": "phase-3-06", "name": "Plan 03-06: smoke + verify harness + REQUIREMENTS flips + 03-SUMMARY", "status": "not_started", "estimate": "1h"},
+    {"id": "phase-4", "name": "Phase 4: trial loader + E2E aic_engine + CheatCode", "status": "not_started"},
+    {"id": "m1-ship", "name": "M1 ships when every sample_config.yaml trial passes against Isaac Sim", "status": "not_started"}
   ],
   "blockers": [],
   "human_actions_pending": [],
   "decisions": [
-    {"decision": "Phase 2 closed at 6/7 smoke with Step 3 carry-forward documented. Mirrors Phase 1's 9/10 close pattern.", "rationale": "Real aic_controller pre-smooths trajectories; per-cmd deltas << 0.05 rad; PD tracking is tight in real operation. Single-shot 0.05-rad smoke step hits a transient PD-damping regime that doesn't reflect real operation.", "phase": "2"},
-    {"decision": "ROS_DOMAIN_ID=7 is the canonical Isaac Sim domain (separate from default 0 which has the user's live UR5e robot driver). Documented in CLAUDE.md.", "rationale": "Discovered 2026-05-05: live UR robot driver's joint_state_broadcaster on domain 0 was racing parity_publishers on /joint_states. Domain isolation eliminates the conflict without disturbing the real robot.", "phase": "2"},
-    {"decision": "Articulation handles must be lazily constructed in physics tick (≥30 ticks after play) — NEVER at extension start time. _physics_view isn't populated until after first physics step.", "rationale": "Verified 2026-05-05 across controller_loop AND parity_publishers. start-time construction returns a handle whose every method raises AttributeError. Same pattern needed for any future Articulation use in this repo.", "phase": "2"},
-    {"decision": "ArticulationKinematicsSolver requires SingleArticulation (legacy class with .handles_initialized), not the new isaacsim.core.prims.Articulation.", "rationale": "compute_end_effector_pose raises AttributeError without SingleArticulation. Construct two handles: SingleArticulation for kinematics, Articulation for set/get/apply.", "phase": "2"},
-    {"decision": "Phase 3 SCENE-05 = mechanical USD mass/inertia edit per NVIDIA RigidBodyRopeDemo.py template, NOT research-gated.", "rationale": "Per CLAUDE.md: empirical re-test 2026-05-03 disproved D-04 (cable wedge no longer reproduces under current launch path). Solution: author proper mass/inertia per rope-demo template (~3-4 hr).", "phase": "3"}
+    {"decision": "Phase 3 PARITY-07 (/scoring/insertion_event) DEFERRED — no live analog in aic_eval container. Phase 4 will revisit when CheatCode trial reveals if it's actually consumed.", "rationale": "Plan 03-01 live snapshot 2026-05-05 confirmed /scoring/* topics never advertised in live aic_eval; they are sample_config.yaml ghosts.", "phase": "3"},
+    {"decision": "Phase 3 PARITY-08 RE-SCOPED from /scoring/tf to /objects_poses_real (tf2_msgs/TFMessage). Isaac Sim is the EXPECTED PUBLISHER (live aic_eval has subscriber but no publisher).", "rationale": "Live capture shows /objects_poses_real exists with subscriber=grasp_points_publisher and publisher=0; awaiting external fill. CLAUDE.md topic-parity-as-architectural-law principle applied.", "phase": "3"},
+    {"decision": "SCENE-05 cable physics = NVIDIA RigidBodyRopeDemo template values verbatim (density=5e-5, damping=10.0, stiffness=1.0, drives on rotY+rotZ only).", "rationale": "Source: ~/env_isaaclab/.../omni.physxdemos/scenes/RigidBodyRopeDemo.py. Cable is articulated chain (omni.physx.tensors warning confirmed); set_world_poses on child links is no-op as expected. Real verification = Phase 4 CheatCode trial.", "phase": "3"},
+    {"decision": "Plug-end link = /World/UR5e/cable/Rope/Rope/link_20 (closest to /World/UR5e/cable/sc_plug_visual at d=0.033m per Plan 03-01 probe). Cable spans link_0 (anchor) → link_20 (plug-end), 21 links in live view (53 in offline file).", "rationale": "Empirical probe 2026-05-05.", "phase": "3"}
   ],
-  "uncommitted_files": [],
-  "next_action": "Invoke /gsd-discuss-phase 3 --auto to gather Phase 3 context (cable physics + object TF). Per autonomous mode, do not pause. After discuss, /gsd-plan-phase 3, then /gsd-execute-phase 3, then close. Then Phase 4. Then M1.",
-  "context_notes": "Phase 2 took 8 layered bugs to fix Bug 4. Phase 3 should be cleaner — the cable physics work is well-scoped (per CLAUDE.md SCENE-05 guidance), object TF (SCENE-06) mirrors Phase 1's TF publish surface, PARITY-07/08 are publisher additions. Estimated 3-4hr for SCENE-05 + 1-2hr for SCENE-06 + 1-2hr for PARITY-07/08 + 30min closure = ~6-8hr Phase 3 total. Phase 4 trial loader is the M1 ship gate — should be ~4-6hr if Phase 3 is clean."
+  "uncommitted_files": [
+    "exts/aic-dt/aic_dt/extension.py (Plan 03-03 partial: load_robot signature + cable_yaw flip + _attach_cable_to_gripper_impl STUB; needs full impl + 4-surface MCP atom)"
+  ],
+  "next_action": "Resume Plan 03-03: (1) Replace _attach_cable_to_gripper_impl STUB with full FixedJoint authoring at /World/UR5e/aic_unified_robot/gripper_hande_finger_link_l/CableAttachJoint connecting body0=finger_link, body1=/World/UR5e/cable/Rope/Rope/link_20. Use UsdPhysics.FixedJoint.Define + CreateBody0Rel + CreateBody1Rel. Idempotent: stage.RemovePrim if already exists. (2) Add 4-surface MCP atom: MCP_TOOL_REGISTRY['attach_cable_to_gripper'] (with prim_paths + gripper_initial_pos params), handler-map entry, _cmd_attach_cable_to_gripper method, UI button. (3) Restart Isaac Sim with ROS_DOMAIN_ID=7, run quick_start, invoke attach_cable_to_gripper via MCP, probe FixedJoint exists. Then move to Plan 03-04 (RE-SCOPED /objects_poses_real publisher in parity_publishers).",
+  "context_notes": "Major Phase 3 finding (Plan 03-01): /scoring/* topics in REQUIREMENTS.md are sample_config.yaml ghosts — re-scoped to /objects_poses_real. SCENE-05 (Plan 03-02) DONE: cable USD edited in-place per RigidBodyRopeDemo template; cable activated in load_robot; Phase 1 smoke 13/13 maintained under ROS_DOMAIN_ID=7. Plan 03-03 PARTIAL: signature + cable_yaw flip + auto-invoke hook done; _attach_cable_to_gripper_impl is STUB; MCP atom 4 surfaces not yet wired. Cable USD on disk at exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (.bak preserved). Cache snapshot taken (DerivedDataCache.bak.1777977941). 30-min /loop scheduled (cron caf96e13 = 7,37 * * * *) to auto-resume per autonomous-mode bootstrap if context compacts."
 }
