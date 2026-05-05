@@ -234,6 +234,23 @@ MCP_TOOL_REGISTRY = {
             }
         }
     },
+    "load_trial": {
+        "description": "TRIAL-01/02 (Plan 04-02, D-01..D-05): Read a single trial from sample_config.yaml-format YAML and spawn the matching Isaac Sim scene (board pose, rail occupancy, port poses, cable pose, attach state). Reuses existing per-component spawn atoms + load_robot. ground_truth=True (default) starts /scoring/* publishers; False skips them (M2 swap surface).",
+        "parameters": {
+            "config_path": {
+                "type": "string",
+                "description": "Path to sample_config.yaml. Default: ~/Documents/aic/aic_engine/config/sample_config.yaml (~ expanded)."
+            },
+            "trial_key": {
+                "type": "string",
+                "description": "YAML key under 'trials' (e.g. 'trial_1', 'trial_2', 'trial_3'). Required."
+            },
+            "ground_truth": {
+                "type": "boolean",
+                "description": "If True (default), /scoring/tf + /objects_poses_real + /scoring/insertion_event publishers run. If False, only parity publishers (robot frames). Mirrors Gazebo's ground_truth:=... launch arg."
+            }
+        }
+    },
     "setup_wrist_cameras": {
         "description": "Create ROS2 action graphs for all 3 built-in wrist cameras (center, left, right) publishing RGB and CameraInfo.",
         "parameters": {}
@@ -398,6 +415,8 @@ MCP_HANDLERS = {
     "setup_controller_subscribers": "_cmd_setup_controller_subscribers",
     "setup_offlimit_contacts": "_cmd_setup_offlimit_contacts",
     "attach_cable_to_gripper": "_cmd_attach_cable_to_gripper",
+    # Phase 4 — trial loader (Plan 04-02; TRIAL-01/02)
+    "load_trial": "_cmd_load_trial",
     "setup_wrist_cameras": "_cmd_setup_wrist_cameras",
     "add_objects": "_cmd_add_objects",
     # SCENE-01 / DX-02 — Per-component spawn atoms
@@ -602,6 +621,10 @@ class DigitalTwin(omni.ext.IExt):
                                   clicked_fn=lambda: self._cmd_setup_offlimit_contacts())
                         ui.Button("Attach Cable to Gripper", width=220, height=35,
                                   clicked_fn=lambda: self._cmd_attach_cable_to_gripper())
+                        # Phase 4 / Plan 04-02 — TRIAL-01/02 trial loader (default trial_1, ground_truth=True)
+                        ui.Button("Load Trial sample_config trial_1", width=320, height=35,
+                                  clicked_fn=lambda: asyncio.ensure_future(
+                                      self._cmd_load_trial(trial_key="trial_1", ground_truth=True)))
 
             # 4. Cameras
             with ui.CollapsableFrame(title="Cameras", collapsed=False, height=0):
@@ -2990,6 +3013,232 @@ class DigitalTwin(omni.ext.IExt):
         except Exception as e:
             traceback.print_exc()
             return {"status": "error", "message": f"attach_cable_to_gripper failed: {str(e)}"}
+
+    # ====================================================================
+    # Phase 4 / Plan 04-02 — Trial loader (TRIAL-01 + TRIAL-02)
+    #
+    # _cmd_load_trial parses a single trial entry from sample_config.yaml-format
+    # YAML and dispatches to the existing per-component spawn atoms (Plan 01-09)
+    # + load_robot (Phase 3). ground_truth=True (default) starts /scoring/*
+    # publishers; False suppresses them (M2 swap surface).
+    #
+    # Adapter strategy (per 04-RESEARCH.md):
+    #   - YAML cables.<name>.pose.gripper_offset.{x,y,z} → load_robot's
+    #     cable_x/y/z (Option A pass-through; informative offset, not absolute).
+    #   - entity_name in nic_rail_<i> / sc_rail_<i> / *_mount_rail_<i> blocks
+    #     is IGNORED — informational for aic_engine; spawn atoms use
+    #     hardcoded asset USDs per AIC_OBJECTS.
+    #
+    # Helpers (private methods on DigitalTwin):
+    #   - _extract_cable_kwargs(scene)  → kwargs forwarded to load_robot
+    #   - _dispatch_rail_block(kind, index, block, atom_fn) → dispatches one
+    #     YAML scene-block entry to its spawn atom; returns (label, kwargs)
+    # ====================================================================
+
+    def _extract_cable_kwargs(self, scene: dict) -> dict:
+        """Q6 cable extraction (04-RESEARCH.md): take the first cables.<name>
+        entry; flatten gripper_offset to absolute cable_x/y/z (Option A per
+        Q2). If no cables block exists, return {} so load_robot falls back
+        to its Phase-3 defaults.
+        """
+        cables = scene.get("cables", {}) or {}
+        if not cables:
+            return {}
+        # First-cable-wins (Q6): aic_engine consumes one cable per trial.
+        cable_name, cable_cfg = next(iter(cables.items()))
+        pose = (cable_cfg or {}).get("pose", {}) or {}
+        offset = pose.get("gripper_offset", {}) or {}
+        return {
+            "cable_x": float(offset.get("x", 0.172)),
+            "cable_y": float(offset.get("y", 0.024)),
+            "cable_z": float(offset.get("z", 1.518)),
+            "cable_roll": float(pose.get("roll", 0.4432)),
+            "cable_pitch": float(pose.get("pitch", -0.48)),
+            "cable_yaw": float(pose.get("yaw", 1.3303)),
+            "cable_type": cable_cfg.get("cable_type", "sfp_sc_cable"),
+            "attach_cable_to_gripper": bool(cable_cfg.get("attach_cable_to_gripper", False)),
+        }
+
+    def _dispatch_rail_block(self, kind: str, index: int, block: dict, atom_fn) -> tuple:
+        """Q5 adapter (04-RESEARCH.md): YAML's entity_present/entity_pose.{translation,roll,pitch,yaw}
+        → atom kwargs. Returns (atom_name_with_index, kwargs) for the
+        spawned_components return list. Ignores entity_name (informational).
+
+        Some atoms (spawn_nic_card) have no `index` parameter — the helper
+        introspects via inspect.signature and strips `index` as needed.
+        """
+        import inspect  # lazy import (Phase 2 pattern)
+        block = block or {}
+        pose = block.get("entity_pose", {}) or {}
+        kwargs = {
+            "index": index,
+            "present": bool(block.get("entity_present", False)),
+            "translation": float(pose.get("translation", 0.0)),
+            "roll":  float(pose.get("roll", 0.0)),
+            "pitch": float(pose.get("pitch", 0.0)),
+            "yaw":   float(pose.get("yaw", 0.0)),
+        }
+        sig = inspect.signature(atom_fn)
+        if "index" not in sig.parameters:
+            kwargs.pop("index")
+        atom_fn(**kwargs)
+        return (f"{kind}_{index}", kwargs)
+
+    async def _cmd_load_trial(self,
+                              config_path: str = None,
+                              trial_key: str = "trial_1",
+                              ground_truth: bool = True) -> Dict[str, Any]:
+        """TRIAL-01/02 (D-01..D-05): Spawn a sample_config.yaml trial and start sim.
+
+        See .planning/phases/04-trial-loader/04-CONTEXT.md (D-01..D-05) and
+        04-RESEARCH.md (Q2 schema audit, Q5 spawn-atom field gaps, Q6 cable
+        extraction).
+
+        Adapter strategy (per 04-RESEARCH.md Option A):
+          - YAML cables.<name>.pose.gripper_offset.{x,y,z} → load_robot's
+            cable_x/y/z (small offset, ≤4.5cm; passes through cleanly).
+          - entity_name in *rail* blocks is IGNORED — informational only for
+            aic_engine consumption; spawn atoms use hardcoded asset USDs per
+            AIC_OBJECTS.
+
+        Args:
+            config_path: Path to sample_config.yaml. Default
+                ~/Documents/aic/aic_engine/config/sample_config.yaml (~ expanded).
+            trial_key: YAML key under 'trials' (e.g. 'trial_1').
+            ground_truth: D-04 gate — if True (default), starts /scoring/*
+                publishers; if False, suppresses them (M2 swap surface).
+
+        Returns:
+            {"status": "success", "trial": trial_key, "ground_truth": bool,
+             "spawned_components": [(atom_name_with_index, kwargs), ...]}
+            or {"status": "error", "message": ..., "traceback": ...}.
+        """
+        # Lazy imports (Phase 2 pattern — keep module load Kit-free)
+        import yaml
+        try:
+            if config_path is None:
+                config_path = os.path.expanduser(
+                    "~/Documents/aic/aic_engine/config/sample_config.yaml")
+            else:
+                config_path = os.path.expanduser(config_path)
+
+            with open(config_path, "r") as f:
+                cfg = yaml.safe_load(f)
+
+            trials = (cfg or {}).get("trials", {}) or {}
+            if trial_key not in trials:
+                return {
+                    "status": "error",
+                    "message": f"trial_key {trial_key!r} not found in {config_path}; available: {sorted(trials.keys())}",
+                }
+
+            scene = ((trials[trial_key] or {}).get("scene", {})) or {}
+            cable_kwargs = self._extract_cable_kwargs(scene)
+
+            print(f"=== load_trial({trial_key}, ground_truth={ground_truth}) ===")
+            spawned: list = []
+
+            # 1. Fresh stage (D-02 idempotency)
+            await self._cmd_new_stage()
+
+            # 2. load_scene (physics + ground + dome + enclosure)
+            print("--- Loading scene ---")
+            await self.load_scene()
+
+            # 3. load_robot with cable kwargs from YAML (gripper_offset → cable_x/y/z per Q6)
+            print(f"--- Importing UR5e (cable_kwargs={cable_kwargs}) ---")
+            await self.load_robot(**cable_kwargs)
+
+            # 4. Early play (Phase 1 D-12 non-negotiable order)
+            print("--- Playing scene early (before graphs/objects) ---")
+            self._timeline.play()
+
+            # 5. TF + JointState publishers (PARITY-03/04)
+            self.setup_tf_publish_action_graph()
+            self.setup_joint_state_publish_action_graph()
+
+            # 6. Phase 2 controller loop
+            self._start_aic_controller_loop()
+
+            # 7. Setup action graph (joint subscribe side) + force publisher + cameras
+            await self.setup_action_graph()
+            self.setup_wrist_cameras()
+            self.setup_force_publish_action_graph()
+
+            # 8. Spawn task_board_base from YAML pose
+            tb_pose = (scene.get("task_board") or {}).get("pose", {}) or {}
+            tb_kwargs = {
+                "x":     float(tb_pose.get("x",     0.25)),
+                "y":     float(tb_pose.get("y",     0.0)),
+                "z":     float(tb_pose.get("z",     1.14)),
+                "roll":  float(tb_pose.get("roll",  0.0)),
+                "pitch": float(tb_pose.get("pitch", 0.0)),
+                "yaw":   float(tb_pose.get("yaw",   0.0)),
+            }
+            print(f"--- Spawning task_board_base {tb_kwargs} ---")
+            self._cmd_spawn_task_board_base(**tb_kwargs)
+            spawned.append(("spawn_task_board_base", tb_kwargs))
+
+            # 9. Iterate rails — nic_rail_<0..4> / sc_rail_<0..1> / {lc,sfp,sc}_mount_rail_<0..1>
+            tb_scene = scene.get("task_board") or {}
+            for i in range(5):
+                block = tb_scene.get(f"nic_rail_{i}")
+                if block:
+                    spawned.append(self._dispatch_rail_block(
+                        "nic_rail", i, block, self._cmd_spawn_nic_card_mount))
+            for i in range(2):
+                block = tb_scene.get(f"sc_rail_{i}")
+                if block:
+                    spawned.append(self._dispatch_rail_block(
+                        "sc_rail", i, block, self._cmd_spawn_sc_port))
+                for prefix, fn in [
+                    ("lc_mount_rail",  self._cmd_spawn_lc_mount_rail),
+                    ("sfp_mount_rail", self._cmd_spawn_sfp_mount_rail),
+                    ("sc_mount_rail",  self._cmd_spawn_sc_mount_rail),
+                ]:
+                    block = tb_scene.get(f"{prefix}_{i}")
+                    if block:
+                        spawned.append(self._dispatch_rail_block(prefix, i, block, fn))
+
+            # 10. Parity publishers (always on per D-04)
+            print("--- Setting up AIC parity publishers ---")
+            try:
+                self._start_aic_parity_publishers()
+            except Exception as exc:
+                print(f"[AIC-DT][parity] _start_aic_parity_publishers failed: {exc!r}")
+
+            # 11. Scoring publishers (gated on ground_truth, mirrors quick_start gate)
+            if ground_truth:
+                print("--- Setting up AIC scoring publishers (/scoring/tf + /objects_poses_real + /scoring/insertion_event) ---")
+                try:
+                    self._start_aic_scoring_publishers()
+                except Exception as exc:
+                    print(f"[AIC-DT][scoring] _start_aic_scoring_publishers failed: {exc!r}")
+            else:
+                print("--- ground_truth=False — skipping AIC scoring publishers (M2 swap surface preserved) ---")
+
+            # 12. Ensure timeline is playing (idempotent)
+            try:
+                self._timeline.play()
+            except Exception:
+                pass
+
+            return {
+                "status": "success",
+                "trial": trial_key,
+                "ground_truth": ground_truth,
+                "config_path": config_path,
+                "spawned_components": spawned,
+                "cable_kwargs": cable_kwargs,
+            }
+        except Exception as e:
+            carb.log_error(f"Error in load_trial: {e}")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"load_trial failed: {str(e)}",
+                "traceback": traceback.format_exc(),
+            }
 
     def _cmd_setup_wrist_cameras(self) -> Dict[str, Any]:
         try:

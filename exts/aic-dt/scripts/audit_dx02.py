@@ -69,6 +69,8 @@ PRESENT_ATOMS = [
     # New in Phase 2 (Plan 02-02 — controller-loop skeleton; PARITY-09/10/11/06)
     "setup_controller_subscribers",
     "setup_offlimit_contacts",
+    # New in Phase 4 (Plan 04-02 — TRIAL-01/02 trial loader + ground_truth gate)
+    "load_trial",
 ]
 
 # Atoms expected to be ABSENT — all 4 surfaces removed (Plan 04 / DX-01).
