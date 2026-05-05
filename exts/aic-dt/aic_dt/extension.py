@@ -1735,13 +1735,22 @@ class DigitalTwin(omni.ext.IExt):
         if not ok:
             print("[AIC-DT][parity] Publisher start() returned False -- check rclpy availability.")
 
-    def _start_aic_scoring_publishers(self):
+    def _start_aic_scoring_publishers(self, port_link_paths=None):
         """Start the AicScoringPublishers manager (Phase 3 Plan 03-04+05). Idempotent.
 
         Owns rclpy node + /scoring/tf + /objects_poses_real + /scoring/insertion_event
         publishers + omni.physx contact subscription for plug-port detection.
         Mirrors _start_aic_parity_publishers pattern. Should be called from
         quick_start AFTER add_objects so task_board prims exist for TF lookup.
+
+        Args:
+            port_link_paths: D-13 fallback (Plan 04-03 Wave 1 A4=MISMATCH).
+                Optional list of port USD prim paths to use for the insertion
+                contact-report subscription. If provided, overrides the
+                module-level scoring_publishers._PORT_LINK_PATHS default
+                (which targets the legacy snake_case /World/TaskBoard/sc_port_*
+                namespace). load_trial passes the live CamelCase paths
+                computed from the actual spawn calls.
         """
         try:
             from .scoring_publishers import AicScoringPublishers
@@ -1752,6 +1761,10 @@ class DigitalTwin(omni.ext.IExt):
             self._aic_scoring_publishers = AicScoringPublishers(
                 robot_xform_path=self._articulation_root_prim_path
             )
+        # D-13 fallback: apply the override BEFORE start() — contact-report
+        # subscription is wired at start time, not on each tick.
+        if port_link_paths is not None:
+            self._aic_scoring_publishers.set_port_link_paths(port_link_paths)
         ok = self._aic_scoring_publishers.start()
         if not ok:
             print("[AIC-DT][scoring] Publisher start() returned False -- check rclpy availability.")
@@ -3209,9 +3222,29 @@ class DigitalTwin(omni.ext.IExt):
 
             # 11. Scoring publishers (gated on ground_truth, mirrors quick_start gate)
             if ground_truth:
-                print("--- Setting up AIC scoring publishers (/scoring/tf + /objects_poses_real + /scoring/insertion_event) ---")
+                # D-13 fallback (Plan 04-03 Wave 1 A4=MISMATCH): compute live
+                # port USD prim paths from spawned-component list and override
+                # the scoring publisher's hardcoded _PORT_LINK_PATHS. The
+                # spawn-atom prim-path templates were captured by 04-01
+                # taskboard_prim_paths.txt:
+                #   spawn_sc_port(index=i, present=True)   → /World/TaskBoard/SCPort_{i}
+                #   spawn_nic_card_mount(index=i, present=True) → /World/TaskBoard/NICCardMount_{i}
+                live_port_paths = []
+                for atom_name, kw in spawned:
+                    if not kw or not kw.get("present"):
+                        continue
+                    if atom_name.startswith("sc_rail_"):
+                        i = int(atom_name.rsplit("_", 1)[-1])
+                        live_port_paths.append(f"/World/TaskBoard/SCPort_{i}")
+                    elif atom_name.startswith("nic_rail_"):
+                        i = int(atom_name.rsplit("_", 1)[-1])
+                        live_port_paths.append(f"/World/TaskBoard/NICCardMount_{i}")
+                print(f"--- Setting up AIC scoring publishers (/scoring/tf + /objects_poses_real + /scoring/insertion_event) ---")
+                print(f"[AIC-DT][scoring] D-13 live port paths from spawn ({len(live_port_paths)}): {live_port_paths}")
                 try:
-                    self._start_aic_scoring_publishers()
+                    self._start_aic_scoring_publishers(
+                        port_link_paths=live_port_paths if live_port_paths else None,
+                    )
                 except Exception as exc:
                     print(f"[AIC-DT][scoring] _start_aic_scoring_publishers failed: {exc!r}")
             else:

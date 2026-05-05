@@ -59,6 +59,10 @@ _OBJECTS_POSES_FRAMES = [
 
 # Plug-port pair for /scoring/insertion_event detection (Plan 03-05).
 _PLUG_END_LINK_PATH = "/World/UR5e/cable/Rope/Rope/link_20"
+# Default _PORT_LINK_PATHS — used by Phase 3 cable-only scenes that don't
+# spawn the full task board. Plan 04-03 D-13 fallback (Wave 1 A4=MISMATCH):
+# load_trial overrides via AicScoringPublishers.set_port_link_paths(...) to
+# the live spawn paths (CamelCase namespace under /World/TaskBoard/).
 _PORT_LINK_PATHS = [  # any of these as actor1 triggers an insertion event
     "/World/TaskBoard/sc_port_1",
     "/World/TaskBoard/sc_port_2",
@@ -99,6 +103,31 @@ class AicScoringPublishers:
         self._insertion_event_armed = False  # True after publishing; reset on separation
         # Log-once flags
         self._logged_publish_error = False
+        # D-13 fallback (Plan 04-03, Wave 1 A4=MISMATCH): per-instance override of
+        # the module-level _PORT_LINK_PATHS list. Populated by load_trial after
+        # spawn-atom dispatch. None = use module-level default.
+        self._port_link_paths_override = None
+
+    def set_port_link_paths(self, paths) -> None:
+        """D-13 fallback (Plan 04-03): override the hardcoded _PORT_LINK_PATHS
+        list with the live spawn paths computed by load_trial.
+
+        MUST be called BEFORE start() — the contact-report subscription is
+        wired at start time, not on each tick. Calling after start() is a no-op
+        for the active subscription (would require stop() + start() cycle).
+
+        Args:
+            paths: iterable of USD prim path strings (e.g. ['/World/TaskBoard/SCPort_0', ...]).
+        """
+        self._port_link_paths_override = list(paths) if paths is not None else None
+        print(f"[AIC-DT][scoring] set_port_link_paths: {len(self._port_link_paths_override or [])} paths "
+              f"(override active={self._port_link_paths_override is not None})")
+
+    def _effective_port_link_paths(self):
+        """Return the active port-link path list (override if set, else module default)."""
+        if self._port_link_paths_override is not None:
+            return self._port_link_paths_override
+        return _PORT_LINK_PATHS
 
     def start(self) -> bool:
         """Construct rclpy node + 3 publishers + physx subscriptions. Idempotent."""
@@ -154,7 +183,8 @@ class AicScoringPublishers:
             from pxr import UsdPhysics, PhysxSchema
             from omni.physx import get_physx_simulation_interface
             applied = 0
-            for path in [_PLUG_END_LINK_PATH] + _PORT_LINK_PATHS:
+            effective_ports = self._effective_port_link_paths()
+            for path in [_PLUG_END_LINK_PATH] + effective_ports:
                 prim = self._stage.GetPrimAtPath(path)
                 if not prim or not prim.IsValid() or not prim.HasAPI(UsdPhysics.RigidBodyAPI):
                     continue
@@ -165,7 +195,8 @@ class AicScoringPublishers:
                 get_physx_simulation_interface()
                 .subscribe_contact_report_events(self._on_insertion_contact_event)
             )
-            print(f"[AIC-DT][scoring] insertion contact subscription wired ({applied}/{1+len(_PORT_LINK_PATHS)} prims tagged with PhysxContactReportAPI)")
+            print(f"[AIC-DT][scoring] insertion contact subscription wired ({applied}/{1+len(effective_ports)} prims tagged with PhysxContactReportAPI)")
+            print(f"[AIC-DT][scoring] active port paths: {effective_ports}")
         except Exception as exc:
             print(f"[AIC-DT][scoring] insertion contact subscription failed: {exc!r}")
 
@@ -348,8 +379,8 @@ class AicScoringPublishers:
                 actor1 = str(PhysicsSchemaTools.intToSdfPath(header.actor1))
             except Exception:
                 continue
-            # Determine if this is a plug↔port pair
-            for port_path in _PORT_LINK_PATHS:
+            # Determine if this is a plug↔port pair (use effective override if set)
+            for port_path in self._effective_port_link_paths():
                 hit = (
                     (actor0.startswith(_PLUG_END_LINK_PATH) and actor1.startswith(port_path))
                     or (actor1.startswith(_PLUG_END_LINK_PATH) and actor0.startswith(port_path))
