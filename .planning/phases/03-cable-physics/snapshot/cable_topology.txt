@@ -1,0 +1,38 @@
+Cable USD topology probe (Plan 03-01 Task 3)
+Captured: 2026-05-05 via execute_python_code against live aic-dt instance
+
+cable subtree: 23 RigidBody links, 22 physics joints
+
+Sample links (first 4 of 23):
+  /World/UR5e/cable/Rope/Rope/link_0   mass=0.0 inertia=None density=None
+  /World/UR5e/cable/Rope/Rope/link_1   mass=0.0 inertia=None density=None
+  /World/UR5e/cable/Rope/Rope/link_2   mass=0.0 inertia=None density=None
+  /World/UR5e/cable/Rope/Rope/link_3   mass=0.0 inertia=None density=None
+
+Naming convention: `/World/UR5e/cable/Rope/Rope/link_<N>` where N = 0..22 (23 links).
+
+Plug candidates (matched on "plug" substring):
+  /World/UR5e/cable/sc_plug_visual  ← terminal plug prim (visual reference)
+
+ALL links have mass=0, no MassAPI, no DensityAttr authored — confirms CLAUDE.md
+SCENE-05 finding ("21-segment cable rope, mass=0/inertia=0 D6 joints — PhysX
+trivially skips them as kinematic"). Probe shows 23 links not 21; CLAUDE.md
+estimate was approximate.
+
+Implications for Plan 03-02 (SCENE-05):
+- Author UsdPhysics.MassAPI on each of 23 link_<N> prims under
+  /World/UR5e/cable/Rope/Rope/
+- Per RigidBodyRopeDemo template: CreateDensityAttr(0.00005)
+- After authoring, flip cable_prim.SetActive(False → True) in load_robot
+
+Implications for Plan 03-03 (SCENE-03 attach_cable_to_gripper):
+- Plug-end link for FixedJoint authoring is most likely
+  /World/UR5e/cable/Rope/Rope/link_22 (terminal of the chain)
+- BUT verify — link_0 might be the plug end depending on rope build direction.
+  Test by checking which end is closer to /World/UR5e/cable/sc_plug_visual.
+- Once identified, author FixedJoint at gripper_hande_finger_link_l ↔ that link.
+
+Implications for Plan 03-04 (re-scoped /objects_poses_real):
+- Publish 23 link transforms + plug + port frame transforms in TFMessage.
+- Frame names match aic_adapter expectations (TBD — needs aic_adapter source
+  inspection if not in snapshot).

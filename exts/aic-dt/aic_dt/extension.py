@@ -1256,8 +1256,18 @@ class DigitalTwin(omni.ext.IExt):
                 print(f"Authored cable pose translation=({cable_x},{cable_y},{cable_z}) RPY=({cable_roll},{cable_pitch},{cable_yaw}) (no-op effect in Phase 1 — cable SetActive(False))")
             except Exception as exc:  # noqa: BLE001 — pose authoring on a deactivated subtree is best-effort
                 print(f"Cable pose authoring skipped: {exc}")
-            cable_prim.SetActive(False)
-            print(f"Deactivated {prim_path}/cable (post-play physics wedge — see comment above)")
+            # Phase 3 SCENE-05 (Plan 03-02): cable physics now authored on-disk
+            # via author_cable_physics_offline.py — per-link MassAPI(density=0.00005)
+            # + per-joint DriveAPI(force, damping=10.0, stiffness=1.0) per
+            # NVIDIA's RigidBodyRopeDemo template. Activate the subtree.
+            # Emergency rollback via SCENE_05_DISABLE=1 env var.
+            import os as _os
+            if _os.environ.get("SCENE_05_DISABLE", "").lower() in ("1", "true"):
+                cable_prim.SetActive(False)
+                print(f"SCENE_05_DISABLE=1 → deactivated {prim_path}/cable (D-04 fallback)")
+            else:
+                cable_prim.SetActive(True)
+                print(f"SCENE-05: activated {prim_path}/cable (per-link mass authored — see author_cable_physics_offline.py)")
 
         # Setup Articulation
         self._robot_view = ArticulationView(prim_paths_expr=prim_path, name="ur5e_view")
