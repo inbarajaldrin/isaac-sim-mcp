@@ -146,10 +146,28 @@ class AicScoringPublishers:
             print(f"[AIC-DT][scoring] subscribe_physics_step_events failed: {exc!r}")
             return False
 
-        # Insertion contact subscription (Plan 03-05 SKELETON — fill in)
-        # See controller_loop._setup_contact_subscription (Plan 02-06) for the pattern.
-        # TODO(Plan 03-05): apply PhysxContactReportAPI on plug-end link + port links,
-        # subscribe via get_physx_simulation_interface().subscribe_contact_report_events.
+        # Insertion contact subscription (Plan 03-05). Mirror of
+        # controller_loop._setup_contact_subscription (Plan 02-06 PARITY-06):
+        # apply PhysxContactReportAPI(threshold=0.0) on plug + port prims,
+        # then subscribe to physx_simulation_interface contact-report events.
+        try:
+            from pxr import UsdPhysics, PhysxSchema
+            from omni.physx import get_physx_simulation_interface
+            applied = 0
+            for path in [_PLUG_END_LINK_PATH] + _PORT_LINK_PATHS:
+                prim = self._stage.GetPrimAtPath(path)
+                if not prim or not prim.IsValid() or not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                    continue
+                contact_api = PhysxSchema.PhysxContactReportAPI.Apply(prim)
+                contact_api.CreateThresholdAttr().Set(0.0)
+                applied += 1
+            self._physx_contact_sub = (
+                get_physx_simulation_interface()
+                .subscribe_contact_report_events(self._on_insertion_contact_event)
+            )
+            print(f"[AIC-DT][scoring] insertion contact subscription wired ({applied}/{1+len(_PORT_LINK_PATHS)} prims tagged with PhysxContactReportAPI)")
+        except Exception as exc:
+            print(f"[AIC-DT][scoring] insertion contact subscription failed: {exc!r}")
 
         print("[AIC-DT][scoring] Started: /scoring/tf + /objects_poses_real + /scoring/insertion_event")
         return True
