@@ -360,8 +360,13 @@ MCP_TOOL_REGISTRY = {
         "parameters": {}
     },
     "quick_start": {
-        "description": "One-click scene setup: loads AIC scene with enclosure, imports UR5e robot with action graphs, force publisher, wrist cameras, task board objects, and starts simulation.",
-        "parameters": {}
+        "description": "One-click scene setup: loads AIC scene with enclosure, imports UR5e robot with action graphs, force publisher, wrist cameras, task board objects, and starts simulation. Set ground_truth=False to skip /scoring/* publishers (M2 pose-source-swap surface).",
+        "parameters": {
+            "ground_truth": {
+                "type": "boolean",
+                "description": "If True (default), starts /scoring/tf + /objects_poses_real + /scoring/insertion_event publishers. If False, only parity publishers run (robot frames + /joint_states + /tf only). Mirrors Gazebo's ground_truth:=true/false launch arg semantics."
+            }
+        }
     },
     "randomize_lighting": {
         "description": "Randomize dome light intensity (1500-3500 lux) and color (RGB 0.5-1.0) for domain randomization.",
@@ -1027,7 +1032,7 @@ class DigitalTwin(omni.ext.IExt):
 
     # ==================== Quick Start ====================
 
-    async def quick_start(self):
+    async def quick_start(self, ground_truth: bool = True):
         """Quick start: load scene → load robot → play → TF/JointState/JointSubscribe graphs → cameras → wrench → objects → workspace cam.
 
         Per Phase 1 D-12: refactored ordering with TF + JointState publishers (PARITY-03/04)
@@ -1038,6 +1043,13 @@ class DigitalTwin(omni.ext.IExt):
           - Phase 4 trial-loader: replaces the static add_objects with a parametric variant
 
         The early-play step (2b) is non-negotiable — see comment block below.
+
+        Args:
+            ground_truth: If True (default), `_start_aic_scoring_publishers` runs
+                (Phase 3 /scoring/tf + /objects_poses_real + /scoring/insertion_event).
+                If False, that call is suppressed; only parity publishers run. Mirrors
+                Gazebo's `ground_truth:=true/false` launch arg semantics. M2 pose-source
+                swap will replace the publisher behind this gate.
         """
         print("=== Quick Start ===")
         app = omni.kit.app.get_app()
@@ -1110,11 +1122,16 @@ class DigitalTwin(omni.ext.IExt):
         await app.next_update_async()
 
         # Phase 3 Plan 03-04+05: scoring publishers (after task_board prims exist).
-        print("--- Setting up AIC scoring publishers (/scoring/tf + /objects_poses_real + /scoring/insertion_event) ---")
-        try:
-            self._start_aic_scoring_publishers()
-        except Exception as exc:
-            print(f"[AIC-DT][scoring] _start_aic_scoring_publishers failed: {exc!r}")
+        # Phase 4 Plan 04-02 (D-04): ground_truth gate — when False, scoring topics
+        # are suppressed (M2 pose-source-swap surface preserved).
+        if ground_truth:
+            print("--- Setting up AIC scoring publishers (/scoring/tf + /objects_poses_real + /scoring/insertion_event) ---")
+            try:
+                self._start_aic_scoring_publishers()
+            except Exception as exc:
+                print(f"[AIC-DT][scoring] _start_aic_scoring_publishers failed: {exc!r}")
+        else:
+            print("--- ground_truth=False — skipping AIC scoring publishers (M2 swap surface preserved) ---")
         await app.next_update_async()
 
         # 7b. Randomize lighting (best-effort — present from earlier work)
@@ -3378,11 +3395,12 @@ class DigitalTwin(omni.ext.IExt):
             traceback.print_exc()
             return {"status": "error", "message": f"Failed to create new stage: {str(e)}"}
 
-    async def _cmd_quick_start(self) -> Dict[str, Any]:
+    async def _cmd_quick_start(self, ground_truth: bool = True) -> Dict[str, Any]:
         try:
-            await self.quick_start()
+            await self.quick_start(ground_truth=ground_truth)
             return {
                 "status": "success",
+                "ground_truth": ground_truth,
                 "message": "Quick start complete: AIC scene with UR5e, wrist cameras, task board objects, and simulation running."
             }
         except Exception as e:
