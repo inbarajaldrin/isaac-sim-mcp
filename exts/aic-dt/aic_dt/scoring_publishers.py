@@ -280,19 +280,63 @@ class AicScoringPublishers:
     def _maybe_publish_insertion_event(self, stamp):
         """If sustained plug-port contact detected, publish std_msgs/String once.
 
-        TODO Plan 03-05: drain self._insertion_contact_events deque (filled by
-        physx contact callback). If ≥_INSERTION_CONTACT_TICKS_REQUIRED contacts
-        in the last 5-tick window AND not already armed, build String with
-        msg.data=detected_port_namespace, publish, set self._insertion_event_armed=True.
-        Reset armed flag when contacts cease.
+        Drains the deque populated by _on_insertion_contact_event. Counts
+        contacts in the last 100ms window. If ≥_INSERTION_CONTACT_TICKS_REQUIRED
+        AND not already armed, publishes String(data=port_name) and arms the
+        flag. Re-arms when ≥100ms of no contacts elapses.
         """
-        pass  # TODO
+        if self._scoring_event_pub is None:
+            return
+        import time
+        now_t = time.time()
+        recent = [(t, port) for (t, port) in self._insertion_contact_events
+                  if now_t - t < 0.1]
+        if not recent:
+            # No recent contacts — re-arm if previously armed
+            self._insertion_event_armed = False
+            return
+        if self._insertion_event_armed:
+            return  # already published this insertion
+        if len(recent) < _INSERTION_CONTACT_TICKS_REQUIRED:
+            return  # not yet sustained
+        # Pick the most-recent port name as the "inserted into" target
+        port_name = recent[-1][1]
+        from std_msgs.msg import String
+        msg = String()
+        msg.data = port_name
+        self._scoring_event_pub.publish(msg)
+        self._insertion_event_armed = True
+        print(f"[AIC-DT][scoring] published /scoring/insertion_event data={port_name!r}")
 
     def _on_insertion_contact_event(self, contact_headers, contact_data):
-        """Physics-thread callback: O(1) append to _insertion_contact_events.
+        """Physics-thread callback (O(1) append to _insertion_contact_events).
 
-        TODO Plan 03-05: parse actor0/actor1 paths via PhysicsSchemaTools.intToSdfPath.
-        If pair matches (plug_end_link, any port_link), append (timestamp, port_name).
-        Mirror Plan 02-06's _on_contact_event in controller_loop.
+        Filters for (plug_end_link, port_link) pairs. Port name extracted from
+        the actor path's basename. Mirror of controller_loop.py::_on_contact_event
+        from Plan 02-06.
         """
-        pass  # TODO
+        try:
+            from omni.physx.scripts.physicsUtils import PhysicsSchemaTools
+        except Exception:
+            try:
+                from pxr import PhysicsSchemaTools
+            except Exception:
+                return
+        import time
+        now_t = time.time()
+        for header in contact_headers:
+            try:
+                actor0 = str(PhysicsSchemaTools.intToSdfPath(header.actor0))
+                actor1 = str(PhysicsSchemaTools.intToSdfPath(header.actor1))
+            except Exception:
+                continue
+            # Determine if this is a plug↔port pair
+            for port_path in _PORT_LINK_PATHS:
+                hit = (
+                    (actor0.startswith(_PLUG_END_LINK_PATH) and actor1.startswith(port_path))
+                    or (actor1.startswith(_PLUG_END_LINK_PATH) and actor0.startswith(port_path))
+                )
+                if hit:
+                    port_name = port_path.rsplit("/", 1)[-1]
+                    self._insertion_contact_events.append((now_t, port_name))
+                    break
