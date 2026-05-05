@@ -224,26 +224,58 @@ class AicScoringPublishers:
     # ---- STUBS (Plan 03-04/05 fill in) ---- #
 
     def _publish_scoring_tf(self, stamp):
-        """Publish TFMessage of cable-related transforms on /scoring/tf.
-
-        TODO Plan 03-04: iterate _SCORING_TF_FRAMES, for each (parent, child, usd_path)
-        build a TransformStamped with header.stamp=stamp, header.frame_id=parent,
-        child_frame_id=child, transform=USD prim's world matrix. Append to TFMessage.
-        Publish once per tick.
-
-        Reference parity_publishers.py::_publish_tf_dynamic for the world-xform
-        + Gf-quat-to-ROS-quat reordering pattern.
-        """
-        pass  # TODO
+        """Publish TFMessage of cable-related transforms on /scoring/tf."""
+        self._publish_frame_list(stamp, _SCORING_TF_FRAMES, self._scoring_tf_pub)
 
     def _publish_objects_poses(self, stamp):
         """Publish TFMessage on /objects_poses_real (broader: includes task_board frames).
 
-        TODO Plan 03-04: iterate _OBJECTS_POSES_FRAMES same pattern. Note
-        child_frame_ids prefixed with 'task_board' for task-board children — this
+        child_frame_ids prefixed with 'task_board' for task-board children
         triggers ScoringTier2.cc:51-53 static-TF registration on the consumer side.
         """
-        pass  # TODO
+        self._publish_frame_list(stamp, _OBJECTS_POSES_FRAMES, self._objects_poses_pub)
+
+    def _publish_frame_list(self, stamp, frame_list, publisher):
+        """Shared TFMessage builder — mirrors parity_publishers.py::_build_transform_msg.
+
+        For each (parent, child, usd_path) tuple, build a TransformStamped from
+        the USD prim's world transform and publish in a single TFMessage.
+        Skips frames whose USD prim isn't valid (silent — common during scene
+        transitions; not an error).
+        """
+        if publisher is None or self._stage is None:
+            return
+        from tf2_msgs.msg import TFMessage
+        from geometry_msgs.msg import TransformStamped
+        from pxr import UsdGeom
+        msg = TFMessage()
+        xf_cache = UsdGeom.XformCache()
+        for parent_frame, child_frame, usd_path in frame_list:
+            prim = self._stage.GetPrimAtPath(usd_path)
+            if not prim or not prim.IsValid() or not prim.IsActive():
+                continue
+            try:
+                xf = xf_cache.GetLocalToWorldTransform(prim)
+            except Exception:
+                continue
+            t = TransformStamped()
+            t.header.stamp = stamp
+            t.header.frame_id = parent_frame
+            t.child_frame_id = child_frame
+            translation = xf.ExtractTranslation()
+            rot = xf.ExtractRotationQuat()
+            imag = rot.GetImaginary()
+            t.transform.translation.x = float(translation[0])
+            t.transform.translation.y = float(translation[1])
+            t.transform.translation.z = float(translation[2])
+            # Gf.Quatd: GetReal()=w, GetImaginary()=(x,y,z). ROS Quaternion: (x,y,z,w).
+            t.transform.rotation.x = float(imag[0])
+            t.transform.rotation.y = float(imag[1])
+            t.transform.rotation.z = float(imag[2])
+            t.transform.rotation.w = float(rot.GetReal())
+            msg.transforms.append(t)
+        if msg.transforms:
+            publisher.publish(msg)
 
     def _maybe_publish_insertion_event(self, stamp):
         """If sustained plug-port contact detected, publish std_msgs/String once.
