@@ -96,7 +96,13 @@ Plans:
   3. Launching the unmodified `aic_engine` with `--config sample_config.yaml` and the unmodified `CheatCode.py` policy against Isaac Sim runs every trial end-to-end and produces the same per-trial pass/fail outcomes Gazebo produces (insertion_event fires for passes, no off_limit contacts on passes), with no Isaac-Sim-specific patches applied to anything in `~/Documents/aic`
   4. Running the parity-report script regenerates a side-by-side trial-outcome table comparing Isaac Sim vs Gazebo per-trial outcomes — re-runnable, deterministic structure, and the canonical "M1 done?" check
   5. `CLAUDE.md` at the repo root tells a fresh Claude session how to launch Isaac Sim with the `aic-dt` extension, what env vars matter (`MCP_SERVER_PORT=8768`, `MCP_CLIENT_OUTPUT_DIR`), and points to `~/Documents/aic` as the ROS-side / controller / policies / engine repo; `exts/aic-dt/docs/README.md` describes the AIC scope (no stale "ur5e-dt" framing) and the changelog records M1
-**Plans**: TBD
+**Plans**: 5 plans (sequential waves 1→5 — extension.py + scoring_publishers.py + audit_dx02.py shared across plans, so they serialize)
+Plans:
+- [ ] 04-01-PLAN.md — Pre-flight risk de-risking: A2 (kilted↔humble RMW interop) + A4 (_PORT_LINK_PATHS vs live spawn paths) probes
+- [ ] 04-02-PLAN.md — load_trial MCP atom + ground_truth flag on quick_start (TRIAL-01, TRIAL-02)
+- [ ] 04-03-PLAN.md — Derived my-eval-isaac:v1 Docker image + run_aic_engine_against_isaac_sim.sh wrapper + trial_1 dry-run (TRIAL-03, PARITY-07)
+- [ ] 04-04-PLAN.md — parity_report.py + first M1 ship-gate exercise (TRIAL-04, TRIAL-05)
+- [ ] 04-05-PLAN.md — DX-05 README + CHANGELOG + REQUIREMENTS flips + phase-level closure paperwork (DX-05; M1 ship gate)
 **UI hint**: yes
 
 ## Progress
@@ -108,8 +114,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. Foundation Parity | 9/9 | Code complete — pending verifier loop | - |
 | 2. Controller Loop                       | 5/6   | Executing — Plans 02-01..05 done; Plan 02-06 pending | - |
-| 3. Cable Physics & Ground-Truth Pose | 0/TBD | Not started | - |
-| 4. Trial Loader & End-to-End Verification | 0/TBD | Not started | - |
+| 3. Cable Physics & Ground-Truth Pose | 6/6 | Closed (2026-05-05) | 2026-05-05 |
+| 4. Trial Loader & End-to-End Verification | 0/5 | Planned — execution pending | - |
 
 ---
 *Roadmap created: 2026-05-01 (Milestone 1 — Platform Transfer)*

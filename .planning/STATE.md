@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: phase-active
-stopped_at: Phase 4 CONTEXT.md authored under --auto mode (commit c923c35) — 13 D-decisions covering trial loader surface (D-01..03 single load_trial atom + PyYAML adapter dict), ground_truth flag (D-04..05 kwarg gates _start_aic_scoring_publishers), E2E wrapper script (D-06..07 run_aic_engine_against_isaac_sim.sh), parity-report (D-08..09 dual JSON+MD output, pass=insertion_event_fired AND off_limit_count==0), M1 ship gate (D-10 zero mismatch rows → touch .m1_shipped), DX-05 README+CHANGELOG (D-11), Phase 3 carry-forwards (D-12..13 PARITY-07 incidental verify via TRIAL-04). Auto-advancing to /gsd-plan-phase 4 next.
-last_updated: "2026-05-05T20:00:00.000Z"
-last_activity: 2026-05-05 -- New autonomous M1 session resumed from prior self-pause (92% context exhaustion ended; fresh context). .user_pause cleared; .autonomous_m1_active retained. Phase 4 discuss-phase --auto: Phase 4 dir bootstrapped, 04-CONTEXT.md + 04-DISCUSSION-LOG.md authored + committed (c923c35). 13 implementation decisions auto-selected (recommended option for each of 6 gray areas); rationale logged inline. M1 ship gate redefined as 'parity_report.py emits zero mismatch rows across 3 sample_config.yaml trials'. Total project progress: M1 ~80% (Phases 1+2+3 closed + Phase 4 context locked; planning + execution + ship remaining).
+status: executing
+stopped_at: "Plan 02-05 EXECUTED ✓ (~2 min). controller_loop.py grew 837→965 LOC (+128/-2): _publish_controller_state full body per D-07 (header+FK tcp_pose+numerical-diff tcp_velocity+reference echoes+zero tare with ati/tool_link frame). PARITY-09/10/11 callback chain now end-to-end at the code level; runtime verification deferred to Plan 02-06 smoke test. 0 deviations from plan (literal transcription). All 13 plan acceptance gates PASS. Auto-advancing to Plan 02-06 next."
+last_updated: "2026-05-05T12:04:14.691Z"
+last_activity: 2026-05-05 -- Phase 04 planning complete
 progress:
   total_phases: 4
-  completed_phases: 2
-  total_plans: 15
-  completed_plans: 15
-  percent: 50
+  completed_phases: 1
+  total_plans: 31
+  completed_plans: 18
+  percent: 58
 ---
 
 # Project State
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 
 Phase: 4 (Trial Loader & E2E) — CONTEXT locked; planning next
 Plan: 04-CONTEXT.md ✓ (commit c923c35)
-Status: Phases 1+2+3 closed. Phase 4 discuss-phase --auto complete: 13 D-decisions in 04-CONTEXT.md + 04-DISCUSSION-LOG.md committed. Single load_trial(config_path, trial_key, ground_truth) MCP atom dispatches to existing 9 spawn atoms (Plan 01-09) + load_robot kwargs (Phase 3) via PyYAML adapter dict. ground_truth flag gates _start_aic_scoring_publishers. New shell wrapper run_aic_engine_against_isaac_sim.sh mirrors run_cheatcode.sh. parity_report.py emits dual JSON+MD; M1 ships when zero mismatch rows. PARITY-07 live insertion_event fire verified incidentally via TRIAL-04. DX-05 = README rewrite (no ur5e-dt framing) + CHANGELOG M1 entry. Auto-advancing to /gsd-plan-phase 4.
-Last activity: 2026-05-05 -- New session resumed from prior self-pause (92% context exhaustion). .user_pause cleared; autonomous mode retained. Phase 4 discuss-phase --auto authored CONTEXT + DISCUSSION-LOG (commit c923c35).
+Status: Ready to execute
+Last activity: 2026-05-05 -- Phase 04 planning complete
 
 Progress: [████████████░] M1 ~80% (Phases 1+2+3 closed; Phase 4 context locked, planning+execution+ship remain)
 
