@@ -99,7 +99,7 @@ Plans:
 **Plans**: 5 plans (sequential waves 1→5 — extension.py + scoring_publishers.py + audit_dx02.py shared across plans, so they serialize)
 Plans:
 - [x] 04-01-PLAN.md — Pre-flight risk de-risking: A2 (kilted↔humble RMW interop) + A4 (_PORT_LINK_PATHS vs live spawn paths) probes — 2026-05-05 (A2 PASS, A4 MISMATCH_NIC_CARD_MOUNT — D-13 set_port_link_paths setter is now required scope in Plan 04-03)
-- [ ] 04-02-PLAN.md — load_trial MCP atom + ground_truth flag on quick_start (TRIAL-01, TRIAL-02)
+- [x] 04-02-PLAN.md — load_trial MCP atom + ground_truth flag on quick_start (TRIAL-01, TRIAL-02) — 2026-05-05 (4-surface DX-02 contract held; audit_dx02.py PRESENT_ATOMS=30; offline structural test PASS for all 3 trials; live-fire deferred to 04-03)
 - [ ] 04-03-PLAN.md — Derived my-eval-isaac:v1 Docker image + run_aic_engine_against_isaac_sim.sh wrapper + trial_1 dry-run (TRIAL-03, PARITY-07)
 - [ ] 04-04-PLAN.md — parity_report.py + first M1 ship-gate exercise (TRIAL-04, TRIAL-05)
 - [ ] 04-05-PLAN.md — DX-05 README + CHANGELOG + REQUIREMENTS flips + phase-level closure paperwork (DX-05; M1 ship gate)
@@ -115,7 +115,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 1. Foundation Parity | 9/9 | Code complete — pending verifier loop | - |
 | 2. Controller Loop                       | 5/6   | Executing — Plans 02-01..05 done; Plan 02-06 pending | - |
 | 3. Cable Physics & Ground-Truth Pose | 6/6 | Closed (2026-05-05) | 2026-05-05 |
-| 4. Trial Loader & End-to-End Verification | 1/5 | Executing — Plan 04-01 closed (pre-flight A2 PASS / A4 MISMATCH); 04-02..05 pending | - |
+| 4. Trial Loader & End-to-End Verification | 2/5 | Executing — Plans 04-01 + 04-02 closed (pre-flight A2 PASS / A4 MISMATCH; load_trial atom + ground_truth gate landed); 04-03..05 pending | - |
 
 ---
 *Roadmap created: 2026-05-01 (Milestone 1 — Platform Transfer)*

@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Plan 04-01 EXECUTED ✓ (~5 min wall). Pre-flight Wave 1 risk de-risking complete: A2 (kilted↔humble RMW interop) PASS — sensor_msgs/JointState + custom aic_control_interfaces/JointMotionUpdate both decode against humble subscriber on fastrtps + domain 7. A4 (_PORT_LINK_PATHS coverage) MISMATCH_NIC_CARD_MOUNT — Phase 3's hardcoded list (sc_port_1, sc_port_2, nic_card under /World/TaskBoard) doesn't match live spawn output (SCPort_0/1, NICCardMount_0..4, NICCard) — Plan 04-03 must add a public set_port_link_paths(paths) setter on AicScoringPublishers (1-surface addition, NOT a 4-surface DX-02 atom add) and have load_trial compute paths from spawn-call sites. 5 deliverables shipped: 2 re-runnable probe scripts under exts/aic-dt/scripts/ + 2 audit-trail .txt reports + 04-01-SUMMARY.md. 3 atomic commits (ff6ca28, 400ac01, pending). Cache snapshotted (DerivedDataCache.bak.1777983174). Auto-advancing to Plan 04-02 (load_trial atom + ground_truth flag) next."
-last_updated: "2026-05-05T13:30:00.000Z"
-last_activity: 2026-05-05 -- Plan 04-01 closed (A2 PASS, A4 MISMATCH_NIC_CARD_MOUNT); D-13 setter forced into 04-03 baseline scope
+stopped_at: "Plan 04-02 EXECUTED ✓ (~12 min wall). load_trial MCP atom landed across all 4 DX-02 surfaces (registry + handler-map + _cmd_load_trial + UI button) + ground_truth kwarg on both quick_start and load_trial gating _start_aic_scoring_publishers. Adapter helpers _extract_cable_kwargs (Q6 Option A pass-through) + _dispatch_rail_block (entity_present/entity_pose -> spawn-atom kwargs; entity_name IGNORED). audit_dx02.py PRESENT_ATOMS extended to 30 atoms; audit exits 0 (30 PRESENT x 4 surfaces + 2 ABSENT x 4 surfaces). Offline structural test PASS for all 3 trials (13 rail blocks per trial dispatched cleanly via stub harness). 1 Rule 3 deviation: UI button label changed from 'Load Trial (sample_config.yaml: trial_1)' to 'Load Trial sample_config trial_1' because audit_dx02.py UI-regex stops at first ')' character. 2 atomic commits (aa14256 task 1: ground_truth gate; 82fc1a7 task 2: load_trial atom). Live-fire deferred to Plan 04-03 by design (E2E wrapper + first MCP-socket round-trip exercise). _PORT_LINK_PATHS D-13 setter still owed by 04-03 (load_trial records spawned_components in return dict but does not yet wire set_port_link_paths). Auto-advancing to Plan 04-03 (Docker derived image / decision-deferred-to-A2-PASS / E2E wrapper + dry-run + D-13 setter) next."
+last_updated: "2026-05-05T13:42:00.000Z"
+last_activity: 2026-05-05 -- Plan 04-02 closed (load_trial 4-surface DX-02 + ground_truth gate; audit PASS; 3 trials parse offline)
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 31
-  completed_plans: 19
-  percent: 61
+  completed_plans: 20
+  percent: 64
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 04 (trial-loader) — EXECUTING
-Plan: 2 of 5 (04-01 closed; 04-02 next)
+Plan: 3 of 5 (04-01 + 04-02 closed; 04-03 next)
 Status: Executing Phase 04
-Last activity: 2026-05-05 -- Plan 04-01 closed (A2 PASS, A4 MISMATCH_NIC_CARD_MOUNT)
+Last activity: 2026-05-05 -- Plan 04-02 closed (load_trial atom + ground_truth gate; 4-surface DX-02 + audit PASS)
 
-Progress: [████████████░] M1 ~82% (Phases 1+2+3 closed; Phase 4 plan 1/5 closed via Wave 1 pre-flight probes — A2 PASS unblocks engine-container path, A4 MISMATCH forces D-13 setter into 04-03)
+Progress: [█████████████] M1 ~85% (Phases 1+2+3 closed; Phase 4 plan 2/5 closed — pre-flight risk-derisk via 04-01 + load_trial API surface via 04-02; 04-03 wires E2E wrapper + D-13 setter live-fire)
 
 ## Phase 2 Plans
 
@@ -60,7 +60,7 @@ Progress: [████████████░] M1 ~82% (Phases 1+2+3 closed
 
 **Recent Trend:**
 
-- Last 15 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min), 01-06 (6 min), 01-07 (10 min), 01-09 (8 min), 01-08 (10 min), 02-01 (49 min), 02-02 (5 min), 02-03 (2 min), 02-04 (3 min), 02-05 (~2 min), 02-06 (~12 min)
+- Last 17 plans: 01-01 (7 min), 01-02 (~2 min), 01-03 (3 min), 01-04 (8 min), 01-05 (5 min), 01-06 (6 min), 01-07 (10 min), 01-09 (8 min), 01-08 (10 min), 02-01 (49 min), 02-02 (5 min), 02-03 (2 min), 02-04 (3 min), 02-05 (~2 min), 02-06 (~12 min), 04-01 (~5 min), 04-02 (~12 min)
 - Trend: 02-06 took ~12 min — the predicted hand-off pattern played out. ~5x longer than the pure-pattern-fill plans (02-03/04/05) because PARITY-06 introduces a genuinely new surface (omni.physx contact-report subscription pipeline, ros_gz_interfaces/Contacts message construction) AND the closure pass writes 5 new artifacts (smoke_test_aic_controller.py 291 LOC, verify_phase_2.sh 132 LOC, 02-06-SUMMARY.md, 02-SUMMARY.md, REQUIREMENTS.md edits). 4 Rule 1 auto-fixes during execution: (1) DEFAULT_OFF_LIMIT_PRIMS canonical replacement vs plan's fictional fallback list; (2) prefix-startswith filter for actor paths (plan's `in` check would silently no-op on descendant collider paths); (3) MODE_POSITION enum value 2 (not plan's literal 1 = MODE_VELOCITY); (4) per-package WS_INSTALL path (plan assumed merged-install layout that doesn't exist on disk). All caught and fixed at write-time; 0 caused harness re-runs. Phase 2 now closed; auto-paused per autonomous-mode locked-in policy. Hand-off to Phase 3 (Cable Physics): different surface entirely (USD-side mass/inertia authoring + ros2 publishers for cable-link TF + scoring topics). Per CLAUDE.md SCENE-05 guidance, Phase 3 is now a smaller in-place USD edit (mass/inertia authoring on cable subtree) since the cable wedge no longer reproduces under current launch path — not the full deformable-vs-articulated research-gated decision the original ROADMAP scoped.
 
 *Updated after each plan completion*
@@ -140,6 +140,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Recent decisions affecti
 - Plan 04-01 (A4): scoring_publishers `_PORT_LINK_PATHS` hardcoded list (`/World/TaskBoard/sc_port_1/sc_port_2/nic_card`) DOES NOT match live spawn output. Live tree under `/World/TaskBoard/` after Phase 4 spawn cycle: `SCPort_0`, `SCPort_1`, `NICCardMount_0..4`, `NICCard` (PascalCase + index). Phase 1's legacy `add_objects` ALSO populates `/World/Objects/sc_port_1/sc_port_2/nic_card` (lowercase + underscore). Both namespaces co-exist; neither matches the hardcoded list. Phase 3's contact-report subscription would tag zero of the hardcoded prims and `/scoring/insertion_event` would never fire — direct path to TRIAL-04 mismatch.
 - Plan 04-01 (D-13 forced active in 04-03): the YAGNI "maybe needed" `set_port_link_paths` setter is now confirmed required scope. Plan 04-03 must add a public `set_port_link_paths(paths: list[str])` method on `AicScoringPublishers` (1-surface addition — public method on publisher class, called from `_start_aic_scoring_publishers(port_link_paths=...)`). `load_trial` computes paths from spawn-call sites: `/World/TaskBoard/SCPort_{index}` for sc_port, `/World/TaskBoard/NICCardMount_{index}` for nic_card_mount, `/World/TaskBoard/NICCard` for nic_card. Module-level `_PORT_LINK_PATHS` constant stays as default for cable-only test scenes.
 - Plan 04-01 (probe pattern): live-stage probes via the existing `execute_python_code` MCP atom + `stage.Traverse` are the cheapest way to verify on-disk USD authoring vs published-prim-path expectations. ~30s wall-clock for the round-trip. Use this pattern again in Plan 04-04 dry-run to verify the set_port_link_paths setter wires to actual prims.
+- Plan 04-02: 4-surface DX-02 contract for `load_trial` lands cleanly with one new atom (registry + handler-map + `_cmd_load_trial` + UI button) + 1 kwarg expansion on `quick_start` (ground_truth gate around `_start_aic_scoring_publishers`). Adapter dict isolation is the design win — `_extract_cable_kwargs` + `_dispatch_rail_block` are pure-Python helpers (no Kit deps, lazy `import yaml` + `import inspect` inside body) so they're testable offline via `ast.parse` extraction + stub-class harness; offline structural test exercises all 3 sample_config.yaml trials in <1s.
+- Plan 04-02: UI button label cannot contain `(` or `)` characters because `audit_dx02.py` UI-regex `r"ui\.Button\([^)]{0,500}"` stops at the first `)`. Rule 3 fix during execution: `"Load Trial (sample_config.yaml: trial_1)"` -> `"Load Trial sample_config trial_1"`. Future planners adding UI buttons: drop parens from visible labels OR upgrade audit regex to handle nested parens (small DX-02 maintenance ticket). Documented in 04-02-SUMMARY.md Deviations.
+- Plan 04-02 (D-13 carry-forward): `_cmd_load_trial` records `spawned_components` in its return dict (list of `(atom_name_with_index, kwargs)` tuples) but does NOT yet call `set_port_link_paths` on `AicScoringPublishers`. The setter itself is owed by Plan 04-03 (1-surface addition on the publisher class per 04-01 A4 verdict); 04-03 will wire `load_trial` -> `_start_aic_scoring_publishers(port_link_paths=computed_from_spawned_components)` once the setter exists.
+- Plan 04-02 (cable-kwargs verdict across all 3 trials): `cable_x=0.0` (not Phase-3 default 0.172) and `cable_z` varies in [0.04045, 0.04545]. The Phase-3 default `cable_x=0.172` is the no-cable fallback; YAML-driven trials supply `gripper_offset.x=0.0` instead. Confirms 04-RESEARCH.md Q2 "Option A" (offset, not absolute) interpretation — the offset is added to gripper pose at runtime, not used as world coord. cable_type rotates between `sfp_sc_cable` (trial_1, trial_2) and `sfp_sc_cable_reversed` (trial_3); attach_cable_to_gripper=True for all 3.
 
 ### Pending Todos
 
@@ -159,9 +163,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-05T13:30:00.000Z
-Stopped at: Plan 04-01 EXECUTED ✓ (~5 min wall). Pre-flight Wave 1 risk de-risking: A2 PASS (kilted↔humble RMW interop) + A4 MISMATCH_NIC_CARD_MOUNT (_PORT_LINK_PATHS coverage). 5 deliverables shipped (2 probe scripts + 2 audit reports + SUMMARY); 3 atomic commits. D-13 set_port_link_paths setter is now confirmed required scope in Plan 04-03 (1-surface addition on AicScoringPublishers, NOT a 4-surface DX-02 atom). Auto-advancing to Plan 04-02 (load_trial atom + ground_truth flag) next.
-Resume file: .planning/HANDOFF.json (autonomous M1 mode persistent — kept until M1 ships). Active per-phase artifacts: .planning/phases/04-trial-loader/{04-CONTEXT.md, 04-RESEARCH.md, 04-DISCUSSION-LOG.md, 04-01-PLAN.md, 04-01-SUMMARY.md ✓, 04-02..05-PLAN.md, kilted_humble_interop.txt, taskboard_prim_paths.txt}.
+Last session: 2026-05-05T13:42:00.000Z
+Stopped at: Plan 04-02 EXECUTED ✓ (~12 min wall). load_trial 4-surface DX-02 atom + ground_truth kwarg on quick_start + load_trial. audit_dx02.py PRESENT_ATOMS=30; audit exits 0. Offline structural test PASS for all 3 trials (13 rail blocks dispatched per trial). 1 Rule 3 deviation (UI button label depared'd to satisfy audit regex). 2 atomic commits (aa14256, 82fc1a7). Live-fire deferred to 04-03 by design. D-13 set_port_link_paths setter still owed by 04-03. Auto-advancing to Plan 04-03 (E2E wrapper + dry-run + setter) next.
+Resume file: .planning/HANDOFF.json (autonomous M1 mode persistent — kept until M1 ships). Active per-phase artifacts: .planning/phases/04-trial-loader/{04-CONTEXT.md, 04-RESEARCH.md, 04-DISCUSSION-LOG.md, 04-01-PLAN.md ✓, 04-01-SUMMARY.md ✓, 04-02-PLAN.md ✓, 04-02-SUMMARY.md ✓, 04-03..05-PLAN.md, kilted_humble_interop.txt, taskboard_prim_paths.txt}.
 
 ## Phase 1 Outstanding (post-Gap-A/B closure)
 
