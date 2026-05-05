@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: between-phases
-stopped_at: Phase 3 CLOSED — 5 of 6 plans fully executed + REQUIREMENTS flag flips (SCENE-02/03/05/06 + PARITY-08 [x], PARITY-07 [~] with live runtime fire deferred to Phase 4). Cable physics authored per NVIDIA RigidBodyRopeDemo template (53 links + 26 joints in cable USD on disk via D-06 in-place edit); cable activated via SetActive(True); attach_cable_to_gripper FixedJoint atom verified live (4-surface DX-02); scoring_publishers.py module ships /scoring/tf + /objects_poses_real + /scoring/insertion_event (all 3 verified live on bus under ROS_DOMAIN_ID=7); omni.physx contact-report subscription wired for plug↔port pair detection. Phase 1 13/13 smoke maintained throughout. Major Phase 3 finding (Plan 03-01): /scoring/* topics in REQUIREMENTS.md are sample_config.yaml ghosts in default aic_eval mode but ARE consumed by ScoringTier2.cc in tier2 mode — re-scoped to publish both /scoring/tf and /objects_poses_real. 03-SUMMARY.md shipped. Next: /gsd-discuss-phase 4 (trial loader + E2E aic_engine + CheatCode against Isaac Sim) → M1 ship.
-last_updated: "2026-05-05T11:30:00.000Z"
-last_activity: 2026-05-05 -- Phase 3 closed in single autonomous session: 18 commits, 6 plans authored + 5 executed. Discuss → 6 PLANs → 03-01 (snapshot + re-scoping finding) → 03-02 (cable physics) → 03-03 (cable_type + attach_to_gripper) → 03-04+05 (scoring_publishers.py module + extension integration + verified live) → 03-06 closure paperwork (REQUIREMENTS flips + 03-SUMMARY.md). Cache snapshots taken (DerivedDataCache.bak.1777977941 + 1777978370). Autonomous-mode Stop hook + 30-min cron caf96e13 carried the session across multiple context warnings via tiny atomic commits. Phase 3 effective close pattern: code complete + verified live on bus + paperwork shipped; live runtime fire of insertion_event deferred to Phase 4 trial loader (the natural cycle). Total project progress: M1 ~75% (Phases 1+2+3 closed; Phase 4 trial loader + E2E remains).
+status: phase-active
+stopped_at: Phase 4 CONTEXT.md authored under --auto mode (commit c923c35) — 13 D-decisions covering trial loader surface (D-01..03 single load_trial atom + PyYAML adapter dict), ground_truth flag (D-04..05 kwarg gates _start_aic_scoring_publishers), E2E wrapper script (D-06..07 run_aic_engine_against_isaac_sim.sh), parity-report (D-08..09 dual JSON+MD output, pass=insertion_event_fired AND off_limit_count==0), M1 ship gate (D-10 zero mismatch rows → touch .m1_shipped), DX-05 README+CHANGELOG (D-11), Phase 3 carry-forwards (D-12..13 PARITY-07 incidental verify via TRIAL-04). Auto-advancing to /gsd-plan-phase 4 next.
+last_updated: "2026-05-05T20:00:00.000Z"
+last_activity: 2026-05-05 -- New autonomous M1 session resumed from prior self-pause (92% context exhaustion ended; fresh context). .user_pause cleared; .autonomous_m1_active retained. Phase 4 discuss-phase --auto: Phase 4 dir bootstrapped, 04-CONTEXT.md + 04-DISCUSSION-LOG.md authored + committed (c923c35). 13 implementation decisions auto-selected (recommended option for each of 6 gray areas); rationale logged inline. M1 ship gate redefined as 'parity_report.py emits zero mismatch rows across 3 sample_config.yaml trials'. Total project progress: M1 ~80% (Phases 1+2+3 closed + Phase 4 context locked; planning + execution + ship remaining).
 progress:
   total_phases: 4
   completed_phases: 2
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 
 ## Current Position
 
-Phase: 2 (Controller Loop) — CLOSED; all 6 plans complete; 4 PARITY flags flipped
-Plan: 02-06 ✓ (Phase 2 closure landed)
-Status: Phase 2 fully closed. PARITY-06/09/10/11 wired end-to-end in code. controller_loop.py final: 1196 LOC (vs 0 at Phase 2 start). smoke_test_aic_controller.py (291 LOC) + verify_phase_2.sh (132 LOC) ship. REQUIREMENTS.md flipped + traceability table updated + footer rewritten. Per-plan SUMMARY (02-06-SUMMARY.md) and per-phase SUMMARY (02-SUMMARY.md) written. 4 Rule 1 auto-fixes documented (offlimit canonical list, prefix-startswith filter, MODE_POSITION enum value, per-package WS_INSTALL path). End-to-end runtime smoke gated on next session's new_stage + quick_start (Isaac Sim still on PID 3170454 with MCP socket 8768 live, but stage state is pre-Plan-02-06).
-Last activity: 2026-05-03 -- /gsd-execute-phase 2 Plan 06 + Phase 2 closure complete (~12 min): PARITY-06 omni.physx contact-report subscription + D-12 smoke + verify harness + 4 PARITY flag flips + 02-SUMMARY.md. Auto-paused between Phases 2 and 3 per autonomous-mode locked-in policy.
+Phase: 4 (Trial Loader & E2E) — CONTEXT locked; planning next
+Plan: 04-CONTEXT.md ✓ (commit c923c35)
+Status: Phases 1+2+3 closed. Phase 4 discuss-phase --auto complete: 13 D-decisions in 04-CONTEXT.md + 04-DISCUSSION-LOG.md committed. Single load_trial(config_path, trial_key, ground_truth) MCP atom dispatches to existing 9 spawn atoms (Plan 01-09) + load_robot kwargs (Phase 3) via PyYAML adapter dict. ground_truth flag gates _start_aic_scoring_publishers. New shell wrapper run_aic_engine_against_isaac_sim.sh mirrors run_cheatcode.sh. parity_report.py emits dual JSON+MD; M1 ships when zero mismatch rows. PARITY-07 live insertion_event fire verified incidentally via TRIAL-04. DX-05 = README rewrite (no ur5e-dt framing) + CHANGELOG M1 entry. Auto-advancing to /gsd-plan-phase 4.
+Last activity: 2026-05-05 -- New session resumed from prior self-pause (92% context exhaustion). .user_pause cleared; autonomous mode retained. Phase 4 discuss-phase --auto authored CONTEXT + DISCUSSION-LOG (commit c923c35).
 
-Progress: [██████████░] M1 ~50% (Phase 1 + Phase 2 closed; Phase 3 SCENE-05 cable physics + SCENE-06 object TF + PARITY-07/08 ~3-4hr; Phase 4 trial loader + E2E)
+Progress: [████████████░] M1 ~80% (Phases 1+2+3 closed; Phase 4 context locked, planning+execution+ship remain)
 
 ## Phase 2 Plans
 
