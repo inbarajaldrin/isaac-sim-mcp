@@ -1,0 +1,40 @@
+===== /objects_poses_real info =====
+Type: tf2_msgs/msg/TFMessage
+
+Publisher count: 0
+
+Subscription count: 1
+
+Node name: grasp_points_publisher
+Node namespace: /
+Topic type: tf2_msgs/msg/TFMessage
+Topic type hash: INVALID
+Endpoint type: SUBSCRIPTION
+GID: 01.10.b3.50.1e.29.6b.0c.d0.e2.65.33.00.00.14.04.00.00.00.00.00.00.00.00
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): KEEP_LAST (10)
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+
+===== /objects_poses_real echo (1 msg) =====
+
+===== /grasp_points_real info =====
+Type: visualization_msgs/msg/MarkerArray
+
+Publisher count: 1
+
+Node name: grasp_points_publisher
+Node namespace: /
+Topic type: visualization_msgs/msg/MarkerArray
+Topic type hash: INVALID
+Endpoint type: PUBLISHER
+GID: 01.10.b3.50.1e.29.6b.0c.d0.e2.65.33.00.00.15.03.00.00.00.00.00.00.00.00
+
+===== /tf cable+plug+port frames (10s sample) =====
+
+===== /tf_static distinct child frames =====

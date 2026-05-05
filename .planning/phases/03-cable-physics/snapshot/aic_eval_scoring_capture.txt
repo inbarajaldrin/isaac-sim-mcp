@@ -1,0 +1,95 @@
+===== ros2 topic list =====
+/camera/color/camera_info
+/camera/color/image_raw
+/camera/color/image_raw/compressed
+/camera/color/image_raw/compressedDepth
+/camera/color/image_raw/theora
+/camera/color/metadata
+/camera/depth/camera_info
+/camera/depth/image_raw
+/camera/depth/image_raw/compressed
+/camera/depth/image_raw/compressedDepth
+/camera/depth/image_raw/theora
+/camera/depth/metadata
+/camera/depth_filter_status
+/camera/depth_to_color
+/diagnostics
+/dynamic_joint_states
+/force_mode_controller/transition_event
+/force_torque_sensor_broadcaster/transition_event
+/force_torque_sensor_broadcaster/wrench
+/forward_effort_controller/commands
+/forward_effort_controller/transition_event
+/forward_position_controller/commands
+/forward_position_controller/transition_event
+/forward_velocity_controller/commands
+/forward_velocity_controller/transition_event
+/freedrive_mode_controller/enable_freedrive_mode
+/freedrive_mode_controller/transition_event
+/grasp_points_real
+/gripper_command
+/gripper_grasp_detected
+/gripper_motion_ongoing
+/gripper_status
+/gripper_width
+/gripper_width_offset
+/io_and_status_controller/io_states
+/io_and_status_controller/robot_mode
+/io_and_status_controller/robot_program_running
+/io_and_status_controller/safety_mode
+/io_and_status_controller/tool_data
+/io_and_status_controller/transition_event
+/joint_state_broadcaster/transition_event
+/joint_states
+/joint_trajectory_controller/controller_state
+/joint_trajectory_controller/joint_trajectory
+/joint_trajectory_controller/state
+/joint_trajectory_controller/transition_event
+/objects_poses_real
+/parameter_events
+/passthrough_trajectory_controller/transition_event
+/rg2/joint_states
+/rg2/robot_description
+/robot_description
+/rosout
+/scaled_joint_trajectory_controller/controller_state
+/scaled_joint_trajectory_controller/joint_trajectory
+/scaled_joint_trajectory_controller/state
+/scaled_joint_trajectory_controller/transition_event
+/speed_scaling_state_broadcaster/speed_scaling
+/speed_scaling_state_broadcaster/transition_event
+/tcp_pose_broadcaster/pose
+/tcp_pose_broadcaster/transition_event
+/tf
+/tf_static
+/tool_contact_controller/transition_event
+/ur_configuration_controller/transition_event
+/urscript_interface/script_command
+
+===== /scoring/insertion_event info =====
+Unknown topic '/scoring/insertion_event'
+(topic absent)
+
+===== /scoring/insertion_event echo (10s) =====
+WARNING: topic [/scoring/insertion_event] does not appear to be published yet
+Could not determine the type for the passed topic
+
+===== /scoring/tf info =====
+Unknown topic '/scoring/tf'
+(topic absent)
+
+===== /scoring/tf echo (1 message) =====
+WARNING: topic [/scoring/tf] does not appear to be published yet
+Could not determine the type for the passed topic
+
+===== /tf grep for cable / plug / port frames =====
+
+===== /scoring/tf rate (5s sample) =====
+WARNING: topic [/scoring/tf] does not appear to be published yet
+WARNING: failed to find message type for topic [/scoring/tf]
+Traceback (most recent call last):
+  File "/opt/ros/kilted/bin/ros2", line 33, in <module>
+    sys.exit(load_entry_point('ros2cli==0.38.3', 'console_scripts', 'ros2')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/kilted/lib/python3.12/site-packages/ros2cli/cli.py", line 91, in main
+    rc = extension.main(parser=parser, args=args)
