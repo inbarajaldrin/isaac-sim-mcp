@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Plan 02-05 EXECUTED ✓ (~2 min). controller_loop.py grew 837→965 LOC (+128/-2): _publish_controller_state full body per D-07 (header+FK tcp_pose+numerical-diff tcp_velocity+reference echoes+zero tare with ati/tool_link frame). PARITY-09/10/11 callback chain now end-to-end at the code level; runtime verification deferred to Plan 02-06 smoke test. 0 deviations from plan (literal transcription). All 13 plan acceptance gates PASS. Auto-advancing to Plan 02-06 next."
-last_updated: "2026-05-05T12:04:14.691Z"
-last_activity: 2026-05-05 -- Phase 04 planning complete
+stopped_at: "Plan 04-01 EXECUTED ✓ (~5 min wall). Pre-flight Wave 1 risk de-risking complete: A2 (kilted↔humble RMW interop) PASS — sensor_msgs/JointState + custom aic_control_interfaces/JointMotionUpdate both decode against humble subscriber on fastrtps + domain 7. A4 (_PORT_LINK_PATHS coverage) MISMATCH_NIC_CARD_MOUNT — Phase 3's hardcoded list (sc_port_1, sc_port_2, nic_card under /World/TaskBoard) doesn't match live spawn output (SCPort_0/1, NICCardMount_0..4, NICCard) — Plan 04-03 must add a public set_port_link_paths(paths) setter on AicScoringPublishers (1-surface addition, NOT a 4-surface DX-02 atom add) and have load_trial compute paths from spawn-call sites. 5 deliverables shipped: 2 re-runnable probe scripts under exts/aic-dt/scripts/ + 2 audit-trail .txt reports + 04-01-SUMMARY.md. 3 atomic commits (ff6ca28, 400ac01, pending). Cache snapshotted (DerivedDataCache.bak.1777983174). Auto-advancing to Plan 04-02 (load_trial atom + ground_truth flag) next."
+last_updated: "2026-05-05T13:30:00.000Z"
+last_activity: 2026-05-05 -- Plan 04-01 closed (A2 PASS, A4 MISMATCH_NIC_CARD_MOUNT); D-13 setter forced into 04-03 baseline scope
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 31
-  completed_plans: 18
-  percent: 58
+  completed_plans: 19
+  percent: 61
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-01)
 
 **Core value:** When the same `aic_controller` + `aic_example_policies/CheatCode.py` + `sample_config.yaml` that pass AIC trials in Gazebo are pointed at this Isaac Sim digital twin, every trial passes with the same outcome.
-**Current focus:** Between phases — Phase 2 (Controller Loop) closed; Phase 3 (Cable Physics) next via `/gsd-discuss-phase 3`.
+**Current focus:** Phase 04 — trial-loader
 
 ## Current Position
 
-Phase: 4 (Trial Loader & E2E) — CONTEXT locked; planning next
-Plan: 04-CONTEXT.md ✓ (commit c923c35)
-Status: Ready to execute
-Last activity: 2026-05-05 -- Phase 04 planning complete
+Phase: 04 (trial-loader) — EXECUTING
+Plan: 2 of 5 (04-01 closed; 04-02 next)
+Status: Executing Phase 04
+Last activity: 2026-05-05 -- Plan 04-01 closed (A2 PASS, A4 MISMATCH_NIC_CARD_MOUNT)
 
-Progress: [████████████░] M1 ~80% (Phases 1+2+3 closed; Phase 4 context locked, planning+execution+ship remain)
+Progress: [████████████░] M1 ~82% (Phases 1+2+3 closed; Phase 4 plan 1/5 closed via Wave 1 pre-flight probes — A2 PASS unblocks engine-container path, A4 MISMATCH forces D-13 setter into 04-03)
 
 ## Phase 2 Plans
 
@@ -135,6 +135,11 @@ Decisions are logged in PROJECT.md Key Decisions table. Recent decisions affecti
 - Plan 02-05: Defensive rosidl `tcp_error` typing — try `msg.tcp_error[i]=v` indexed assignment first (works for `array.array`, the rosidl-generated default for `float64[6]` in humble), fall back to list assignment. Static analysis confirms the indexed path runs first and succeeds; fallback is preserved as defensive scaffolding for non-standard rosidl backends or future ros2 releases. Plan 02-06's smoke test is the first runtime exercise.
 - Plan 02-05: `_publish_controller_state` is a pure consumer of bookkeeping state set by sibling _apply_*_cmd methods — added zero new state fields. Pattern: setup-once state lives in __init__/stop reset; per-tick state read by the publisher is owned by whoever populates it. Plan 02-06 will follow the same: contact-event state lives in self._contact_events buffer populated by omni.physx callback, drained by _publish_offlimit_contacts. Single-writer/single-reader simplifies the physics-thread + rclpy-thread boundary.
 - Plan 02-05: LOC overage (+128 vs plan's ~70-100 estimate) is pure documentation — extended docstring framing the "tcp_pose at tool0 frame" decision + the two deferred items + the D-07 field policy as a complete reference at the code site. Pattern: when the implementation is ~100 LOC of code, ~30 LOC of docstring is correct ratio for a future reader who lands on the function cold. Don't trim docstrings to hit estimate bands.
+- Plan 04-01 (A2): kilted aic_eval ↔ humble Isaac Sim subscriber RMW interop is wire-compatible on `RMW_IMPLEMENTATION=rmw_fastrtps_cpp` + `ROS_DOMAIN_ID=7` for both `sensor_msgs/JointState` AND the kilted-built custom `aic_control_interfaces/msg/JointMotionUpdate`. Plan 04-03 wrapper uses stock `aic_eval:latest` image (digest `sha256:be08f28709acc4662da7378e94c5efccb66a8a0fff27ffccdc68e471d8967433`); no derived `my-eval-isaac:v1` humble-base image needed. Saved ~30 min of scope from A6's worst-case escalation path.
+- Plan 04-01 (A2 workaround): `env_isaaclab/install/bin/ros2` CLI is broken (Python 3.10 shebang vs 3.11 venv + missing netifaces). Bypass: write inline rclpy harness inside the bash probe — same wire path as `ros2 topic echo`, just bypassing the CLI entry-point bug. Logged as future-maintenance ticket; doesn't block any Phase 4 plan.
+- Plan 04-01 (A4): scoring_publishers `_PORT_LINK_PATHS` hardcoded list (`/World/TaskBoard/sc_port_1/sc_port_2/nic_card`) DOES NOT match live spawn output. Live tree under `/World/TaskBoard/` after Phase 4 spawn cycle: `SCPort_0`, `SCPort_1`, `NICCardMount_0..4`, `NICCard` (PascalCase + index). Phase 1's legacy `add_objects` ALSO populates `/World/Objects/sc_port_1/sc_port_2/nic_card` (lowercase + underscore). Both namespaces co-exist; neither matches the hardcoded list. Phase 3's contact-report subscription would tag zero of the hardcoded prims and `/scoring/insertion_event` would never fire — direct path to TRIAL-04 mismatch.
+- Plan 04-01 (D-13 forced active in 04-03): the YAGNI "maybe needed" `set_port_link_paths` setter is now confirmed required scope. Plan 04-03 must add a public `set_port_link_paths(paths: list[str])` method on `AicScoringPublishers` (1-surface addition — public method on publisher class, called from `_start_aic_scoring_publishers(port_link_paths=...)`). `load_trial` computes paths from spawn-call sites: `/World/TaskBoard/SCPort_{index}` for sc_port, `/World/TaskBoard/NICCardMount_{index}` for nic_card_mount, `/World/TaskBoard/NICCard` for nic_card. Module-level `_PORT_LINK_PATHS` constant stays as default for cable-only test scenes.
+- Plan 04-01 (probe pattern): live-stage probes via the existing `execute_python_code` MCP atom + `stage.Traverse` are the cheapest way to verify on-disk USD authoring vs published-prim-path expectations. ~30s wall-clock for the round-trip. Use this pattern again in Plan 04-04 dry-run to verify the set_port_link_paths setter wires to actual prims.
 
 ### Pending Todos
 
@@ -154,9 +159,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-03T20:46:48.000Z
-Stopped at: Plan 02-05 EXECUTED ✓ (~2 min). controller_loop.py grew 837→965 LOC (+128/-2): _publish_controller_state full body per D-07 (header+FK tcp_pose+numerical-diff tcp_velocity+reference echoes+zero tare with ati/tool_link frame). PARITY-09/10/11 callback chain now end-to-end at the code level; runtime verification deferred to Plan 02-06 smoke test. 0 deviations from plan (literal transcription). All 13 plan acceptance gates PASS. Auto-advancing to Plan 02-06 next.
-Resume file: .planning/HANDOFF.json (autonomous M1 mode persistent — kept until M1 ships). Active per-phase artifacts: .planning/phases/02-controller-loop/{02-CONTEXT.md, 02-RESEARCH.md, 02-PATTERNS.md, 02-01-SUMMARY.md ✓, 02-02-SUMMARY.md ✓, 02-03-SUMMARY.md ✓, 02-04-SUMMARY.md ✓, 02-05-SUMMARY.md ✓, 02-01..06-PLAN.md, snapshot/}.
+Last session: 2026-05-05T13:30:00.000Z
+Stopped at: Plan 04-01 EXECUTED ✓ (~5 min wall). Pre-flight Wave 1 risk de-risking: A2 PASS (kilted↔humble RMW interop) + A4 MISMATCH_NIC_CARD_MOUNT (_PORT_LINK_PATHS coverage). 5 deliverables shipped (2 probe scripts + 2 audit reports + SUMMARY); 3 atomic commits. D-13 set_port_link_paths setter is now confirmed required scope in Plan 04-03 (1-surface addition on AicScoringPublishers, NOT a 4-surface DX-02 atom). Auto-advancing to Plan 04-02 (load_trial atom + ground_truth flag) next.
+Resume file: .planning/HANDOFF.json (autonomous M1 mode persistent — kept until M1 ships). Active per-phase artifacts: .planning/phases/04-trial-loader/{04-CONTEXT.md, 04-RESEARCH.md, 04-DISCUSSION-LOG.md, 04-01-PLAN.md, 04-01-SUMMARY.md ✓, 04-02..05-PLAN.md, kilted_humble_interop.txt, taskboard_prim_paths.txt}.
 
 ## Phase 1 Outstanding (post-Gap-A/B closure)
 
