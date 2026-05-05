@@ -346,12 +346,9 @@ class AicControllerLoop:
         # if invoked before the first physics tick).
         self._articulation_reinitialized = False
 
-        # IK/FK solver init — Plan 02-04 implements _setup_kinematics()
-        try:
-            self._setup_kinematics()
-        except Exception as exc:
-            # Stub-friendly: not fatal for skeleton; Plan 02-04 makes this work
-            print(f"[AIC-DT][controller] _setup_kinematics not yet implemented or failed: {exc!r}")
+        # IK/FK solver init is deferred to first physics tick (after the
+        # articulation handle is rebuilt with a valid _physics_view). See
+        # _on_physics_step.
 
         # Contact subscription — Plan 02-06 implements _setup_contact_subscription()
         try:
@@ -475,6 +472,12 @@ class AicControllerLoop:
                     self._articulation_reinitialized = True
                     has_view = hasattr(self._articulation, "_physics_view") and self._articulation._physics_view is not None
                     print(f"[AIC-DT][controller] Articulation handle recreated at tick {self._init_wait_ticks} (has_physics_view={has_view})")
+                    # Now that articulation is live, set up the IK/FK solver too
+                    try:
+                        ok = self._setup_kinematics()
+                        print(f"[AIC-DT][controller] _setup_kinematics returned {ok}; _kinematics={self._kinematics is not None}")
+                    except Exception as exc:
+                        print(f"[AIC-DT][controller] _setup_kinematics failed: {exc!r}")
                 except Exception as exc:
                     if not getattr(self, "_logged_reinit_error", False):
                         print(f"[AIC-DT][controller] Articulation recreate failed: {exc!r}")
@@ -488,15 +491,16 @@ class AicControllerLoop:
                 self._logged_apply_error = True
             return
 
-        # Apply latest commands (Plans 02-03 + 02-04 implement these).
-        # KEEP self._latest_*_cmd after applying — re-apply every physics tick
-        # until a new command arrives. This matches aic_controller's continuous
-        # impedance-control semantics AND defeats Phase 1's OGN ArticulationController
-        # race: Phase 1's setup_action_graph runs the OGN node every tick reading a
-        # 1-tick-lagged /joint_states bridge that pulls the arm back to the previous
-        # position. A single set_joint_positions write loses this race; continuous
-        # re-application wins it. (Verified 2026-05-04 — single-shot writes succeed
-        # at the tick they fire but revert within ~30 ticks.)
+        # Apply latest commands ONCE per cmd. Empirically (2026-05-05): a single
+        # set_joint_positions + set_joint_velocities(0) + apply_action(joint_
+        # positions) call HOLDS the position perfectly for 2+s. Calling the same
+        # write every physics tick instead creates repeated discontinuities that
+        # PD damping kd=100 resists, dragging position toward an equilibrium
+        # ~50% of commanded — verified by smoke test at 50% motion under
+        # continuous-apply, vs 100% motion under one-shot direct apply.
+        # (The OGN articulation_controller race that originally motivated
+        # continuous re-application is now solved separately by SetActive(False)
+        # in the first-tick cleanup above, so one-shot apply wins safely.)
         if self._latest_joint_cmd is not None:
             try:
                 self._apply_joint_cmd(self._latest_joint_cmd)
@@ -504,6 +508,8 @@ class AicControllerLoop:
                 if not self._logged_apply_error:
                     print(f"[AIC-DT][controller] _apply_joint_cmd error: {exc!r}")
                     self._logged_apply_error = True
+            finally:
+                self._latest_joint_cmd = None
 
         if self._latest_pose_cmd is not None:
             try:
@@ -512,6 +518,8 @@ class AicControllerLoop:
                 if not self._logged_apply_error:
                     print(f"[AIC-DT][controller] _apply_pose_cmd error: {exc!r}")
                     self._logged_apply_error = True
+            finally:
+                self._latest_pose_cmd = None
 
         # Publish state + contacts (Plans 02-05 + 02-06 implement these)
         try:
@@ -703,17 +711,23 @@ class AicControllerLoop:
         # publish rate (no need for sim-side PD tracking).
         if arm_positions and len(arm_positions) == len(arm_names):
             try:
-                # Two-step write because Isaac Sim's articulation has BOTH a current
-                # state (dof_pos) AND a PD target (dof_pos_target). Setting only one
-                # leaves the other to fight the next physics tick:
-                #   set_joint_positions → writes dof_pos directly (instant motion)
-                #   apply_action(joint_positions=...) → writes the PD target so PD
-                #     doesn't pull back to a stale target like the URDF home pose.
-                # Both arrays are shape (1, 6); positional indexing matches the
-                # 6-DOF articulation in URDF order (ARM_JOINTS_ORDERED).
-                # Do NOT pass joint_names to either — Isaac Sim 5.0 has an internal
-                # off-by-one that raises IndexError when joint_names is provided.
+                # Three-step write — set_joint_positions writes dof_pos (instant
+                # motion), apply_action(joint_positions=arr) writes the PD target
+                # (so PD doesn't pull back to a stale target), set_joint_velocities
+                # writes zeros to suppress the artificial velocity transient that
+                # the instantaneous dof_pos write creates (without this, PD damping
+                # kd=100 fights the artificial velocity and drags position back —
+                # symptom: only ~50% of commanded motion achieved). All arrays are
+                # shape (1, 6); positional indexing matches the 6-DOF articulation
+                # in URDF order. Do NOT pass joint_names — Isaac Sim 5.0 has an
+                # internal off-by-one that raises IndexError when joint_names is
+                # provided.
                 arr = np.array([arm_positions], dtype=np.float32)
+                # Empirically (2026-05-05): direct one-shot
+                #   set_joint_positions + apply_action(joint_positions=arr)
+                # holds the position perfectly for 2+s. Adding set_joint_velocities(0)
+                # was tried as defense against the artificial velocity transient
+                # but didn't help; removed.
                 self._articulation.set_joint_positions(arr)
                 self._articulation.apply_action(ArticulationActions(joint_positions=arr))
             except Exception as exc:
@@ -963,8 +977,12 @@ class AicControllerLoop:
                 msg.tcp_pose.orientation.z = float(q_wxyz[3])
             except Exception as exc:
                 if not self._logged_publish_error:
-                    self._node.get_logger().debug(f"FK compute_end_effector_pose failed: {exc!r}")
+                    print(f"[AIC-DT][controller] FK compute_end_effector_pose failed: {exc!r}")
                     self._logged_publish_error = True
+        else:
+            if not getattr(self, "_logged_kinematics_none", False):
+                print(f"[AIC-DT][controller] _publish_controller_state: self._kinematics is None — FK won't run")
+                self._logged_kinematics_none = True
 
         # tcp_velocity via numerical-diff (D-07; 3-sample ring buffer per CONTEXT discretion).
         # First 1-2 samples will produce zero velocity (warmup); after that we have at least
@@ -1144,12 +1162,22 @@ class AicControllerLoop:
             return False
 
         try:
+            # ArticulationKinematicsSolver requires a SingleArticulation
+            # (legacy class with handles_initialized attribute), NOT the new
+            # isaacsim.core.prims.Articulation we use elsewhere. Without this,
+            # compute_end_effector_pose raises AttributeError("'Articulation'
+            # object has no attribute 'handles_initialized'").
+            from isaacsim.core.prims import SingleArticulation
+            art_root = f"{self._robot_xform_path}/root_joint"
+            kinematics_articulation = SingleArticulation(prim_path=art_root)
+            kinematics_articulation.initialize()
             lula_solver = LulaKinematicsSolver(robot_description_path, urdf_path)
             self._kinematics = ArticulationKinematicsSolver(
-                robot_articulation=self._articulation,
+                robot_articulation=kinematics_articulation,
                 kinematics_solver=lula_solver,
                 end_effector_frame_name="tool0",
             )
+            print(f"[AIC-DT][controller] _setup_kinematics: ArticulationKinematicsSolver constructed with SingleArticulation")
         except Exception as exc:
             self._node.get_logger().error(f"_setup_kinematics: Lula construction failed — {exc!r}")
             self._kinematics = None
