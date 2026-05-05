@@ -311,18 +311,17 @@ class AicParityPublishers:
 
         self._stage = omni.usd.get_context().get_stage()
 
-        # Build articulation handle. The articulation root prim is
-        # {robot_xform}/root_joint per the empirical probe.
-        try:
-            from isaacsim.core.prims import Articulation
-            art_root = f"{self._robot_xform_path}/root_joint"
-            self._articulation = Articulation(prim_paths_expr=art_root)
-            self._articulation.initialize()
-            for idx, name in enumerate(self._articulation.dof_names or []):
-                self._dof_index_by_name[name] = idx
-        except Exception as exc:
-            print(f"[AIC-DT][parity] Articulation init failed: {exc!r}")
-            self._articulation = None
+        # Articulation handle is constructed LAZILY on first physics tick
+        # (see _on_physics_step). Constructing + initializing here, before
+        # the first physics step, returns a handle without _physics_view —
+        # every get_joint_positions / get_joint_velocities / get_measured_joint_efforts
+        # then raises AttributeError("'Articulation' object has no attribute
+        # '_physics_view'") and we silently publish stale/zero values to /joint_states.
+        # Verified 2026-05-05 in controller_loop.py: same root cause as Bug 4;
+        # fix is to defer construction to tick 30 of the physics loop.
+        self._articulation = None
+        self._articulation_init_attempted = False
+        self._articulation_init_wait_ticks = 0
 
         # Subscribe to physics step events. omni.physx is the canonical 5.0
         # entry point for per-step callbacks driven by the PhysX update loop.
@@ -377,6 +376,26 @@ class AicParityPublishers:
         """
         if self._node is None:
             return
+        # Lazy articulation construction. See start() for why we can't do
+        # this at start-time. Wait 30 ticks (~0.5s @ 60Hz) for physics_sim_view
+        # to be ready, then construct fresh.
+        if not self._articulation_init_attempted:
+            self._articulation_init_wait_ticks += 1
+            if self._articulation_init_wait_ticks >= 30:
+                try:
+                    from isaacsim.core.prims import Articulation
+                    art_root = f"{self._robot_xform_path}/root_joint"
+                    self._articulation = Articulation(prim_paths_expr=art_root)
+                    self._articulation.initialize()
+                    self._dof_index_by_name = {}
+                    for idx, name in enumerate(self._articulation.dof_names or []):
+                        self._dof_index_by_name[name] = idx
+                    has_view = hasattr(self._articulation, "_physics_view") and self._articulation._physics_view is not None
+                    print(f"[AIC-DT][parity] Articulation constructed lazily at tick {self._articulation_init_wait_ticks} (has_physics_view={has_view}, dof_names={list(self._dof_index_by_name.keys())})")
+                except Exception as exc:
+                    print(f"[AIC-DT][parity] Articulation construction failed: {exc!r}")
+                    self._articulation = None
+                self._articulation_init_attempted = True
         # Capture sim time once for header consistency across messages.
         try:
             from rclpy.clock import Clock

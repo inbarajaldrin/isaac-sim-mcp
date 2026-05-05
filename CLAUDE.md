@@ -1,6 +1,41 @@
 # isaac-sim-mcp / aic-dt — Claude Code on-ramp
 
+> ## ⛔ AUTONOMOUS M1 MODE — ACTIVE UNTIL MILESTONE 1 SHIPS
+>
+> **Marker file: `.planning/.autonomous_m1_active`** (delete to disable). When this file exists:
+>
+> 1. **NEVER stop to ask the user permission to fix a bug.** If you encounter a bug — fix it, commit it, move on. The user authorized continuous autonomous execution on 2026-05-05: *"fix any bug as you come across them and continue till the end of milestone 1 like i asked without stopping in between"*.
+> 2. **Phase order: Phase 2 (close runtime gaps) → Phase 3 (cable physics + object TF) → Phase 4 (trial loader + E2E).** Move forward as each phase closes.
+> 3. **Don't ask "do you want me to ...?" or "should I proceed?"** — just proceed. Only stop for HARD blockers: sudo password needed, GPU offline, fundamental architectural ambiguity that contradicts PROJECT.md, OR M1 has shipped (every `aic_engine sample_config.yaml` trial passes against Isaac Sim).
+> 4. **Skill use is mandatory** for any Isaac Sim API question — invoke `isaac-sim-extension-dev` and `nvidia-suite-docs` BEFORE guessing from training data (they evolve monthly; cached LLM knowledge is routinely stale).
+> 5. **Operating discipline:**
+>    - Snapshot the cache after any successful `quick_start` (`prime_usd_cache.py snapshot`).
+>    - Commit fixes atomically with descriptive messages (NO `Co-Authored-By` line per the global CLAUDE.md).
+>    - Update `STATE.md` after every phase close.
+>    - Use `TaskCreate`/`TaskUpdate` to track in-flight work.
+> 6. **When context fills + `/compact` triggers:** the `PreCompact` hook auto-dumps state to `.planning/.precompact_snapshot.txt`. The `SessionStart` hook auto-prints this autonomous-mode reminder. After compact, you bootstrap by reading (in order):
+>    - This block (top of CLAUDE.md) — restate the autonomous-mode policy.
+>    - `.planning/STATE.md` — current phase, last activity, blockers.
+>    - `.planning/HANDOFF.json` — structured next_action + completed_tasks + decisions.
+>    - `.planning/.precompact_snapshot.txt` — git status + recent commits + Isaac Sim status at compact time.
+>    - Then RESUME — do not summarize back to the user, do not re-confirm; just continue.
+> 7. **`Stop` hook is configured to nudge you to keep going** if you idle. To genuinely pause: `touch .planning/.user_pause` (then the Stop hook leaves you alone). To genuinely complete: `touch .planning/.m1_shipped`.
+> 8. **Hard blockers go in `.planning/HANDOFF.json` `blockers` field**, then `touch .planning/.user_pause`, then stop. The user will see the blocker and unblock you.
+>
+> **Do not delete this block** until M1 ships. The hooks (`.claude/settings.json` + `.claude/scripts/*.sh`) and this block work together — both must be removed for normal mode.
+
 This repo hosts Isaac Sim Kit extensions that expose MCP socket servers for agent-driven control of robot digital twins. Active development focuses on **`exts/aic-dt/`** — the digital twin for the AIC (AI for Industry Challenge) cable-insertion task. Other extensions (`ur5e-dt`, `soarm101-dt`) are sibling reference implementations.
+
+> ## ⛔ MANDATORY UNTIL M1 SHIPS — Skill invocation before guessing
+>
+> **Until milestone M1 (`/sample_config.yaml` trials pass under CheatCode against Isaac Sim) is closed, ANY task that touches Isaac Sim 5.0 / OpenUSD / OmniGraph / Replicator / Warp / Isaac Lab / Isaac ROS / aic-dt extension internals MUST invoke the relevant skill BEFORE proposing a fix or writing code. No exceptions.**
+>
+> - **`isaac-sim-extension-dev`** — first stop for anything aic-dt / extension lifecycle / MCP socket / USD cache / launch path. Encodes hard-won project knowledge (cooking deadlock, post-play wedge, real-Kit-log location, prim-path bug history, sibling extensions).
+> - **`nvidia-suite-docs`** — first stop for live NVIDIA docs (Isaac Sim 5.0 API surface, OpenUSD authoring, OmniGraph node behavior, articulation drives, sensors, RTX, Replicator, Isaac Lab, Isaac ROS, Warp). Routes to sub-skills + fetches official docs and forum threads. **Use this BEFORE relying on training-data memory of Isaac Sim 4.x APIs — APIs change every release and cached knowledge is routinely stale.**
+>
+> Both skills apply to ALL agents: research, planning, execution, debugging, verification, code review. If you find yourself "pretty sure" about an Isaac Sim or OpenUSD API behavior without having opened either skill in the current session, STOP and invoke them. The cost of one Skill invocation (~2 file reads) is small; the cost of a wrong API guess is hours of debug.
+>
+> **Common evidence this rule was violated:** "I know set_joint_positions/apply_action/SetActive/GetReferences works like X" without a citation to live docs. "OGN node should be at this prim path" without verifying via `omni.usd.get_context().get_stage()`. Patches that revert because the actual API contract is different. If a debug session passes the 1-hour mark on an Isaac-Sim-API question, that's a signal to back up and consult `nvidia-suite-docs`.
 
 > **Use the `isaac-sim-extension-dev` skill first** for anything Isaac Sim related — extension lifecycle, USD/physics, action graphs, MCP socket protocol, troubleshooting, the canonical asset workflow. The skill encodes hard-won knowledge (cooking deadlock workaround, post-play wedge anti-pattern, real-Kit-log location, etc.) that is the source of truth when this file goes stale.
 
@@ -143,6 +178,7 @@ python3 ~/.claude/skills/isaac-sim-extension-dev/scripts/mcp_test.py 8768 new_st
 | `AIC_DT_EXT_FOLDER` | `/home/aaugus11/Documents/isaac-sim-mcp/exts` | Override hardcoded ext folder in `launch_postload.py`. Set when this repo lives elsewhere. |
 | `MCP_CLIENT_OUTPUT_DIR` | unset | If set, the extension writes resources / saved scene state under `$MCP_CLIENT_OUTPUT_DIR/resources/`. Otherwise relative to `cwd`. |
 | `MCP_SERVER_PORT` | `8768` (in code) | Socket port. Hardcoded as a constant in `extension.py` — change there, not via env. |
+| `ROS_DOMAIN_ID` | **`7` (sim isolation)** | **MUST be set to 7 for Isaac Sim launch + smoke tests.** The user has a live UR5e ROS driver (`ur5e_with_rg2.launch.py` against `192.168.1.111`) running on the default domain 0 — its `joint_state_broadcaster` competes with Isaac Sim's `aic_dt_parity_publisher` on `/joint_states` and breaks Phase 1 smoke. Discovered 2026-05-05. Always wrap launches: `bash -c 'source ~/env_isaaclab/bin/activate && ROS_DOMAIN_ID=7 DISPLAY=${DISPLAY:-:0} bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch aic-dt'` and smoke tests: `ROS_DOMAIN_ID=7 python3 .../smoke_test_aic_*.py`. |
 
 ### Real Kit log (where the actual extension errors live)
 

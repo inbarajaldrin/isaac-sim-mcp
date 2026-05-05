@@ -322,15 +322,29 @@ class AicControllerLoop:
             Contacts, "/aic/gazebo/contacts/off_limit", cmd_qos,
         )
 
-        # Articulation handle (Pitfall 9: append /root_joint to the Xform path)
+        # Articulation handle (Pitfall 9: append /root_joint to the Xform path).
+        # Do NOT call .initialize() here — it must run AFTER the first physics
+        # tick or _physics_view never gets populated and every set_*/get_*/
+        # apply_action raises AttributeError. Defer to _on_physics_step.
         try:
             from isaacsim.core.prims import Articulation
             art_root = f"{self._robot_xform_path}/root_joint"
             self._articulation = Articulation(prim_paths_expr=art_root)
-            self._articulation.initialize()
         except Exception as exc:
-            print(f"[AIC-DT][controller] Articulation init failed: {exc!r}")
+            print(f"[AIC-DT][controller] Articulation construction failed: {exc!r}")
             self._articulation = None
+
+        # Phase-1 OGN articulation_controller cleanup is deferred to the first
+        # physics tick because Phase 1's setup_action_graph (which CREATES that
+        # node) runs LATER in the quick_start chain than controller_loop.start().
+        # See _on_physics_step for the actual removal.
+        self._ogn_articulation_ctrl_removed = False
+        # Articulation re-initialization is also deferred — see _on_physics_step.
+        # Articulation._physics_view is only populated AFTER the first physics
+        # step runs, not at .initialize() time (verified 2026-05-04: every call
+        # raises AttributeError("'Articulation' object has no attribute '_physics_view'")
+        # if invoked before the first physics tick).
+        self._articulation_reinitialized = False
 
         # IK/FK solver init — Plan 02-04 implements _setup_kinematics()
         try:
@@ -416,6 +430,55 @@ class AicControllerLoop:
     def _on_physics_step(self, dt: float):
         if self._node is None:
             return
+        # First-tick cleanup: defang Phase-1's OGN IsaacArticulationController
+        # at /Graph/ActionGraph_UR5e/articulation_controller. That node subscribes
+        # to /joint_states and feeds the result back as positionCommand into the
+        # same articulation — a feedback loop that re-targets PD to the previous
+        # tick's position, undoing every set_joint_positions write within ~30 ticks.
+        # The pattern was designed for an EXTERNAL controller publishing on
+        # /joint_states; with Phase 1's parity_publishers ALSO publishing /joint_states
+        # as feedback, the loop closes on itself. We can't fix it earlier because
+        # setup_action_graph runs after controller_loop.start() in quick_start.
+        # Mirrors the same race observed in ur5e-dt (sibling extension).
+        # NOTE: stage.RemovePrim on the live OGN node CRASHES Isaac Sim (the graph
+        # evaluator can be mid-traversal). Instead, deactivate the prim — the OGN
+        # evaluator skips inactive nodes safely (same pattern as the cable D-04 fix).
+        if not self._ogn_articulation_ctrl_removed:
+            try:
+                import omni.usd
+                stage = omni.usd.get_context().get_stage()
+                ognode_path = "/Graph/ActionGraph_UR5e/articulation_controller"
+                node_prim = stage.GetPrimAtPath(ognode_path)
+                if node_prim and node_prim.IsValid():
+                    node_prim.SetActive(False)
+                    print(f"[AIC-DT][controller] deactivated Phase-1 OGN articulation_controller at {ognode_path} (Bug 4 fix)")
+                    self._ogn_articulation_ctrl_removed = True
+                # If prim doesn't exist yet, leave the flag False — try again next tick.
+            except Exception as exc:
+                print(f"[AIC-DT][controller] OGN articulation_controller deactivation failed: {exc!r}")
+                self._ogn_articulation_ctrl_removed = True  # don't keep retrying on permanent failure
+
+        # Wait several ticks then RECREATE the Articulation handle (not just
+        # re-initialize). Empirically, calling initialize() on the existing
+        # handle from physics-tick thread doesn't populate _physics_view.
+        # A fresh Articulation instance constructed AFTER the simulation has
+        # been running for some ticks works correctly — verified against the
+        # execute_python_code direct-test pattern that holds positions for 2s.
+        if not self._articulation_reinitialized:
+            self._init_wait_ticks = getattr(self, "_init_wait_ticks", 0) + 1
+            if self._init_wait_ticks >= 30:
+                try:
+                    from isaacsim.core.prims import Articulation
+                    art_root = f"{self._robot_xform_path}/root_joint"
+                    self._articulation = Articulation(prim_paths_expr=art_root)
+                    self._articulation.initialize()
+                    self._articulation_reinitialized = True
+                    has_view = hasattr(self._articulation, "_physics_view") and self._articulation._physics_view is not None
+                    print(f"[AIC-DT][controller] Articulation handle recreated at tick {self._init_wait_ticks} (has_physics_view={has_view})")
+                except Exception as exc:
+                    if not getattr(self, "_logged_reinit_error", False):
+                        print(f"[AIC-DT][controller] Articulation recreate failed: {exc!r}")
+                        self._logged_reinit_error = True
         try:
             import rclpy
             rclpy.spin_once(self._node, timeout_sec=0)
@@ -425,7 +488,15 @@ class AicControllerLoop:
                 self._logged_apply_error = True
             return
 
-        # Apply latest commands (Plans 02-03 + 02-04 implement these)
+        # Apply latest commands (Plans 02-03 + 02-04 implement these).
+        # KEEP self._latest_*_cmd after applying — re-apply every physics tick
+        # until a new command arrives. This matches aic_controller's continuous
+        # impedance-control semantics AND defeats Phase 1's OGN ArticulationController
+        # race: Phase 1's setup_action_graph runs the OGN node every tick reading a
+        # 1-tick-lagged /joint_states bridge that pulls the arm back to the previous
+        # position. A single set_joint_positions write loses this race; continuous
+        # re-application wins it. (Verified 2026-05-04 — single-shot writes succeed
+        # at the tick they fire but revert within ~30 ticks.)
         if self._latest_joint_cmd is not None:
             try:
                 self._apply_joint_cmd(self._latest_joint_cmd)
@@ -433,8 +504,6 @@ class AicControllerLoop:
                 if not self._logged_apply_error:
                     print(f"[AIC-DT][controller] _apply_joint_cmd error: {exc!r}")
                     self._logged_apply_error = True
-            finally:
-                self._latest_joint_cmd = None
 
         if self._latest_pose_cmd is not None:
             try:
@@ -443,8 +512,6 @@ class AicControllerLoop:
                 if not self._logged_apply_error:
                     print(f"[AIC-DT][controller] _apply_pose_cmd error: {exc!r}")
                     self._logged_apply_error = True
-            finally:
-                self._latest_pose_cmd = None
 
         # Publish state + contacts (Plans 02-05 + 02-06 implement these)
         try:
@@ -599,17 +666,25 @@ class AicControllerLoop:
         # Apply gains FIRST so the next PD step uses the new stiffness/damping.
         # set_gains is a no-op pre-play (Pitfall 6) — wrapped to swallow the
         # silent-fail signal as a debug log rather than error spam.
+        # Use its own log-once flag (NOT _logged_apply_error) so a set_gains
+        # failure doesn't silence subsequent position-write error logging —
+        # this trapped the 2026-05-04 Bug-4 debug for ~hours: set_gains was
+        # raising the Isaac-Sim joint_names= IndexError, setting the shared
+        # flag, then position writes failed silently.
         if (arm_kps and arm_kds
                 and len(arm_kps) == len(arm_names)
                 and len(arm_kds) == len(arm_names)):
             try:
                 kps = np.array([arm_kps], dtype=np.float32)
                 kds = np.array([arm_kds], dtype=np.float32)
-                self._articulation.set_gains(kps=kps, kds=kds, joint_names=arm_names)
+                # Articulation has 6 DOFs in URDF order matching ARM_JOINTS_ORDERED.
+                # Do NOT pass joint_names — Isaac Sim 5.0 has the off-by-one bug
+                # for set_gains too, same as set_joint_positions.
+                self._articulation.set_gains(kps=kps, kds=kds)
             except Exception as exc:
-                if not self._logged_apply_error:
-                    self._node.get_logger().debug(f"set_gains failed: {exc!r}")
-                    self._logged_apply_error = True
+                if not getattr(self, "_logged_set_gains_error", False):
+                    print(f"[AIC-DT][controller] set_gains failed: {exc!r}")
+                    self._logged_set_gains_error = True
 
         # Apply positions via set_joint_positions (direct write, bypasses PD).
         #
@@ -628,27 +703,39 @@ class AicControllerLoop:
         # publish rate (no need for sim-side PD tracking).
         if arm_positions and len(arm_positions) == len(arm_names):
             try:
-                self._articulation.set_joint_positions(
-                    np.array([arm_positions], dtype=np.float32),
-                    joint_names=arm_names,
-                )
+                # Two-step write because Isaac Sim's articulation has BOTH a current
+                # state (dof_pos) AND a PD target (dof_pos_target). Setting only one
+                # leaves the other to fight the next physics tick:
+                #   set_joint_positions → writes dof_pos directly (instant motion)
+                #   apply_action(joint_positions=...) → writes the PD target so PD
+                #     doesn't pull back to a stale target like the URDF home pose.
+                # Both arrays are shape (1, 6); positional indexing matches the
+                # 6-DOF articulation in URDF order (ARM_JOINTS_ORDERED).
+                # Do NOT pass joint_names to either — Isaac Sim 5.0 has an internal
+                # off-by-one that raises IndexError when joint_names is provided.
+                arr = np.array([arm_positions], dtype=np.float32)
+                self._articulation.set_joint_positions(arr)
+                self._articulation.apply_action(ArticulationActions(joint_positions=arr))
             except Exception as exc:
+                # Loud on FIRST error so future debuggers don't chase the rclpy
+                # spin layer when the actual fault is here (the silent .debug()
+                # log-once cost ~3 hrs of investigation in the 2026-05-03 cycle).
                 if not self._logged_apply_error:
-                    self._node.get_logger().debug(f"set_joint_positions failed: {exc!r}")
+                    print(f"[AIC-DT][controller] set_joint_positions failed: {exc!r}")
                     self._logged_apply_error = True
                 return
             # Feedforward effort still goes through apply_action (set_joint_positions
             # doesn't accept efforts; effort is applied alongside the position target).
             if arm_efforts and len(arm_efforts) == len(arm_names):
                 try:
+                    # Same Isaac Sim 5.0 quirk — no joint_names=.
                     self._articulation.apply_action(ArticulationActions(
                         joint_efforts=np.array([arm_efforts], dtype=np.float32),
-                        joint_names=arm_names,
                     ))
                 except Exception as exc:
-                    if not self._logged_apply_error:
-                        self._node.get_logger().debug(f"apply_action(efforts) failed: {exc!r}")
-                        self._logged_apply_error = True
+                    if not getattr(self, "_logged_efforts_error", False):
+                        print(f"[AIC-DT][controller] apply_action(efforts) failed: {exc!r}")
+                        self._logged_efforts_error = True
 
         # Bookkeeping for ControllerState publish (Plan 02-05 reads these).
         self._last_reference_joint_state = msg.target_state
@@ -730,15 +817,16 @@ class AicControllerLoop:
             gripper_tcp_overrides = None
 
         # Log + ignore Cartesian impedance fields per D-06
-        if msg.target_stiffness and any(s != 0.0 for s in msg.target_stiffness):
+        # NOTE: msg.target_stiffness can be a numpy array — `if numpy_arr` raises
+        # ValueError("truth value ambiguous"). Use len() > 0 + any() pattern.
+        if len(msg.target_stiffness) > 0 and any(float(s) != 0.0 for s in msg.target_stiffness):
             self._node.get_logger().debug(
                 f"Ignoring MotionUpdate.target_stiffness (6x6 Cartesian impedance) — D-06: controller-side math"
             )
-        if msg.feedforward_wrench_at_tip and (
-            msg.feedforward_wrench_at_tip.force.x != 0.0
-            or msg.feedforward_wrench_at_tip.force.y != 0.0
-            or msg.feedforward_wrench_at_tip.force.z != 0.0
-        ):
+        # feedforward_wrench_at_tip is a Wrench message (sub-msg, always truthy);
+        # check field values directly without truthiness on the wrench itself.
+        ffw = msg.feedforward_wrench_at_tip
+        if (ffw.force.x != 0.0 or ffw.force.y != 0.0 or ffw.force.z != 0.0):
             self._node.get_logger().debug(
                 "Ignoring MotionUpdate.feedforward_wrench_at_tip — D-06: controller-side math"
             )
@@ -790,14 +878,17 @@ class AicControllerLoop:
                 if ik_positions.ndim == 1:
                     ik_positions = ik_positions.reshape(1, -1)
                 # ArticulationKinematicsSolver returns positions for the IK chain
-                # joints (URDF arm order); pass joint_names explicitly to be safe.
+                # joints (URDF arm order). Articulation has exactly 6 DOFs in the same
+                # order, so positional indexing matches naturally.
+                # Do NOT pass joint_names — Isaac Sim 5.0 set_joint_positions has
+                # an internal off-by-one that raises IndexError when joint_names is
+                # provided. See _apply_joint_cmd for the full story.
                 self._articulation.set_joint_positions(
-                    ik_positions.astype(np.float32),
-                    joint_names=list(ARM_JOINTS_ORDERED),
+                    ik_positions.astype(np.float32)
                 )
         except Exception as exc:
             if not self._logged_apply_error:
-                self._node.get_logger().debug(f"set_joint_positions(ik) failed: {exc!r}")
+                print(f"[AIC-DT][controller] set_joint_positions(ik) failed: {exc!r}")
                 self._logged_apply_error = True
             return
 

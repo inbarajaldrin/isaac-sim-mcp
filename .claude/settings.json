@@ -1,0 +1,38 @@
+{
+  "_doc": "Autonomous M1-execution mode hooks. Active until M1 ships. PreCompact dumps state, SessionStart force-loads context, Stop reschedules to keep the loop alive. See CLAUDE.md '⛔ AUTONOMOUS M1 MODE' block for the policy this implements.",
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /home/aaugus11/Documents/isaac-sim-mcp/.claude/scripts/precompact_dump_state.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /home/aaugus11/Documents/isaac-sim-mcp/.claude/scripts/sessionstart_load_context.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /home/aaugus11/Documents/isaac-sim-mcp/.claude/scripts/stop_check_m1_complete.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
