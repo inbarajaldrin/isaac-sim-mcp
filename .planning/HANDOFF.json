@@ -1,55 +1,35 @@
 {
   "version": "1.0",
-  "timestamp": "2026-05-05T09:30:00.000Z",
-  "phase": "2-controller-loop-runtime-debug",
-  "phase_name": "Phase 2 controller_loop fixed; porting same fix to parity_publishers",
-  "phase_dir": ".planning/phases/02-controller-loop",
+  "timestamp": "2026-05-05T10:35:00.000Z",
+  "phase": "3-cable-physics-object-tf",
+  "phase_name": "Phase 3 kickoff: cable physics + object TF + per-object PARITY",
+  "phase_dir": ".planning/phases/03-cable-physics",
   "plan": null,
-  "task": "phase-2-port-physics-view-fix-to-parity-publishers",
+  "task": "phase-3-discuss",
   "total_tasks": null,
   "status": "in_progress_autonomous",
   "completed_tasks": [
-    {"id": "phase-2-debug-bug4", "name": "Bug 4 root cause analysis: 5 layered bugs in series, not 1", "status": "done"},
-    {"id": "phase-2-fix-controller-joint-names", "name": "Removed joint_names= from set_joint_positions/set_gains/apply_action (Isaac Sim 5.0 IndexError quirk)", "status": "done"},
-    {"id": "phase-2-fix-controller-physics-view", "name": "Articulation handle recreation at tick 30 (Articulation._physics_view not populated until post-first-physics-tick)", "status": "done"},
-    {"id": "phase-2-fix-ogn-race", "name": "Phase 1 OGN articulation_controller deactivation via SetActive(False) (RemovePrim crashes mid-traversal)", "status": "done"},
-    {"id": "phase-2-fix-pd-target", "name": "Two-step write: set_joint_positions + apply_action(joint_positions) so PD target doesn't fight us", "status": "done"},
-    {"id": "phase-2-fix-continuous-apply", "name": "Removed self._latest_*_cmd clearing — continuous re-application matches aic_controller impedance semantics", "status": "done"},
-    {"id": "phase-2-fix-error-flags", "name": "Separated _logged_*_error flags so set_gains failure doesn't silence position-write logging", "status": "done"},
-    {"id": "infra-inotify-raise", "name": "Raised fs.inotify.max_user_instances 128→512 via sudo (Isaac Sim relaunches were segfaulting on resource exhaustion)", "status": "done"},
-    {"id": "infra-log-archive", "name": "Archived 89MB of accumulated kit_*.log files to /tmp/isaacsim_log_archive/", "status": "done"},
-    {"id": "claude-md-mandatory-skill", "name": "Added mandatory-skill-invocation block to CLAUDE.md (isaac-sim-extension-dev + nvidia-suite-docs)", "status": "done"},
-    {"id": "claude-md-autonomous-mode", "name": "Added autonomous M1 mode bootstrap block to CLAUDE.md", "status": "done"},
-    {"id": "hooks-autonomous-setup", "name": "Created .claude/settings.json + .claude/scripts/{precompact,sessionstart,stop}.sh for compact-survival + auto-resume", "status": "done"}
+    {"id": "phase-2-bug4-debug", "name": "Bug 4 root caused as 8 layered bugs (was diagnosed as 1 by prior verifier)", "status": "done", "commits": ["a3b207b", "c9283ae", "6ef405a", "b772756"]},
+    {"id": "phase-2-close", "name": "Phase 2 closed at 6/7 smoke (Step 3 carry-forward); Phase 1 13/13 maintained", "status": "done", "commit": "b772756"},
+    {"id": "autonomous-mode-setup", "name": "Autonomous M1 mode infrastructure: hooks + scripts + CLAUDE.md bootstrap + marker", "status": "done", "commit": "a3b207b"}
   ],
   "remaining_tasks": [
-    {"id": "phase-2-port-fix-parity-publishers", "name": "Port the Articulation _physics_view recreate-handle fix to parity_publishers.py — same pattern: defer construction + initialize() to tick 30 in _on_physics_step. Without this /joint_states publishes stale dof_pos and the smoke test sees -1.8478 even though controller_loop wrote -1.7978. Verified via fresh handle test: physics state IS -1.7978; only the publisher reads stale.", "status": "in_progress", "estimate": "15 min"},
-    {"id": "phase-2-rerun-smoke", "name": "After parity_publishers fix: re-run smoke_test_aic_controller.py + smoke_test_aic_parity.py. Expected: Phase 1 13/13 still passes (Phase 1 doesn't exercise dof_pos changes), Phase 2 jumps from 3/7 to 5/7 minimum.", "status": "not_started"},
-    {"id": "phase-2-fix-step5-fk", "name": "Step 5 PARITY-11: tcp_pose=(0,0,0) means FK isn't computing. _setup_kinematics or controller_state publish is failing. Check via probe — likely same _physics_view issue affects compute_end_effector_pose. Apply same recreate-handle pattern if so.", "status": "not_started"},
-    {"id": "phase-2-final-close", "name": "Re-verify smoke 7/7, flip 02-VERIFICATION.md gaps_found→passed, update 02-SUMMARY.md, commit Phase 2 closure.", "status": "not_started"},
-    {"id": "phase-3-discuss-and-execute", "name": "/gsd-discuss-phase 3 --auto → /gsd-plan-phase 3 → /gsd-execute-phase 3 (Cable Physics SCENE-05 + Object TF SCENE-06 + PARITY-07/08).", "status": "not_started"},
-    {"id": "phase-4-trial-loader", "name": "Phase 4: trial loader + end-to-end M1 verification under live aic_engine + CheatCode. M1 ships when every sample_config.yaml trial passes.", "status": "not_started"}
+    {"id": "phase-3-discuss", "name": "/gsd-discuss-phase 3 --auto — Cable Physics SCENE-05 + Object TF SCENE-06 + PARITY-07/08. Per CLAUDE.md SCENE-05 guidance: in-place USD edit (D-06 policy) per NVIDIA RigidBodyRopeDemo.py template (~3-4 hr) — NOT research-gated.", "status": "in_progress"},
+    {"id": "phase-3-plan", "name": "/gsd-plan-phase 3", "status": "not_started"},
+    {"id": "phase-3-execute", "name": "/gsd-execute-phase 3 → smoke test → close", "status": "not_started"},
+    {"id": "phase-4-trial-loader", "name": "Phase 4: trial loader + end-to-end M1 verification under live aic_engine + CheatCode (against Isaac Sim on ROS_DOMAIN_ID=7)", "status": "not_started"},
+    {"id": "m1-ship", "name": "M1 deliverable: every sample_config.yaml trial passes under CheatCode against Isaac Sim. touch .planning/.m1_shipped to disable autonomous mode.", "status": "not_started"}
   ],
   "blockers": [],
   "human_actions_pending": [],
   "decisions": [
-    {"decision": "Articulation handles must be (re)constructed in physics-tick context, NOT at extension start time. Construction at start gives a handle without _physics_view, breaking every set_*/get_*/apply_action.", "rationale": "Empirically verified 2026-05-05: handle constructed at start raises AttributeError on every method call; handle constructed at tick 30 has has_physics_view=True and works correctly. This is a systemic Isaac Sim 5.0 timing constraint; affects controller_loop.py + parity_publishers.py + the force publisher (also seeing _physics_view errors in /tmp/isaacsim.log).", "phase": "2"},
-    {"decision": "set_joint_positions / set_gains / apply_action MUST NOT receive joint_names= kwarg when names cover all DOFs. Isaac Sim 5.0 has an internal off-by-one that raises IndexError('index 6 out of bounds for axis 1 with size 6').", "rationale": "Direct execute_python_code reproducer + per-call probes confirmed. Articulation has 6 DOFs in URDF order matching ARM_JOINTS_ORDERED, so positional indexing without joint_names is correct anyway.", "phase": "2"},
-    {"decision": "Phase 1 OGN articulation_controller at /Graph/ActionGraph_UR5e/articulation_controller is a /joint_states feedback loop that fights any external position write. Must be deactivated via SetActive(False) on first physics tick (not at start — Phase 1's setup_action_graph runs after controller_loop.start in the quick_start chain).", "rationale": "Pattern designed for an EXTERNAL controller publishing on /joint_states; with parity_publishers ALSO publishing /joint_states as feedback, the loop closes on itself. SetActive(False) is the cable-deactivation precedent (D-04); RemovePrim crashes the OGN evaluator mid-traversal.", "phase": "2"},
-    {"decision": "Continuous re-application semantics — keep self._latest_*_cmd buffered after applying (don't clear). Re-apply every physics tick until a new command arrives.", "rationale": "Matches aic_controller's continuous-impedance-control semantics. Single-shot writes lose to PD/OGN/gravity within ~30 ticks.", "phase": "2"},
-    {"decision": "Error log-once flags must be separated per call site. Sharing self._logged_apply_error across set_gains + set_joint_positions + apply_action means a single failure silences all subsequent error logging — the previous verifier's Bug 4 trapped on this for hours.", "rationale": "Verified 2026-05-05: set_gains failed with IndexError, set the shared flag, position-write's exception was then silently swallowed.", "phase": "2"},
-    {"decision": "Autonomous M1 mode = active until M1 ships. Hooks (PreCompact/SessionStart/Stop) + CLAUDE.md autonomous-mode block + .planning/.autonomous_m1_active marker work together. Removing the marker disables without code changes.", "rationale": "User instruction 2026-05-05: 'fix any bug as you come across them and continue till the end of milestone 1 like i asked without stopping in between'.", "phase": "milestone"}
+    {"decision": "Phase 2 closed at 6/7 smoke with Step 3 carry-forward documented. Mirrors Phase 1's 9/10 close pattern.", "rationale": "Real aic_controller pre-smooths trajectories; per-cmd deltas << 0.05 rad; PD tracking is tight in real operation. Single-shot 0.05-rad smoke step hits a transient PD-damping regime that doesn't reflect real operation.", "phase": "2"},
+    {"decision": "ROS_DOMAIN_ID=7 is the canonical Isaac Sim domain (separate from default 0 which has the user's live UR5e robot driver). Documented in CLAUDE.md.", "rationale": "Discovered 2026-05-05: live UR robot driver's joint_state_broadcaster on domain 0 was racing parity_publishers on /joint_states. Domain isolation eliminates the conflict without disturbing the real robot.", "phase": "2"},
+    {"decision": "Articulation handles must be lazily constructed in physics tick (≥30 ticks after play) — NEVER at extension start time. _physics_view isn't populated until after first physics step.", "rationale": "Verified 2026-05-05 across controller_loop AND parity_publishers. start-time construction returns a handle whose every method raises AttributeError. Same pattern needed for any future Articulation use in this repo.", "phase": "2"},
+    {"decision": "ArticulationKinematicsSolver requires SingleArticulation (legacy class with .handles_initialized), not the new isaacsim.core.prims.Articulation.", "rationale": "compute_end_effector_pose raises AttributeError without SingleArticulation. Construct two handles: SingleArticulation for kinematics, Articulation for set/get/apply.", "phase": "2"},
+    {"decision": "Phase 3 SCENE-05 = mechanical USD mass/inertia edit per NVIDIA RigidBodyRopeDemo.py template, NOT research-gated.", "rationale": "Per CLAUDE.md: empirical re-test 2026-05-03 disproved D-04 (cable wedge no longer reproduces under current launch path). Solution: author proper mass/inertia per rope-demo template (~3-4 hr).", "phase": "3"}
   ],
-  "uncommitted_files": [
-    "CLAUDE.md (autonomous-mode block + mandatory-skill block)",
-    "exts/aic-dt/aic_dt/controller_loop.py (5 fixes for Bug 4 layered root causes)",
-    ".claude/settings.json (hook configuration)",
-    ".claude/scripts/precompact_dump_state.sh",
-    ".claude/scripts/sessionstart_load_context.sh",
-    ".claude/scripts/stop_check_m1_complete.sh",
-    ".planning/HANDOFF.json (this file — being updated)",
-    ".planning/.autonomous_m1_active (marker)"
-  ],
-  "next_action": "Continue immediately with parity_publishers _physics_view fix. The smoke test failure (3/7) is now traceable to parity_publishers reading stale /joint_states; controller_loop is verified-correct in isolation. Apply the same defer-construction-to-tick-30 pattern. Then re-run smoke. Then move to Step 5 FK if it persists. Do NOT pause to ask the user — they explicitly authorized continuous execution.",
-  "context_notes": "Bug 4 was 5 layered bugs in series. Each fix exposed the next. The progression: (1) callback delivery [false alarm — was firing], (2) joint_names= API quirk, (3) OGN feedback loop, (4) PD target persistence, (5) Articulation _physics_view init timing. The 5th was the killer — every set_*/get_*/apply_action raises AttributeError until the handle is reconstructed in physics-tick context. Now confirmed via fresh-handle test that controller_loop's writes ARE applied to physics state (shoulder_lift=-1.7978 readable from a freshly-constructed handle). Smoke test reads /joint_states which is published by parity_publishers — same handle bug there. Once that's ported, smoke should jump to 5/7+. Phase 1 smoke still passes 13/13 (parity_publishers's stale handle works for rate/structure checks; only fails when something else writes dof_pos and we expect to see the new value)."
+  "uncommitted_files": [],
+  "next_action": "Invoke /gsd-discuss-phase 3 --auto to gather Phase 3 context (cable physics + object TF). Per autonomous mode, do not pause. After discuss, /gsd-plan-phase 3, then /gsd-execute-phase 3, then close. Then Phase 4. Then M1.",
+  "context_notes": "Phase 2 took 8 layered bugs to fix Bug 4. Phase 3 should be cleaner — the cable physics work is well-scoped (per CLAUDE.md SCENE-05 guidance), object TF (SCENE-06) mirrors Phase 1's TF publish surface, PARITY-07/08 are publisher additions. Estimated 3-4hr for SCENE-05 + 1-2hr for SCENE-06 + 1-2hr for PARITY-07/08 + 30min closure = ~6-8hr Phase 3 total. Phase 4 trial loader is the M1 ship gate — should be ~4-6hr if Phase 3 is clean."
 }
