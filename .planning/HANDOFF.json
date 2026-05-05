@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "timestamp": "2026-05-05T11:00:00.000Z",
+  "timestamp": "2026-05-05T11:10:00.000Z",
   "phase": "3-cable-physics-object-tf",
   "phase_name": "Phase 3 mid-execution: 03-01 + 03-02 done; 03-03 partial; 03-04/05/06 pending",
   "phase_dir": ".planning/phases/03-cable-physics",
@@ -9,33 +9,115 @@
   "total_tasks": 6,
   "status": "in_progress_autonomous",
   "completed_tasks": [
-    {"id": "phase-2-bug4-debug", "name": "Bug 4 = 8 layered bugs", "status": "done", "commits": ["a3b207b","c9283ae","6ef405a","b772756"]},
-    {"id": "phase-2-close", "name": "Phase 2 closed at 6/7 smoke", "status": "done"},
-    {"id": "autonomous-mode-setup", "name": "Hooks + scripts + CLAUDE.md autonomous-mode block", "status": "done"},
-    {"id": "phase-3-context", "name": "Phase 3 CONTEXT.md authored autonomously (6 D-decisions)", "status": "done", "commit": "11a7b0c"},
-    {"id": "phase-3-plans-authored", "name": "All 6 Phase 3 PLAN.md files authored", "status": "done"},
-    {"id": "phase-3-01", "name": "Plan 03-01: aic_eval scoring snapshot — MAJOR FINDING /scoring/* topics don't exist live; PARITY-07 deferred, PARITY-08 re-pointed to /objects_poses_real", "status": "done"},
-    {"id": "phase-3-02", "name": "Plan 03-02: SCENE-05 cable physics — per-link MassAPI(density=5e-5) + per-joint DriveAPI authored on 53 links + 26 joints in cable USD; cable activated; Phase 1 13/13 smoke maintained", "status": "done"}
+    {
+      "id": "phase-2-bug4-debug",
+      "name": "Bug 4 = 8 layered bugs",
+      "status": "done",
+      "commits": [
+        "a3b207b",
+        "c9283ae",
+        "6ef405a",
+        "b772756"
+      ]
+    },
+    {
+      "id": "phase-2-close",
+      "name": "Phase 2 closed at 6/7 smoke",
+      "status": "done"
+    },
+    {
+      "id": "autonomous-mode-setup",
+      "name": "Hooks + scripts + CLAUDE.md autonomous-mode block",
+      "status": "done"
+    },
+    {
+      "id": "phase-3-context",
+      "name": "Phase 3 CONTEXT.md authored autonomously (6 D-decisions)",
+      "status": "done",
+      "commit": "11a7b0c"
+    },
+    {
+      "id": "phase-3-plans-authored",
+      "name": "All 6 Phase 3 PLAN.md files authored",
+      "status": "done"
+    },
+    {
+      "id": "phase-3-01",
+      "name": "Plan 03-01: aic_eval scoring snapshot \u2014 MAJOR FINDING /scoring/* topics don't exist live; PARITY-07 deferred, PARITY-08 re-pointed to /objects_poses_real",
+      "status": "done"
+    },
+    {
+      "id": "phase-3-02",
+      "name": "Plan 03-02: SCENE-05 cable physics \u2014 per-link MassAPI(density=5e-5) + per-joint DriveAPI authored on 53 links + 26 joints in cable USD; cable activated; Phase 1 13/13 smoke maintained",
+      "status": "done"
+    }
   ],
   "remaining_tasks": [
-    {"id": "phase-3-03-done", "name": "Plan 03-03: COMPLETE. Full _attach_cable_to_gripper_impl + 4-surface MCP atom + verified live (PhysicsFixedJoint at /World/UR5e/aic_unified_robot/gripper_hande_finger_link_l/CableAttachJoint with body0=finger_link, body1=link_20). Phase 1 13/13 maintained after fresh restart. Hot-reload via touch can break parity_publishers rclpy state — restart required to recover, NOT a real regression.", "status": "done", "commits": ["0583fd6", "03e904a"]},
-    {"id": "phase-3-04", "name": "Plan 03-04 (RE-RE-SCOPED): publish BOTH /scoring/tf AND /objects_poses_real (TFMessage of cable + plug + port + task_board frames) from parity_publishers. Discovered ScoringTier2.cc IS the canonical /scoring/tf consumer (only active in tier2 scoring mode, not standard aic_eval). Frame parent='world'; children must include 'task_board*' substring per ScoringTier2.cc:51-53 grep.", "status": "not_started", "estimate": "2h"},
-    {"id": "phase-3-05", "name": "Plan 03-05 RE-INSTATED: PARITY-07 /scoring/insertion_event publisher. Discovered ScoringTier2.cc kInsertionEventTopic='/scoring/insertion_event' IS the consumer. Use Plan 02-06 omni.physx contact-report subscription pattern, filtered for plug-end link (link_20) ↔ port-link contacts.", "status": "not_started", "estimate": "2h"},
-    {"id": "phase-3-06", "name": "Plan 03-06: smoke + verify harness + REQUIREMENTS flips + 03-SUMMARY", "status": "not_started", "estimate": "1h"},
-    {"id": "phase-4", "name": "Phase 4: trial loader + E2E aic_engine + CheatCode", "status": "not_started"},
-    {"id": "m1-ship", "name": "M1 ships when every sample_config.yaml trial passes against Isaac Sim", "status": "not_started"}
+    {
+      "id": "phase-3-03-done",
+      "name": "Plan 03-03: COMPLETE. Full _attach_cable_to_gripper_impl + 4-surface MCP atom + verified live (PhysicsFixedJoint at /World/UR5e/aic_unified_robot/gripper_hande_finger_link_l/CableAttachJoint with body0=finger_link, body1=link_20). Phase 1 13/13 maintained after fresh restart. Hot-reload via touch can break parity_publishers rclpy state \u2014 restart required to recover, NOT a real regression.",
+      "status": "done",
+      "commits": [
+        "0583fd6",
+        "03e904a"
+      ]
+    },
+    {
+      "id": "phase-3-04",
+      "name": "Plan 03-04 (RE-RE-SCOPED): publish BOTH /scoring/tf AND /objects_poses_real (TFMessage of cable + plug + port + task_board frames) from parity_publishers. Discovered ScoringTier2.cc IS the canonical /scoring/tf consumer (only active in tier2 scoring mode, not standard aic_eval). Frame parent='world'; children must include 'task_board*' substring per ScoringTier2.cc:51-53 grep.",
+      "status": "not_started",
+      "estimate": "2h"
+    },
+    {
+      "id": "phase-3-05",
+      "name": "Plan 03-05 RE-INSTATED: PARITY-07 /scoring/insertion_event publisher. Discovered ScoringTier2.cc kInsertionEventTopic='/scoring/insertion_event' IS the consumer. Use Plan 02-06 omni.physx contact-report subscription pattern, filtered for plug-end link (link_20) \u2194 port-link contacts.",
+      "status": "not_started",
+      "estimate": "2h"
+    },
+    {
+      "id": "phase-3-06",
+      "name": "Plan 03-06: smoke + verify harness + REQUIREMENTS flips + 03-SUMMARY",
+      "status": "not_started",
+      "estimate": "1h"
+    },
+    {
+      "id": "phase-4",
+      "name": "Phase 4: trial loader + E2E aic_engine + CheatCode",
+      "status": "not_started"
+    },
+    {
+      "id": "m1-ship",
+      "name": "M1 ships when every sample_config.yaml trial passes against Isaac Sim",
+      "status": "not_started"
+    }
   ],
   "blockers": [],
   "human_actions_pending": [],
   "decisions": [
-    {"decision": "Phase 3 PARITY-07 (/scoring/insertion_event) DEFERRED — no live analog in aic_eval container. Phase 4 will revisit when CheatCode trial reveals if it's actually consumed.", "rationale": "Plan 03-01 live snapshot 2026-05-05 confirmed /scoring/* topics never advertised in live aic_eval; they are sample_config.yaml ghosts.", "phase": "3"},
-    {"decision": "Phase 3 PARITY-08 RE-SCOPED from /scoring/tf to /objects_poses_real (tf2_msgs/TFMessage). Isaac Sim is the EXPECTED PUBLISHER (live aic_eval has subscriber but no publisher).", "rationale": "Live capture shows /objects_poses_real exists with subscriber=grasp_points_publisher and publisher=0; awaiting external fill. CLAUDE.md topic-parity-as-architectural-law principle applied.", "phase": "3"},
-    {"decision": "SCENE-05 cable physics = NVIDIA RigidBodyRopeDemo template values verbatim (density=5e-5, damping=10.0, stiffness=1.0, drives on rotY+rotZ only).", "rationale": "Source: ~/env_isaaclab/.../omni.physxdemos/scenes/RigidBodyRopeDemo.py. Cable is articulated chain (omni.physx.tensors warning confirmed); set_world_poses on child links is no-op as expected. Real verification = Phase 4 CheatCode trial.", "phase": "3"},
-    {"decision": "Plug-end link = /World/UR5e/cable/Rope/Rope/link_20 (closest to /World/UR5e/cable/sc_plug_visual at d=0.033m per Plan 03-01 probe). Cable spans link_0 (anchor) → link_20 (plug-end), 21 links in live view (53 in offline file).", "rationale": "Empirical probe 2026-05-05.", "phase": "3"}
+    {
+      "decision": "Phase 3 PARITY-07 (/scoring/insertion_event) DEFERRED \u2014 no live analog in aic_eval container. Phase 4 will revisit when CheatCode trial reveals if it's actually consumed.",
+      "rationale": "Plan 03-01 live snapshot 2026-05-05 confirmed /scoring/* topics never advertised in live aic_eval; they are sample_config.yaml ghosts.",
+      "phase": "3"
+    },
+    {
+      "decision": "Phase 3 PARITY-08 RE-SCOPED from /scoring/tf to /objects_poses_real (tf2_msgs/TFMessage). Isaac Sim is the EXPECTED PUBLISHER (live aic_eval has subscriber but no publisher).",
+      "rationale": "Live capture shows /objects_poses_real exists with subscriber=grasp_points_publisher and publisher=0; awaiting external fill. CLAUDE.md topic-parity-as-architectural-law principle applied.",
+      "phase": "3"
+    },
+    {
+      "decision": "SCENE-05 cable physics = NVIDIA RigidBodyRopeDemo template values verbatim (density=5e-5, damping=10.0, stiffness=1.0, drives on rotY+rotZ only).",
+      "rationale": "Source: ~/env_isaaclab/.../omni.physxdemos/scenes/RigidBodyRopeDemo.py. Cable is articulated chain (omni.physx.tensors warning confirmed); set_world_poses on child links is no-op as expected. Real verification = Phase 4 CheatCode trial.",
+      "phase": "3"
+    },
+    {
+      "decision": "Plug-end link = /World/UR5e/cable/Rope/Rope/link_20 (closest to /World/UR5e/cable/sc_plug_visual at d=0.033m per Plan 03-01 probe). Cable spans link_0 (anchor) \u2192 link_20 (plug-end), 21 links in live view (53 in offline file).",
+      "rationale": "Empirical probe 2026-05-05.",
+      "phase": "3"
+    }
   ],
   "uncommitted_files": [
     "exts/aic-dt/aic_dt/extension.py (Plan 03-03 partial: load_robot signature + cable_yaw flip + _attach_cable_to_gripper_impl STUB; needs full impl + 4-surface MCP atom)"
   ],
-  "next_action": "Plan 03-03 done; Plan 03-04+05 SKELETON staged at exts/aic-dt/aic_dt/scoring_publishers.py (commit ec9b860). Next session: (1) Fill in 4 stub bodies in scoring_publishers.py — _publish_scoring_tf, _publish_objects_poses, _maybe_publish_insertion_event, _on_insertion_contact_event. Pattern source: parity_publishers.py::_publish_tf_dynamic (world-xform + Gf-quat-to-ROS-quat reorder) and controller_loop.py::_setup_contact_subscription / _on_contact_event (Plan 02-06 PARITY-06 contact pattern). Frame contract + payload format documented in .planning/phases/03-cable-physics/snapshot/scoring_tier2_contract.md. (2) Integrate via extension.py: add _start_aic_scoring_publishers helper + invocation from quick_start AFTER add_objects (so task_board prims exist). Mirror _start_aic_parity_publishers pattern at extension.py:1573. (3) Restart Isaac Sim with ROS_DOMAIN_ID=7, run quick_start, verify topics live: 'ros2 topic list | grep -E \"scoring|objects_poses\"' shows /scoring/tf, /scoring/insertion_event, /objects_poses_real with publisher count=1. (4) Plan 03-06 closure: smoke_test_aic_cable.py + verify_phase_3.sh + REQUIREMENTS flag flips (SCENE-02/03/05/06 + PARITY-08 to [x]; PARITY-07 to [x] if /scoring/insertion_event verified, else [ ] with deferred annotation) + 03-SUMMARY.md.",
-  "context_notes": "Major Phase 3 finding (Plan 03-01): /scoring/* topics in REQUIREMENTS.md are sample_config.yaml ghosts — re-scoped to /objects_poses_real. SCENE-05 (Plan 03-02) DONE: cable USD edited in-place per RigidBodyRopeDemo template; cable activated in load_robot; Phase 1 smoke 13/13 maintained under ROS_DOMAIN_ID=7. Plan 03-03 PARTIAL: signature + cable_yaw flip + auto-invoke hook done; _attach_cable_to_gripper_impl is STUB; MCP atom 4 surfaces not yet wired. Cable USD on disk at exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (.bak preserved). Cache snapshot taken (DerivedDataCache.bak.1777977941). 30-min /loop scheduled (cron caf96e13 = 7,37 * * * *) to auto-resume per autonomous-mode bootstrap if context compacts."
+  "next_action": "Phase 3 plans 03-04 + 03-05 LANDED + verified live (3 new topics on bus). Remaining: (1) Wire omni.physx contact-report subscription in scoring_publishers.start() so /scoring/insertion_event actually fires on plug-port contact (mirror controller_loop._setup_contact_subscription Plan 02-06 pattern \u2014 apply PhysxContactReportAPI on plug_end_link + port_links, subscribe via get_physx_simulation_interface().subscribe_contact_report_events; assign return to self._physx_contact_sub). (2) Plan 03-06 closure: smoke_test_aic_cable.py + verify_phase_3.sh + REQUIREMENTS flag flips (SCENE-02/03/05/06 + PARITY-08 [x]; PARITY-07 [x] if insertion_event verified live, else [~]) + 03-SUMMARY.md. (3) Phase 4 trial loader. (4) M1 ship.",
+  "context_notes": "Major Phase 3 finding (Plan 03-01): /scoring/* topics in REQUIREMENTS.md are sample_config.yaml ghosts \u2014 re-scoped to /objects_poses_real. SCENE-05 (Plan 03-02) DONE: cable USD edited in-place per RigidBodyRopeDemo template; cable activated in load_robot; Phase 1 smoke 13/13 maintained under ROS_DOMAIN_ID=7. Plan 03-03 PARTIAL: signature + cable_yaw flip + auto-invoke hook done; _attach_cable_to_gripper_impl is STUB; MCP atom 4 surfaces not yet wired. Cable USD on disk at exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (.bak preserved). Cache snapshot taken (DerivedDataCache.bak.1777977941). 30-min /loop scheduled (cron caf96e13 = 7,37 * * * *) to auto-resume per autonomous-mode bootstrap if context compacts."
 }
