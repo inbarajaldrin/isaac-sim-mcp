@@ -217,6 +217,23 @@ MCP_TOOL_REGISTRY = {
             }
         }
     },
+    "attach_cable_to_gripper": {
+        "description": "SCENE-03 (Plan 03-03): author UsdPhysics.FixedJoint connecting the cable plug-end link to the Robotiq Hand-E gripper finger so the cable moves with the gripper. Idempotent — replaces any prior CableAttachJoint. Default plug-end link discovered by Plan 03-01 topology probe (link_20, closest to sc_plug_visual).",
+        "parameters": {
+            "plug_link_path": {
+                "type": "string",
+                "description": "USD path to cable plug-end RigidBody. Default /World/UR5e/cable/Rope/Rope/link_20."
+            },
+            "finger_link_path": {
+                "type": "string",
+                "description": "USD path to gripper finger link. Default /World/UR5e/aic_unified_robot/gripper_hande_finger_link_l."
+            },
+            "gripper_initial_pos": {
+                "type": "number",
+                "description": "Gripper opening position parameter (matches Gazebo's gripper_initial_pos). Recorded for parity but no DOF effect since Hand-E finger is a FixedJoint zero-DOF in our USD per D-09. Default 0.00655."
+            }
+        }
+    },
     "setup_wrist_cameras": {
         "description": "Create ROS2 action graphs for all 3 built-in wrist cameras (center, left, right) publishing RGB and CameraInfo.",
         "parameters": {}
@@ -375,6 +392,7 @@ MCP_HANDLERS = {
     # Phase 2 — controller-loop atoms (Plan 02-02 skeleton)
     "setup_controller_subscribers": "_cmd_setup_controller_subscribers",
     "setup_offlimit_contacts": "_cmd_setup_offlimit_contacts",
+    "attach_cable_to_gripper": "_cmd_attach_cable_to_gripper",
     "setup_wrist_cameras": "_cmd_setup_wrist_cameras",
     "add_objects": "_cmd_add_objects",
     # SCENE-01 / DX-02 — Per-component spawn atoms
@@ -577,6 +595,8 @@ class DigitalTwin(omni.ext.IExt):
                                   clicked_fn=lambda: self._cmd_setup_controller_subscribers())
                         ui.Button("Setup Off-Limit Contacts", width=220, height=35,
                                   clicked_fn=lambda: self._cmd_setup_offlimit_contacts())
+                        ui.Button("Attach Cable to Gripper", width=220, height=35,
+                                  clicked_fn=lambda: self._cmd_attach_cable_to_gripper())
 
             # 4. Cameras
             with ui.CollapsableFrame(title="Cameras", collapsed=False, height=0):
@@ -1295,21 +1315,49 @@ class DigitalTwin(omni.ext.IExt):
             except Exception as exc:
                 print(f"[AIC-DT] SCENE-03 attach_cable_to_gripper failed: {exc!r}")
 
-    def _attach_cable_to_gripper_impl(self, gripper_initial_pos: float = 0.00655):
-        """SCENE-03 Plan 03-03 — attach cable plug-end (link_20) to gripper finger via FixedJoint.
+    def _attach_cable_to_gripper_impl(self,
+                                      gripper_initial_pos: float = 0.00655,
+                                      plug_link_path: str = "/World/UR5e/cable/Rope/Rope/link_20",
+                                      finger_link_path: str = "/World/UR5e/aic_unified_robot/gripper_hande_finger_link_l"):
+        """SCENE-03 Plan 03-03 — attach cable plug-end to gripper finger via FixedJoint.
 
-        Plug-end discovered by Plan 03-01 cable topology probe — link_20 is closest to
-        sc_plug_visual at d=0.033m. Gripper finger left = aic_unified_robot/gripper_hande_finger_link_l.
-        Idempotent: removes prior CableAttachJoint before authoring new one.
+        Plug-end default = link_20 per Plan 03-01 topology probe (closest to
+        sc_plug_visual at d=0.033m of 21 cable links). Idempotent — removes
+        any prior CableAttachJoint before authoring new one.
 
-        TODO Plan 03-03: full implementation pending — currently stub. The contract:
-          1. Find /World/UR5e/cable/Rope/Rope/link_20 (plug-end RigidBody)
-          2. Find /World/UR5e/aic_unified_robot/gripper_hande_finger_link_l (gripper finger)
-          3. RemovePrim any existing /World/UR5e/aic_unified_robot/gripper_hande_finger_link_l/CableAttachJoint
-          4. Author UsdPhysics.FixedJoint at that path with body0=finger_link, body1=link_20
-          5. Optionally set gripper_initial_pos via Articulation.set_joint_positions on gripper joint
+        Returns the joint prim path on success; raises on failure.
         """
-        print(f"[AIC-DT] SCENE-03 attach_cable_to_gripper STUB — gripper_initial_pos={gripper_initial_pos} (impl pending Plan 03-03)")
+        from pxr import UsdPhysics, Sdf
+        stage = omni.usd.get_context().get_stage()
+
+        plug = stage.GetPrimAtPath(plug_link_path)
+        finger = stage.GetPrimAtPath(finger_link_path)
+        if not plug or not plug.IsValid():
+            raise RuntimeError(f"plug-end link not found at {plug_link_path}")
+        if not finger or not finger.IsValid():
+            raise RuntimeError(f"gripper finger link not found at {finger_link_path}")
+
+        # Idempotent removal of prior attach joint
+        joint_path = f"{finger_link_path}/CableAttachJoint"
+        existing = stage.GetPrimAtPath(joint_path)
+        if existing and existing.IsValid():
+            stage.RemovePrim(joint_path)
+            print(f"[AIC-DT] SCENE-03 removed prior CableAttachJoint at {joint_path}")
+
+        # Author UsdPhysics.FixedJoint
+        joint = UsdPhysics.FixedJoint.Define(stage, Sdf.Path(joint_path))
+        joint.CreateBody0Rel().SetTargets([Sdf.Path(finger_link_path)])
+        joint.CreateBody1Rel().SetTargets([Sdf.Path(plug_link_path)])
+        # localPos0/1 default to identity — accept current world positions
+        # (FixedJoint locks the relative transform at the moment of creation).
+        print(f"[AIC-DT] SCENE-03 authored {joint_path} (body0={finger_link_path}, body1={plug_link_path})")
+        # Note: gripper_initial_pos applies to the gripper drive joint (NOT this
+        # FixedJoint). The Hand-E finger joint is a FixedJoint zero-DOF in our
+        # USD per D-09; gripper opening is via /gripper_command (String) elsewhere.
+        # Recorded for parity with Gazebo's parameter SURFACE.
+        if gripper_initial_pos != 0.00655:
+            print(f"[AIC-DT] SCENE-03 gripper_initial_pos={gripper_initial_pos} recorded (no DOF — see D-09)")
+        return joint_path
 
         self._articulation = Articulation(prim_path)
 
@@ -2876,6 +2924,26 @@ class DigitalTwin(omni.ext.IExt):
         except Exception as e:
             traceback.print_exc()
             return {"status": "error", "message": f"setup_offlimit_contacts failed: {str(e)}"}
+
+    def _cmd_attach_cable_to_gripper(self,
+                                     plug_link_path: str = "/World/UR5e/cable/Rope/Rope/link_20",
+                                     finger_link_path: str = "/World/UR5e/aic_unified_robot/gripper_hande_finger_link_l",
+                                     gripper_initial_pos: float = 0.00655) -> Dict[str, Any]:
+        """MCP atom — author UsdPhysics.FixedJoint connecting cable plug-end to gripper finger.
+
+        Implements SCENE-03 (Plan 03-03). Idempotent — replaces any prior CableAttachJoint.
+        """
+        try:
+            joint_path = self._attach_cable_to_gripper_impl(
+                gripper_initial_pos=gripper_initial_pos,
+                plug_link_path=plug_link_path,
+                finger_link_path=finger_link_path,
+            )
+            return {"status": "success",
+                    "message": f"CableAttachJoint authored at {joint_path}"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": f"attach_cable_to_gripper failed: {str(e)}"}
 
     def _cmd_setup_wrist_cameras(self) -> Dict[str, Any]:
         try:
