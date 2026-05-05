@@ -252,6 +252,9 @@ class AicControllerLoop:
         self._last_reference_tcp_pose = None
         self._last_reference_joint_state = None
         self._last_target_mode = 0          # MODE_UNSPECIFIED
+        # Last applied arm positions — used to skip redundant set_joint_positions
+        # writes when the cmd hasn't changed (high-rate aic_controller publishing).
+        self._last_applied_arm_positions = None
         # Log-once flags (mirror parity_publishers.py:_logged_publish_error)
         self._logged_apply_error = False
         self._logged_publish_error = False
@@ -415,6 +418,7 @@ class AicControllerLoop:
         self._last_reference_tcp_pose = None
         self._last_reference_joint_state = None
         self._last_target_mode = 0
+        self._last_applied_arm_positions = None
         # Log-once flags
         self._logged_apply_error = False
         self._logged_publish_error = False
@@ -723,12 +727,23 @@ class AicControllerLoop:
                 # internal off-by-one that raises IndexError when joint_names is
                 # provided.
                 arr = np.array([arm_positions], dtype=np.float32)
-                # Empirically (2026-05-05): direct one-shot
-                #   set_joint_positions + apply_action(joint_positions=arr)
-                # holds the position perfectly for 2+s. Adding set_joint_velocities(0)
-                # was tried as defense against the artificial velocity transient
-                # but didn't help; removed.
-                self._articulation.set_joint_positions(arr)
+                # Only set_joint_positions on cmd CHANGE — at high publish rates
+                # (aic_controller >100Hz), one-shot-clear means apply runs every
+                # physics tick (60Hz) with the same buffered cmd. Repeated
+                # set_joint_positions of the same value still destabilizes
+                # dof_pos via the artificial discontinuity each tick, dragging
+                # the arm to ~50% of commanded motion. Verified 2026-05-05:
+                # both single AND 200Hz publishing give 50% motion without this
+                # guard. With the guard: single publishes hit 100% and high-rate
+                # publishes refresh PD target each tick, also reaching target.
+                cmd_changed = (
+                    self._last_applied_arm_positions is None
+                    or arm_positions != self._last_applied_arm_positions
+                )
+                if cmd_changed:
+                    self._articulation.set_joint_positions(arr)
+                    self._last_applied_arm_positions = list(arm_positions)
+                # PD target ALWAYS refreshed (cheap; no destabilization).
                 self._articulation.apply_action(ArticulationActions(joint_positions=arr))
             except Exception as exc:
                 # Loud on FIRST error so future debuggers don't chase the rclpy
