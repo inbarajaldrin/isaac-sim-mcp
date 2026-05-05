@@ -91,7 +91,33 @@
       "status": "not_started"
     }
   ],
-  "blockers": [],
+  "blockers": [
+    {
+      "id": "phase-4-03-rmw-interop",
+      "title": "kilted ↔ humble fastrtps type-hash incompatibility blocks engine-side stock-message subscription",
+      "discovered": "2026-05-05",
+      "plan": "04-03",
+      "phase": "4",
+      "summary": "trial_1 dry-run: load_trial PASS, engine starts cleanly, then `Failed to find a valid clock` (10s timeout in aic_engine.cpp:457-459). Container w/ rmw_fastrtps_cpp + ROS_DOMAIN_ID=7 sees /clock in topic list (publisher count=1 RELIABLE) but receives ZERO messages over 12s direct rclpy subscribe. Same for /joint_states. Wave 1 A2=PASS only verified custom-built aic_control_interfaces (matched ABI by same-workspace build) and humble-side host subscriber — not the kilted-container ↔ humble-Isaac-Sim path for stock messages.",
+      "evidence": ".planning/phases/04-trial-loader/dryrun_trial_1.txt — full 4-iteration audit including FASTDDS_BUILTIN_TRANSPORTS=UDPv4, --ipc=host, ROS_LOCALHOST_ONLY toggle, direct rclpy bypass — all received 0 messages from container side.",
+      "mitigation_options": [
+        "(a) zenoh-fastdds bridge process between Isaac Sim and engine container — ~1h infra, package availability uncertain on this host",
+        "(b) Build aic_engine + aic_adapter from source against humble in a derived image — ~60min build, gz-version conflicts likely",
+        "(c) Use ROS 2 domain_bridge for per-message bridging — ~30min, adds latency",
+        "(d) Migrate Isaac Sim's ROS workspace to kilted — ~3h, touches Phase 1 PARITY infra"
+      ],
+      "user_decision_required": "Which mitigation path. Likely (b) is cleanest M1 path; (a) is infrastructurally lightest but uncertain. (c) is the fastest if domain_bridge can be added to my-eval-isaac.",
+      "impact_on_phase_4": "Plan 04-04 (parity_report.py) hits the same blocker. Plan 04-05 PARITY-07 flag-flip preserved at [~] until cleared. M1 ship gate cannot close until trials run end-to-end.",
+      "what_works": [
+        "load_trial MCP atom (Plan 04-02) — full trial_1 spawned in Isaac Sim correctly",
+        "Engine container starts, parses 3 trials, init reaches clock-wait gate",
+        "D-13 fallback (Plan 04-03 Sub-A) wired: live port paths from spawned[] override hardcoded _PORT_LINK_PATHS",
+        "Recursive PhysxContactReportAPI tag-walk: 2 ports tagged (plug + sc_port_visual); plumbing for /scoring/insertion_event is correct",
+        "my-eval-isaac:v1 derived image (engine-only entrypoint; no Gazebo)",
+        "run_aic_engine_against_isaac_sim.sh wrapper (cache check + Isaac Sim status + load_trial + 2 docker containers + log tail + teardown)"
+      ]
+    }
+  ],
   "human_actions_pending": [],
   "decisions": [
     {

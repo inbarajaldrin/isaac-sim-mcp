@@ -182,21 +182,59 @@ class AicScoringPublishers:
         try:
             from pxr import UsdPhysics, PhysxSchema
             from omni.physx import get_physx_simulation_interface
+            # The port prims spawned by Plan 01-09 atoms are bare Xform
+            # containers — the actual RigidBody descendant lives at
+            #   /World/TaskBoard/SCPort_{i}/sc_port_visual
+            #   /World/TaskBoard/NICCardMount_{i}/<visual subprim>
+            # We must walk each subtree to find rigid bodies and apply the
+            # contact-report API on each. Phase 4 Plan 04-03 fix branch (b)
+            # — the original code only checked the root prim, missing all
+            # the actual rigid descendants.
+            def _tag_rigid_bodies_under(root_path):
+                """Apply PhysxContactReportAPI to all RigidBodyAPI prims in
+                subtree (or to root_path itself if it's a rigid body).
+                Returns (applied_count, paths_tagged)."""
+                count = 0
+                tagged = []
+                root = self._stage.GetPrimAtPath(root_path)
+                if not root or not root.IsValid():
+                    return 0, []
+                # Check root + walk all descendants
+                if root.HasAPI(UsdPhysics.RigidBodyAPI):
+                    api = PhysxSchema.PhysxContactReportAPI.Apply(root)
+                    api.CreateThresholdAttr().Set(0.0)
+                    count += 1
+                    tagged.append(str(root.GetPath()))
+                # Walk descendants via stage.Traverse with prefix filter
+                # (works regardless of Xform/Mesh nesting depth).
+                for prim in self._stage.Traverse():
+                    p = str(prim.GetPath())
+                    if not p.startswith(root_path + "/"):
+                        continue
+                    if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                        api = PhysxSchema.PhysxContactReportAPI.Apply(prim)
+                        api.CreateThresholdAttr().Set(0.0)
+                        count += 1
+                        tagged.append(p)
+                return count, tagged
+
             applied = 0
             effective_ports = self._effective_port_link_paths()
-            for path in [_PLUG_END_LINK_PATH] + effective_ports:
-                prim = self._stage.GetPrimAtPath(path)
-                if not prim or not prim.IsValid() or not prim.HasAPI(UsdPhysics.RigidBodyAPI):
-                    continue
-                contact_api = PhysxSchema.PhysxContactReportAPI.Apply(prim)
-                contact_api.CreateThresholdAttr().Set(0.0)
-                applied += 1
+            tag_audit = {}
+            plug_count, plug_tagged = _tag_rigid_bodies_under(_PLUG_END_LINK_PATH)
+            applied += plug_count
+            tag_audit[_PLUG_END_LINK_PATH] = plug_tagged
+            for path in effective_ports:
+                c, t = _tag_rigid_bodies_under(path)
+                applied += c
+                tag_audit[path] = t
             self._physx_contact_sub = (
                 get_physx_simulation_interface()
                 .subscribe_contact_report_events(self._on_insertion_contact_event)
             )
-            print(f"[AIC-DT][scoring] insertion contact subscription wired ({applied}/{1+len(effective_ports)} prims tagged with PhysxContactReportAPI)")
+            print(f"[AIC-DT][scoring] insertion contact subscription wired ({applied} prims tagged with PhysxContactReportAPI)")
             print(f"[AIC-DT][scoring] active port paths: {effective_ports}")
+            print(f"[AIC-DT][scoring] tag audit: {tag_audit}")
         except Exception as exc:
             print(f"[AIC-DT][scoring] insertion contact subscription failed: {exc!r}")
 

@@ -42,11 +42,14 @@ if [ "${SKIP_ADAPTER:-0}" != "1" ]; then
 fi
 
 # aic_engine — the trial orchestrator. Mirror Node spec from aic_gz_bringup.launch.py.
+# NOTE: model_*_timeout_seconds are declared as INTEGERS by aic_engine, even
+# though the launchfile passes Floats — the launchfile relies on rclpy's
+# coercion, which the bare `ros2 run` invocation doesn't have. Use ints here.
 echo "[my-eval-isaac] exec aic_engine"
 exec ros2 run aic_engine aic_engine \
     --ros-args \
     -p config_file_path:="$CONFIG_PATH" \
     -p use_sim_time:=true \
-    -p model_discovery_timeout_seconds:=30.0 \
-    -p model_configure_timeout_seconds:=30.0 \
+    -p model_discovery_timeout_seconds:=30 \
+    -p model_configure_timeout_seconds:=30 \
     "$@"

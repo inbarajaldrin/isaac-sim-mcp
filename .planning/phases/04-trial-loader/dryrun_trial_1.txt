@@ -1,0 +1,756 @@
+============================================================
+Plan 04-03 Task 3 — trial_1 dry-run
+Started: 2026-05-05T12:37:40Z
+============================================================
+============================================================
+[wrapper] start 2026-05-05T12:37:40Z  trial=trial_1  ground_truth=true
+============================================================
+[wrapper] DerivedDataCache OK (154M)
+[wrapper] Isaac Sim aic-dt RESPONSIVE — reusing
+[wrapper] sending load_trial(trial_key=trial_1, ground_truth=true) via MCP
+{
+  "status": "success",
+  "result": {
+    "status": "success",
+    "trial": "trial_1",
+    "ground_truth": true,
+    "config_path": "/home/aaugus11/Documents/aic/aic_engine/config/sample_config.yaml",
+    "spawned_components": [
+      [
+        "spawn_task_board_base",
+        {
+          "x": 0.15,
+          "y": -0.2,
+          "z": 1.14,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 3.1415
+        }
+      ],
+      [
+        "nic_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.036,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_2",
+        {
+          "index": 2,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_3",
+        {
+          "index": 3,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_4",
+        {
+          "index": 4,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.042,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.1
+        }
+      ],
+      [
+        "lc_mount_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.02,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sfp_mount_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.03,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_mount_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": -0.02,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "lc_mount_rail_1",
+        {
+          "index": 1,
+          "present": true,
+          "translation": -0.01,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sfp_mount_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_mount_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ]
+    ],
+    "cable_kwargs": {
+      "cable_x": 0.0,
+      "cable_y": 0.015385,
+      "cable_z": 0.04245,
+      "cable_roll": 0.4432,
+      "cable_pitch": -0.4838,
+      "cable_yaw": 1.3303,
+      "cable_type": "sfp_sc_cable",
+      "attach_cable_to_gripper": true
+    }
+  }
+}
+[wrapper] waiting for /joint_states on ROS_DOMAIN_ID=7 (max 30s)
+[wrapper] /joint_states live (3s)
+[wrapper] launching aic_eval_isaac (my-eval-isaac:v1)
+[wrapper] launching aic_model (my-solution:v1) policy=aic_example_policies.ros.CheatCode
+[wrapper] tailing aic_eval_isaac logs → /tmp/aic_engine_isaac.log (max 240s)
+[wrapper] engine container exited at t=2s
+
+[wrapper] ============================================================
+[wrapper] trial=trial_1 engine_done=exit
+[my-eval-isaac] ROS_DOMAIN_ID=7  RMW=rmw_fastrtps_cpp
+[my-eval-isaac] aic_engine config: /ws_aic/install/share/aic_engine/config/sample_config.yaml
+[my-eval-isaac] ROS workspace setup: /ws_aic/install/setup.bash
+[my-eval-isaac] starting aic_adapter + aic_engine (no Gazebo, no ros2_control)
+[my-eval-isaac] launching aic_adapter (background)
+[my-eval-isaac] exec aic_engine
+[INFO] [1777984674.715012304] [aic_engine]: Creating AIC Engine...
+terminate called after throwing an instance of 'rclcpp::exceptions::InvalidParameterTypeException'
+  what():  parameter 'model_discovery_timeout_seconds' has invalid type: Wrong parameter type, parameter {model_discovery_timeout_seconds} is of type {integer}, setting it to {double} is not allowed.
+[INFO] [1777984674.724803900] [aic_adapter_node]: Adapter node initialization complete.
+[ros2run]: Aborted
+[wrapper] ============================================================
+[wrapper] cleanup
+aic_model
+aic_eval_isaac
+aic_model
+aic_eval_isaac
+
+[wrapper exit code: 0]
+
+=== /scoring/insertion_event captured messages (0 lines) ===
+
+
+============================================================
+## Iteration 2: post-fix (model_discovery_timeout_seconds: int not float)
+Started: 2026-05-05T12:38:26Z
+============================================================
+============================================================
+[wrapper] start 2026-05-05T12:38:27Z  trial=trial_1  ground_truth=true
+============================================================
+[wrapper] DerivedDataCache OK (154M)
+[wrapper] Isaac Sim aic-dt RESPONSIVE — reusing
+[wrapper] sending load_trial(trial_key=trial_1, ground_truth=true) via MCP
+{
+  "status": "success",
+  "result": {
+    "status": "success",
+    "trial": "trial_1",
+    "ground_truth": true,
+    "config_path": "/home/aaugus11/Documents/aic/aic_engine/config/sample_config.yaml",
+    "spawned_components": [
+      [
+        "spawn_task_board_base",
+        {
+          "x": 0.15,
+          "y": -0.2,
+          "z": 1.14,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 3.1415
+        }
+      ],
+      [
+        "nic_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.036,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_2",
+        {
+          "index": 2,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_3",
+        {
+          "index": 3,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_4",
+        {
+          "index": 4,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.042,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.1
+        }
+      ],
+      [
+        "lc_mount_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.02,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sfp_mount_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.03,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_mount_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": -0.02,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "lc_mount_rail_1",
+        {
+          "index": 1,
+          "present": true,
+          "translation": -0.01,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sfp_mount_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_mount_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ]
+    ],
+    "cable_kwargs": {
+      "cable_x": 0.0,
+      "cable_y": 0.015385,
+      "cable_z": 0.04245,
+      "cable_roll": 0.4432,
+      "cable_pitch": -0.4838,
+      "cable_yaw": 1.3303,
+      "cable_type": "sfp_sc_cable",
+      "attach_cable_to_gripper": true
+    }
+  }
+}
+[wrapper] waiting for /joint_states on ROS_DOMAIN_ID=7 (max 30s)
+[wrapper] /joint_states live (3s)
+[wrapper] launching aic_eval_isaac (my-eval-isaac:v1)
+[wrapper] launching aic_model (my-solution:v1) policy=aic_example_policies.ros.CheatCode
+[wrapper] tailing aic_eval_isaac logs → /tmp/aic_engine_isaac.log (max 240s)
+[wrapper] engine container exited at t=12s
+
+[wrapper] ============================================================
+[wrapper] trial=trial_1 engine_done=exit
+[my-eval-isaac] ROS_DOMAIN_ID=7  RMW=rmw_fastrtps_cpp
+[my-eval-isaac] aic_engine config: /ws_aic/install/share/aic_engine/config/sample_config.yaml
+[my-eval-isaac] ROS workspace setup: /ws_aic/install/setup.bash
+[my-eval-isaac] starting aic_adapter + aic_engine (no Gazebo, no ros2_control)
+[my-eval-isaac] launching aic_adapter (background)
+[my-eval-isaac] exec aic_engine
+[INFO] [1777984721.485768810] [aic_engine]: Creating AIC Engine...
+[INFO] [1777984721.485929643] [aic_engine]: Scoring output directory set to: /root/aic_results
+[INFO] [1777984721.485998603] [aic_engine]: [1;36m╔════════════════════════════════════════╗[0m
+[INFO] [1777984721.486013478] [aic_engine]: [1;36m║   Initializing AIC Engine...           ║[0m
+[INFO] [1777984721.486017871] [aic_engine]: [1;36m╚════════════════════════════════════════╝[0m
+[INFO] [1777984721.487683507] [aic_engine]: Successfully parsed trial 'trial_1'
+[INFO] [1777984721.487733624] [aic_engine]: Successfully parsed trial 'trial_2'
+[INFO] [1777984721.487764583] [aic_engine]: Successfully parsed trial 'trial_3'
+[INFO] [1777984721.487769175] [aic_engine]: Successfully parsed 3 trial(s)
+[INFO] [1777984721.487774727] [aic_engine]: Waiting for clock
+[INFO] [1777984721.492870550] [aic_adapter_node]: Adapter node initialization complete.
+[ERROR] [1777984731.487855231] [aic_engine]: Failed to find a valid clock
+[ERROR] [1777984731.487938333] [aic_engine]: Engine failed to initialize
+[ros2run]: Process exited with failure 1
+[wrapper] ============================================================
+[wrapper] cleanup
+aic_model
+aic_eval_isaac
+aic_model
+aic_eval_isaac
+
+=== /scoring/insertion_event captured (iteration 2): 0 lines ===
+[wrapper exit: 0]
+
+============================================================
+## Iteration 3: post-fix (Isaac Sim restart with RMW=rmw_fastrtps_cpp)
+Started: 2026-05-05T12:41:42Z
+============================================================
+============================================================
+[wrapper] start 2026-05-05T12:41:44Z  trial=trial_1  ground_truth=true
+============================================================
+[wrapper] DerivedDataCache OK (154M)
+[wrapper] Isaac Sim aic-dt RESPONSIVE — reusing
+[wrapper] sending load_trial(trial_key=trial_1, ground_truth=true) via MCP
+{
+  "status": "success",
+  "result": {
+    "status": "success",
+    "trial": "trial_1",
+    "ground_truth": true,
+    "config_path": "/home/aaugus11/Documents/aic/aic_engine/config/sample_config.yaml",
+    "spawned_components": [
+      [
+        "spawn_task_board_base",
+        {
+          "x": 0.15,
+          "y": -0.2,
+          "z": 1.14,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 3.1415
+        }
+      ],
+      [
+        "nic_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.036,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_2",
+        {
+          "index": 2,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_3",
+        {
+          "index": 3,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_4",
+        {
+          "index": 4,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.042,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.1
+        }
+      ],
+      [
+        "lc_mount_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.02,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sfp_mount_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.03,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_mount_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": -0.02,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "lc_mount_rail_1",
+        {
+          "index": 1,
+          "present": true,
+          "translation": -0.01,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sfp_mount_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_mount_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ]
+    ],
+    "cable_kwargs": {
+      "cable_x": 0.0,
+      "cable_y": 0.015385,
+      "cable_z": 0.04245,
+      "cable_roll": 0.4432,
+      "cable_pitch": -0.4838,
+      "cable_yaw": 1.3303,
+      "cable_type": "sfp_sc_cable",
+      "attach_cable_to_gripper": true
+    }
+  }
+}
+[wrapper] waiting for /joint_states on ROS_DOMAIN_ID=7 (max 30s)
+[wrapper] /joint_states live (2s)
+[wrapper] launching aic_eval_isaac (my-eval-isaac:v1)
+[wrapper] launching aic_model (my-solution:v1) policy=aic_example_policies.ros.CheatCode
+[wrapper] tailing aic_eval_isaac logs → /tmp/aic_engine_isaac.log (max 240s)
+[wrapper] engine container exited at t=12s
+
+[wrapper] ============================================================
+[wrapper] trial=trial_1 engine_done=exit
+[my-eval-isaac] ROS_DOMAIN_ID=7  RMW=rmw_fastrtps_cpp
+[my-eval-isaac] aic_engine config: /ws_aic/install/share/aic_engine/config/sample_config.yaml
+[my-eval-isaac] ROS workspace setup: /ws_aic/install/setup.bash
+[my-eval-isaac] starting aic_adapter + aic_engine (no Gazebo, no ros2_control)
+[my-eval-isaac] launching aic_adapter (background)
+[my-eval-isaac] exec aic_engine
+[INFO] [1777984914.187885415] [aic_engine]: Creating AIC Engine...
+[INFO] [1777984914.188037724] [aic_engine]: Scoring output directory set to: /root/aic_results
+[INFO] [1777984914.188125802] [aic_engine]: [1;36m╔════════════════════════════════════════╗[0m
+[INFO] [1777984914.188152925] [aic_engine]: [1;36m║   Initializing AIC Engine...           ║[0m
+[INFO] [1777984914.188158946] [aic_engine]: [1;36m╚════════════════════════════════════════╝[0m
+[INFO] [1777984914.189830190] [aic_engine]: Successfully parsed trial 'trial_1'
+[INFO] [1777984914.189887437] [aic_engine]: Successfully parsed trial 'trial_2'
+[INFO] [1777984914.189920825] [aic_engine]: Successfully parsed trial 'trial_3'
+[INFO] [1777984914.189925699] [aic_engine]: Successfully parsed 3 trial(s)
+[INFO] [1777984914.189931747] [aic_engine]: Waiting for clock
+[INFO] [1777984914.194450939] [aic_adapter_node]: Adapter node initialization complete.
+[ERROR] [1777984924.190015722] [aic_engine]: Failed to find a valid clock
+[ERROR] [1777984924.190090743] [aic_engine]: Engine failed to initialize
+[ros2run]: Process exited with failure 1
+[wrapper] ============================================================
+[wrapper] cleanup
+aic_model
+aic_eval_isaac
+aic_model
+aic_eval_isaac
+
+=== /scoring/insertion_event captured (iteration 3): 2 lines ===
+WARNING: topic [/scoring/insertion_event] does not appear to be published yet
+Could not determine the type for the passed topic
+[wrapper exit: 0]
+
+============================================================
+## Iteration 4: deep RMW interop diagnosis
+Started: 2026-05-05T12:42:00Z (approx)
+============================================================
+
+### Symptom
+After model_discovery_timeout_seconds:=int fix (iter 2/3), aic_engine reaches:
+    [INFO] Successfully parsed 3 trial(s)
+    [INFO] Waiting for clock
+    [ERROR] Failed to find a valid clock          (10s timeout in src/aic_engine.cpp:457-459)
+    [ERROR] Engine failed to initialize
+
+### Diagnosis (iter 4 probe sweep)
+1. Isaac Sim publishes /clock at 60Hz on host network (verified — host
+   subscriber w/ ROS_DOMAIN_ID=7 RMW_IMPLEMENTATION=rmw_fastrtps_cpp gets
+   messages immediately).
+2. Container w/ same env vars + `--net=host` sees /clock in `ros2 topic list`
+   AND in `ros2 topic info /clock --verbose` (Publisher count=1, RELIABLE QoS).
+3. Container CANNOT receive any /clock OR /joint_states messages over rclpy
+   subscription (12s timeout, 0 messages received) — even though `topic list`
+   sees them.
+4. Tried env permutations:
+   - `RMW_IMPLEMENTATION=rmw_fastrtps_cpp` (matched Isaac Sim) — 0 received
+   - `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` — librmw_cyclonedds_cpp.so MISSING in image
+   - `FASTDDS_BUILTIN_TRANSPORTS=UDPv4` (force UDP, no SHM) — 0 received
+   - `ROS_LOCALHOST_ONLY=1` (match host bashrc default) — 0 received
+   - `--ipc=host` (share SHM segment) — 0 received
+   - Isaac Sim relaunched with `unset ROS_LOCALHOST_ONLY` — 0 received
+5. Direct rclpy + sensor_msgs.JointState C++ subscribe inside container — 0 received.
+6. `ros2 topic info /clock --verbose` reports `Topic type hash: INVALID` —
+   distinct from a working subscribe inside Isaac Sim's humble env.
+
+### Root cause hypothesis
+**kilted ↔ humble fastrtps_cpp message-type-hash incompatibility for stock
+ROS messages (rosgraph_msgs/Clock, sensor_msgs/JointState, etc.).**
+
+A2=PASS in 04-01-SUMMARY only verified `aic_control_interfaces/JointMotionUpdate`,
+which was custom-built in the same workspace (kilted aic_eval) so the ABI
+matches by construction — but did NOT verify stock messages whose type hashes
+differ between kilted's humble's rosidl_generator outputs.
+
+aic_engine subscribes to /clock as `rosgraph_msgs::msg::Clock` (kilted-side
+type hash); Isaac Sim publishes it via the kit ROS bridge using the humble
+py311 workspace's type hash. fastrtps's strict type-hash validation in
+recent versions silently drops cross-distro messages.
+
+The host-side subscriber WORKED earlier because the host's
+`/opt/ros/humble/bin/ros2` uses humble type hashes that DO match
+Isaac Sim's humble bridge.
+
+### Why A2's "PASS" wasn't sufficient
+04-01-SUMMARY A2 line: "kilted-built ABI loads against humble" — this only
+verified the rosidl_typesupport_c symbol resolution (`UnsupportedTypeSupport`
+import gate). It did NOT verify wire-level message receipt across the
+distro boundary.
+
+### Mitigation options surveyed (none autonomously applicable)
+
+| Option | Cost | Risk |
+|--------|------|------|
+| (a) Run zenoh router + `RMW_IMPLEMENTATION=rmw_zenoh_cpp` on engine side, plus a fastdds↔zenoh bridge for Isaac Sim | ~1h infra | Zenoh-bridge package availability uncertain on this host |
+| (b) Build aic_engine inside humble base image (Option B from orchestrator) | ~60min build | Heavy; requires colcon build of aic_engine+aic_adapter+aic_description from source against humble; aic.repos may pin gz versions incompatible with humble |
+| (c) Use `domain_bridge` to per-message bridge between Isaac Sim and engine | ~30min | Adds latency; requires explicit topic listing |
+| (d) Replace Isaac Sim's humble ROS workspace with kilted workspace | ~3h build | Touches the entire Phase 1 PARITY infra; risks regressing PARITY-03/04/05 |
+
+All four options exceed the autonomous-mode "fix and continue" budget
+(architectural change, Rule 4). Per CLAUDE.md autonomous-M1 mode:
+"Hard blockers go in HANDOFF.json `blockers` field, then touch .planning/.user_pause".
+
+### DRY-RUN VERDICT (trial_1)
+load_trial dispatch:                        PASS
+Engine container started:                   PASS
+Model container started:                    PASS
+Engine reached "Engine Stopped" message:    FAIL (Failed to find a valid clock at 10s)
+/scoring/insertion_event fired (PARITY-07): NOT_REACHED (engine never advanced past clock-wait)
+
+### Evidence inventory
+- /scoring/insertion_event topic exists from Isaac Sim side (Phase 3 plumbing intact, verified at iter-2 topic list)
+- D-13 fallback applied + verified active:
+  - "[AIC-DT][scoring] D-13 live port paths from spawn (2): ['/World/TaskBoard/NICCardMount_0', '/World/TaskBoard/SCPort_0']"
+  - "[AIC-DT][scoring] set_port_link_paths: 2 paths (override active=True)"
+  - "[AIC-DT][scoring] insertion contact subscription wired (2 prims tagged with PhysxContactReportAPI)"
+  - tag-walk Rule 1 fix landed: now finds rigid-body descendants under SCPort_0/sc_port_visual
+- PARITY-07 live-fire NOT achieved this plan — the contact-detection plumbing
+  is correct and would fire IF a contact occurred, but the policy never gets
+  a chance to drive contact because the engine never starts.
+- D-13 fallback (Wave 1 A4=MISMATCH mitigation) is fully WIRED and audited:
+  load_trial → set_port_link_paths → contact subscription with the live paths.
+

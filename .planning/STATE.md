@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: "Plan 04-02 EXECUTED ✓ (~12 min wall). load_trial MCP atom landed across all 4 DX-02 surfaces (registry + handler-map + _cmd_load_trial + UI button) + ground_truth kwarg on both quick_start and load_trial gating _start_aic_scoring_publishers. Adapter helpers _extract_cable_kwargs (Q6 Option A pass-through) + _dispatch_rail_block (entity_present/entity_pose -> spawn-atom kwargs; entity_name IGNORED). audit_dx02.py PRESENT_ATOMS extended to 30 atoms; audit exits 0 (30 PRESENT x 4 surfaces + 2 ABSENT x 4 surfaces). Offline structural test PASS for all 3 trials (13 rail blocks per trial dispatched cleanly via stub harness). 1 Rule 3 deviation: UI button label changed from 'Load Trial (sample_config.yaml: trial_1)' to 'Load Trial sample_config trial_1' because audit_dx02.py UI-regex stops at first ')' character. 2 atomic commits (aa14256 task 1: ground_truth gate; 82fc1a7 task 2: load_trial atom). Live-fire deferred to Plan 04-03 by design (E2E wrapper + first MCP-socket round-trip exercise). _PORT_LINK_PATHS D-13 setter still owed by 04-03 (load_trial records spawned_components in return dict but does not yet wire set_port_link_paths). Auto-advancing to Plan 04-03 (Docker derived image / decision-deferred-to-A2-PASS / E2E wrapper + dry-run + D-13 setter) next."
-last_updated: "2026-05-05T13:42:00.000Z"
-last_activity: 2026-05-05 -- Plan 04-02 closed (load_trial 4-surface DX-02 + ground_truth gate; audit PASS; 3 trials parse offline)
+status: blocked
+stopped_at: "Plan 04-03 EXECUTED with HARD BLOCKER (~80 min wall, 4 dry-run iterations). All deliverables LANDED: my-eval-isaac:v1 Docker derived image (engine-only entrypoint atop ghcr.io/intrinsic-dev/aic/aic_eval:latest), run_aic_engine_against_isaac_sim.sh E2E wrapper, D-13 1-surface setter (AicScoringPublishers.set_port_link_paths + _effective_port_link_paths method, NOT a 4-surface MCP atom per Wave 1 SUMMARY clarification), recursive PhysxContactReportAPI tag-walk (Rule 1 fix: original code only tagged root prim missing rigid-body descendants under SCPort_0/sc_port_visual). 3 atomic commits (50792b8 Task 1 Docker, e3aa68a Task 2 wrapper+D-13 setter, final commit pending Task 3 dryrun+SUMMARY). 2 Rule 1 auto-fixes during dry-run: (1) entrypoint.sh model_discovery_timeout_seconds:=int not float; (2) recursive contact-tag walk vs root-only. trial_1 dry-run reaches: load_trial PASS, engine container starts + parses 3 trials, then BLOCKS on 'Failed to find a valid clock' (10s aic_engine.cpp:457 hardcoded timeout) — kilted-side container cannot subscribe to humble-side /clock or /joint_states despite same RMW_IMPLEMENTATION=rmw_fastrtps_cpp + ROS_DOMAIN_ID=7 + --net=host + topic visible in `ros2 topic info` (publisher count=1 RELIABLE). HARD BLOCKER: kilted ↔ humble fastrtps type-hash incompatibility for stock ROS messages. A2's 'PASS' verdict was insufficient — only verified custom-built aic_control_interfaces (matched ABI by same-workspace build) and humble-side host subscriber. .planning/HANDOFF.json blocker entry populated with 4 mitigation options. .planning/.user_pause touched. PARITY-07 stays [~] — plumbing verified intact (D-13 fallback active, contact subscription wired with 2 prims tagged) but engine never starts so policy never drives contact. Plans 04-04 + 04-05 remain blocked behind this until user picks mitigation path."
+last_updated: "2026-05-05T13:00:00.000Z"
+last_activity: 2026-05-05 -- Plan 04-03 LANDED w/ HARD BLOCKER on kilted↔humble RMW interop; PARITY-07 plumbing verified intact but live-fire blocked
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 31
-  completed_plans: 20
-  percent: 64
+  completed_plans: 21
+  percent: 67
 ---
 
 # Project State
