@@ -1588,8 +1588,15 @@ class DigitalTwin(omni.ext.IExt):
     def _on_physics_step_force(self, dt):
         """Physics step callback - read joint forces and update OmniGraph WrenchStamped attributes."""
         try:
+            # PARITY-05 fix: articulation root is at <robot>/aic_unified_robot/root_joint
+            # (PhysicsFixedJoint), not at /World/UR5e (Xform). Constructing
+            # Articulation against /World/UR5e returns a degenerate handle whose
+            # _physics_view never populates, and get_measured_joint_forces()
+            # raises AttributeError every tick. See parity_publishers.py:387 for
+            # the canonical articulation-root path.
             artic = self._lazy_init_articulation(
-                '_effort_articulation', self._robot_prim_path,
+                '_effort_articulation',
+                f"{self._articulation_root_prim_path}/root_joint",
                 'force_pub_ctrl', '_force_warmup')
             if artic is None:
                 return
