@@ -1,0 +1,21 @@
+# User-explicit pause via /gsd-pause-work — 2026-05-07T12:19:44Z
+#
+# This is a USER-INITIATED pause, not a context-exhaustion self-pause.
+# The autonomous-M1 Stop hook MUST respect this marker and not nudge resumption.
+#
+# Phase 4 status: 60% closed
+#  - Plans 04-01 + 04-02 fully closed
+#  - Plan 04-03 deliverables landed (commit 7943536); iter-4 RMW blocker RESOLVED
+#  - Plans 04-04 + 04-05 gated on OPEN model-zenoh downstream blocker
+#
+# Open blocker: my-solution:v1 (CheatCode policy) requires zenoh transport
+# (AIC_ROUTER_ADDR=localhost:7447 + RMW_IMPLEMENTATION=rmw_zenoh_cpp).
+# Host humble fastrtps engine + kilted zenoh model can't see each other.
+# 3 mitigation options identified — user input requested before continuing.
+#
+# Full handoff: .planning/phases/04-trial-loader/.continue-here.md
+# Structured state: .planning/HANDOFF.json (blockers[1] = phase-4-03-model-zenoh)
+#
+# To resume: /gsd-resume-work
+# To genuinely complete M1: touch .planning/.m1_shipped (do NOT do this until
+#   parity_report.py emits zero mismatch rows across all 3 trials).
