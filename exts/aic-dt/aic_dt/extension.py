@@ -2060,11 +2060,11 @@ class DigitalTwin(omni.ext.IExt):
         """
         stage = omni.usd.get_context().get_stage()
 
-        # SCENE-01 clubbing: also drive the new per-component atoms so the
-        # /World/TaskBoard subtree mirrors the new atom-authored layout
-        # alongside the legacy /World/Objects path. Calls are best-effort:
-        # if the new atoms fail (e.g. asset not vendored), the legacy
-        # /World/Objects path below still produces a working scene.
+        # Canonical spawn path (Phase 4 / SCENE-01): the per-component spawn atoms
+        # author /World/TaskBoard/* — the namespace that load_trial + scoring
+        # publishers + spawn_task_board.launch.py-parity all target. The legacy
+        # /World/Objects/* path below is fallback-only (asset not vendored).
+        new_atoms_succeeded = False
         try:
             base_pos = AIC_OBJECTS["task_board_base"]["position"]
             self._cmd_spawn_task_board_base(x=base_pos[0], y=base_pos[1], z=base_pos[2])
@@ -2080,9 +2080,22 @@ class DigitalTwin(omni.ext.IExt):
                                     roll=sc2_rpy[0], pitch=sc2_rpy[1], yaw=sc2_rpy[2])
             nic_pos = AIC_OBJECTS["nic_card"]["position"]
             self._cmd_spawn_nic_card(present=True, translation=nic_pos[0])
-            print("[add_objects] Clubbed spawn atoms invoked (4 atoms — task_board_base, sc_port x2, nic_card)")
-        except Exception as exc:  # noqa: BLE001 — best-effort, legacy path below is canonical
-            print(f"[add_objects] Clubbed spawn-atom call best-effort failed: {exc} — falling through to legacy path")
+            # Cache initial orientations so randomize_object_poses still works
+            # for callers that invoke it post-spawn (it targets /World/Objects
+            # by default but accepts a folder_path override).
+            for obj_name, obj_cfg in AIC_OBJECTS.items():
+                rot = obj_cfg.get("rotation")
+                if rot is not None:
+                    self._initial_orientations[obj_name] = Gf.Quatf(
+                        float(rot[0]), float(rot[1]), float(rot[2]), float(rot[3])
+                    )
+                else:
+                    self._initial_orientations[obj_name] = Gf.Quatf(1, 0, 0, 0)
+            new_atoms_succeeded = True
+            print("[add_objects] Spawn atoms succeeded → /World/TaskBoard authored; skipping legacy /World/Objects duplicate path")
+            return True
+        except Exception as exc:  # noqa: BLE001 — fall back to legacy path on failure
+            print(f"[add_objects] Spawn-atom path failed: {exc} — falling through to legacy /World/Objects path")
 
         # Check if all objects already exist
         all_exist = True
