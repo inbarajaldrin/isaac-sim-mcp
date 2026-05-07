@@ -946,6 +946,16 @@ class DigitalTwin(omni.ext.IExt):
             setattr(self, warmup_attr, 30)
             return None
 
+        # _physics_view is populated AFTER the first physics step, even when
+        # is_physics_handle_valid() returns True. Without this guard, the
+        # caller's get_measured_joint_forces() / set_joint_*() raises
+        # AttributeError("'Articulation' object has no attribute
+        # '_physics_view'") every tick — visible as [Force callback] error
+        # spam in the Kit log. Mirror parity_publishers.py:393 hasattr guard.
+        if not (hasattr(artic, "_physics_view") and artic._physics_view is not None):
+            setattr(self, warmup_attr, 30)
+            return None
+
         return artic
 
     # ==================== Scene Setup ====================
