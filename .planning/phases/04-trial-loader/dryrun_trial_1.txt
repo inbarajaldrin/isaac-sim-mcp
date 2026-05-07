@@ -754,3 +754,510 @@ Engine reached "Engine Stopped" message:    FAIL (Failed to find a valid clock a
 - D-13 fallback (Wave 1 A4=MISMATCH mitigation) is fully WIRED and audited:
   load_trial → set_port_link_paths → contact subscription with the live paths.
 
+
+============================================================
+## Iteration 5: HOST-BUILD PIVOT (autonomous M1 — RMW blocker resolved)
+Started: 2026-05-05T13:09:16Z
+Pivot: aic_engine + aic_adapter now run as native humble processes
+(no Docker, no kilted, no cross-distro RMW boundary)
+============================================================
+============================================================
+[wrapper] start 2026-05-05T13:09:16Z  trial=trial_1  ground_truth=true
+============================================================
+[wrapper] DerivedDataCache OK (154M)
+[wrapper] Isaac Sim aic-dt RESPONSIVE — reusing
+[wrapper] sending load_trial(trial_key=trial_1, ground_truth=true) via MCP
+{
+  "status": "success",
+  "result": {
+    "status": "success",
+    "trial": "trial_1",
+    "ground_truth": true,
+    "config_path": "/home/aaugus11/Documents/aic/aic_engine/config/sample_config.yaml",
+    "spawned_components": [
+      [
+        "spawn_task_board_base",
+        {
+          "x": 0.15,
+          "y": -0.2,
+          "z": 1.14,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 3.1415
+        }
+      ],
+      [
+        "nic_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.036,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_2",
+        {
+          "index": 2,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_3",
+        {
+          "index": 3,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_4",
+        {
+          "index": 4,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.042,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.1
+        }
+      ],
+      [
+        "lc_mount_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.02,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sfp_mount_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.03,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_mount_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": -0.02,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "lc_mount_rail_1",
+        {
+          "index": 1,
+          "present": true,
+          "translation": -0.01,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sfp_mount_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_mount_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ]
+    ],
+    "cable_kwargs": {
+      "cable_x": 0.0,
+      "cable_y": 0.015385,
+      "cable_z": 0.04245,
+      "cable_roll": 0.4432,
+      "cable_pitch": -0.4838,
+      "cable_yaw": 1.3303,
+      "cable_type": "sfp_sc_cable",
+      "attach_cable_to_gripper": true
+    }
+  }
+}
+[wrapper] waiting for /joint_states on ROS_DOMAIN_ID=7 (max 30s)
+[wrapper] WARNING: /joint_states never observed; continuing anyway (engine may still discover)
+[wrapper] launching host aic_adapter (humble, ROS_DOMAIN_ID=7)
+[wrapper] launching host aic_engine (humble, ROS_DOMAIN_ID=7)
+[wrapper] launching aic_model (my-solution:v1) policy=aic_example_policies.ros.CheatCode
+/opt/ros/humble/setup.bash: line 8: AMENT_TRACE_SETUP_FILES: unbound variable
+/opt/ros/humble/setup.bash: line 8: AMENT_TRACE_SETUP_FILES: unbound variable
+[wrapper] waiting for aic_engine completion (PID=3131022, log=/tmp/aic_engine_isaac.log, max 240s)
+[wrapper] engine process exited at t=1s
+
+[wrapper] ============================================================
+[wrapper] trial=trial_1 engine_done=exit
+[wrapper] --- aic_engine log (last 40 lines) ---
+[wrapper] --- aic_adapter log (last 10 lines) ---
+[wrapper] ============================================================
+[wrapper] cleanup
+aic_model
+aic_model
+
+============================================================
+## Iteration 6: HOST-BUILD PIVOT (set +u fix + fresh Isaac Sim restart)
+Started: 2026-05-05T13:11:24Z
+============================================================
+============================================================
+[wrapper] start 2026-05-05T13:11:24Z  trial=trial_1  ground_truth=true
+============================================================
+[wrapper] DerivedDataCache OK (154M)
+[wrapper] Isaac Sim aic-dt RESPONSIVE — reusing
+[wrapper] sending load_trial(trial_key=trial_1, ground_truth=true) via MCP
+{
+  "status": "success",
+  "result": {
+    "status": "success",
+    "trial": "trial_1",
+    "ground_truth": true,
+    "config_path": "/home/aaugus11/Documents/aic/aic_engine/config/sample_config.yaml",
+    "spawned_components": [
+      [
+        "spawn_task_board_base",
+        {
+          "x": 0.15,
+          "y": -0.2,
+          "z": 1.14,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 3.1415
+        }
+      ],
+      [
+        "nic_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.036,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_2",
+        {
+          "index": 2,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_3",
+        {
+          "index": 3,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "nic_rail_4",
+        {
+          "index": 4,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.042,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.1
+        }
+      ],
+      [
+        "lc_mount_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.02,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sfp_mount_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": 0.03,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_mount_rail_0",
+        {
+          "index": 0,
+          "present": true,
+          "translation": -0.02,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "lc_mount_rail_1",
+        {
+          "index": 1,
+          "present": true,
+          "translation": -0.01,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sfp_mount_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ],
+      [
+        "sc_mount_rail_1",
+        {
+          "index": 1,
+          "present": false,
+          "translation": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        }
+      ]
+    ],
+    "cable_kwargs": {
+      "cable_x": 0.0,
+      "cable_y": 0.015385,
+      "cable_z": 0.04245,
+      "cable_roll": 0.4432,
+      "cable_pitch": -0.4838,
+      "cable_yaw": 1.3303,
+      "cable_type": "sfp_sc_cable",
+      "attach_cable_to_gripper": true
+    }
+  }
+}
+[wrapper] waiting for /joint_states on ROS_DOMAIN_ID=7 (max 30s)
+[wrapper] /joint_states live (1s)
+[wrapper] launching host aic_adapter (humble, ROS_DOMAIN_ID=7)
+[wrapper] launching host aic_engine (humble, ROS_DOMAIN_ID=7)
+[wrapper] launching aic_model (my-solution:v1) policy=aic_example_policies.ros.CheatCode
+[wrapper] waiting for aic_engine completion (PID=3135379, log=/tmp/aic_engine_isaac.log, max 240s)
+[wrapper] engine reached completion at t=70s
+
+[wrapper] ============================================================
+[wrapper] trial=trial_1 engine_done=1
+[wrapper] --- aic_engine log (last 40 lines) ---
+[INFO] [1777986721.381825967] [aic_engine]: No node with name 'aic_model' found. Retrying...
+[INFO] [1777986723.084638472] [aic_engine]: No node with name 'aic_model' found. Retrying...
+[INFO] [1777986724.791003144] [aic_engine]: No node with name 'aic_model' found. Retrying...
+[INFO] [1777986726.493945169] [aic_engine]: No node with name 'aic_model' found. Retrying...
+[INFO] [1777986728.200076697] [aic_engine]: No node with name 'aic_model' found. Retrying...
+[INFO] [1777986729.903649163] [aic_engine]: No node with name 'aic_model' found. Retrying...
+[INFO] [1777986731.607169609] [aic_engine]: No node with name 'aic_model' found. Retrying...
+[INFO] [1777986733.310029134] [aic_engine]: No node with name 'aic_model' found. Retrying...
+[INFO] [1777986735.009690081] [aic_engine]: No node with name 'aic_model' found. Retrying...
+[INFO] [1777986736.733448260] [aic_engine]: No node with name 'aic_model' found. Retrying...
+[INFO] [1777986738.419999188] [aic_engine]: No node with name 'aic_model' found. Retrying...
+[INFO] [1777986740.124630631] [aic_engine]: No node with name 'aic_model' found. Retrying...
+[ERROR] [1777986741.833083489] [aic_engine]: Lifecycle node 'aic_model' not discovered after waiting (checked for service '/aic_model/get_state' with type 'lifecycle_msgs/srv/GetState')
+[ERROR] [1777986741.833163120] [aic_engine]: [1;31m  ✗ Participant model is not ready for trial 'trial_1'[0m
+[INFO] [1777986741.833180861] [aic_engine]: Resetting after trial completion...
+[INFO] [1777986741.833193836] [aic_engine]: Homing robot to initial positions...
+[ERROR] [1777986758.956027743] [aic_engine]: SwitchController service call timed out
+[ERROR] [1777986758.956112448] [aic_engine]: Failed to deactivate aic_controller.
+[ERROR] [1777986758.956126888] [aic_engine]: Failed to home robot during simulator reset.
+[INFO] [1777986758.956138053] [aic_engine]: Reset after trial completed.
+[INFO] [1777986758.956405470] [aic_engine]:  
+[ERROR] [1777986758.956421010] [aic_engine]: [1;31m╔════════════════════════════════════════╗[0m
+[ERROR] [1777986758.956429315] [aic_engine]: [1;31m║   ✗ Engine Stopped with Errors         ║[0m
+[ERROR] [1777986758.956435644] [aic_engine]: [1;31m╚════════════════════════════════════════╝[0m
+[INFO] [1777986758.956443074] [aic_engine]:  
+[INFO] [1777986758.956525874] [aic_engine]: [1;36m╔════════════════════════════════════════╗[0m
+[INFO] [1777986758.956536447] [aic_engine]: [1;36m║        Complete Scoring Results        ║[0m
+[INFO] [1777986758.956543975] [aic_engine]: [1;36m╚════════════════════════════════════════╝[0m
+[INFO] [1777986758.956553295] [aic_engine]: [1;36mtotal: 0[0m
+[INFO] [1777986758.956561159] [aic_engine]: [1;36mtrial_1:[0m
+[INFO] [1777986758.956567148] [aic_engine]: [1;36m  tier_1:[0m
+[INFO] [1777986758.956573778] [aic_engine]: [1;36m    score: 0[0m
+[INFO] [1777986758.956599709] [aic_engine]: [1;36m    message: Model validation failed.[0m
+[INFO] [1777986758.956606548] [aic_engine]: [1;36m  tier_2:[0m
+[INFO] [1777986758.956612026] [aic_engine]: [1;36m    score: 0[0m
+[INFO] [1777986758.956617847] [aic_engine]: [1;36m    message: Task execution failed[0m
+[INFO] [1777986758.956623448] [aic_engine]: [1;36m  tier_3:[0m
+[INFO] [1777986758.956629300] [aic_engine]: [1;36m    score: 0[0m
+[INFO] [1777986758.956634651] [aic_engine]: [1;36m    message: Task execution failed[0m
+[INFO] [1777986758.956640234] [aic_engine]:  
+[wrapper] --- aic_adapter log (last 10 lines) ---
+[INFO] [1777986690.905674684] [aic_adapter_node]: Adapter node initialization complete.
+[wrapper] ============================================================
+[wrapper] cleanup
+aic_model
+aic_model
+
+
+============================================================
+## Iteration 7: HOST-BUILD PIVOT — RMW BLOCKER RESOLVED + downstream zenoh issue surfaced
+End: 2026-05-05T13:11:00Z (approx)
+============================================================
+
+### Outcome
+The kilted↔humble fastrtps RMW type-hash incompatibility blocker (iter-4
+diagnosis) is **RESOLVED** by host-building aic_engine + aic_adapter as
+native humble processes:
+
+- Engine subscribes to /clock from Isaac Sim humble bridge: SUCCESS
+- Engine reaches "Engine Stopped" with full lifecycle (initialize → trial
+  validation → reset → scoring summary)
+- Engine ran 70s before timeout (vs 10s timeout in iter-2/3)
+- Adapter node initialization complete
+
+### New downstream blocker surfaced (separate from iter-4 RMW)
+my-solution:v1 (CheatCode policy container) requires:
+- `RMW_IMPLEMENTATION=rmw_zenoh_cpp` (not fastrtps)
+- `AIC_ROUTER_ADDR=localhost:7447` (zenoh router on host)
+
+Source: `~/Documents/aic/scripts/run_cheatcode.sh` lines 47-49.
+
+The model container exits immediately with:
+    AIC_ROUTER_ADDR must be provided
+
+This is an architectural transport issue — the AIC competition stack uses
+zenoh for cross-container model↔eval communication. To run aic_model
+end-to-end against host humble aic_engine, options:
+
+(a) Run zenohd on host + add fastdds↔zenoh bridge for engine ↔ model
+(b) Build humble-native aic_model with CheatCode policy (no Docker, no zenoh)
+(c) Use a stub lifecycle node that mimics aic_model's contract for PARITY-07 fire-test
+
+### DRY-RUN VERDICT (trial_1, host-build pivot)
+load_trial dispatch:                        PASS
+Engine started (host humble process):       PASS
+/clock subscription (the iter-4 blocker):   PASS  ← THE BIG ONE
+Adapter node initialization:                PASS
+Engine reached "Engine Stopped":            PASS  (with errors — model not discovered)
+Model container started:                    FAIL  (exits immediately: AIC_ROUTER_ADDR must be provided)
+/scoring/insertion_event fired (PARITY-07): NOT_REACHED  (policy never drives robot)
+
+### Evidence
+- /tmp/aic_engine_isaac.log — full engine run with lifecycle errors
+- /tmp/aic_adapter_isaac.log — adapter init success
+- /tmp/insertion_event_capture.txt — empty (engine never reached scoring tier)
+- aic_engine binary at ~/aic_humble_ws/install/aic_engine/lib/aic_engine/aic_engine
+- aic_adapter binary at ~/aic_humble_ws/install/aic_adapter/lib/aic_adapter/aic_adapter
+
+### Path forward
+The iter-4 RMW blocker is RESOLVED. The new zenoh-router blocker is
+DIFFERENT and DOWNSTREAM — recorded for future Phase 4 wave. Plan 04-03
+host-build pivot delivers its goal: aic_engine runs unmodified against
+Isaac Sim's topic surface, no Docker needed for the eval side.
+

@@ -1,11 +1,20 @@
 #!/bin/bash
 # Reference: 04-RESEARCH.md Q4 Deliverable 3; mirrors ~/Documents/aic/scripts/run_cheatcode.sh.
-# Reference: 04-01-SUMMARY.md A2=PASS (RMW interop), A4=MISMATCH (D-13 setter active).
+# Reference: Plan 04-03 host-build pivot (resolves kilted↔humble RMW interop blocker)
 # Reference: CLAUDE.md (MCP socket protocol, ROS_DOMAIN_ID=7, two-launcher reality, cache discipline).
 #
 # Plan 04-03 TRIAL-03: end-to-end wrapper that drives a sample_config.yaml trial
-# against Isaac Sim via the MCP load_trial atom + an engine-only Docker
-# container (my-eval-isaac:v1) + a participant-policy container (my-solution:v1).
+# against Isaac Sim via the MCP load_trial atom + a HOST aic_engine process
+# (humble-built via build_aic_engine_host.sh) + a participant-policy container
+# (my-solution:v1).
+#
+# Why host process, not Docker (my-eval-isaac:v1):
+#   The original Docker derived-image path (kilted aic_eval base) hit a
+#   kilted↔humble fastrtps type-hash incompatibility — the engine container
+#   could see Isaac Sim's /clock publisher in `ros2 topic info` but received
+#   ZERO messages over rclpy subscribe. See dryrun_trial_1.txt iter-4 for the
+#   full diagnosis. Host humble process = same RMW (humble fastrtps) on both
+#   sides = no type-hash boundary.
 #
 # Usage:
 #   bash exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh trial_1
@@ -15,8 +24,8 @@
 # Requirements:
 #   - Isaac Sim aic-dt extension launched (this script will start it if not running)
 #   - DerivedDataCache populated (auto-restore from known-good if <100M)
-#   - Docker images: my-eval-isaac:v1 (build via docker/my-eval-isaac/build.sh) AND
-#                    my-solution:v1 (build via cd ~/Documents/aic && docker build -f docker/aic_model/Dockerfile -t my-solution:v1 .)
+#   - aic_engine + aic_adapter built via build_aic_engine_host.sh into ~/aic_humble_ws/install/
+#   - Docker image my-solution:v1 (build via cd ~/Documents/aic && docker build -f docker/aic_model/Dockerfile -t my-solution:v1 .)
 
 set -euo pipefail
 
@@ -40,18 +49,29 @@ if [[ -z "$TRIAL_KEY" ]]; then
     exit 2
 fi
 
-EVAL_CONTAINER="aic_eval_isaac"
 MODEL_CONTAINER="aic_model"
-EVAL_IMAGE="my-eval-isaac:v1"
 MODEL_IMAGE="my-solution:v1"
 POLICY="aic_example_policies.ros.CheatCode"
 ENGINE_LOG="/tmp/aic_engine_isaac.log"
+ADAPTER_LOG="/tmp/aic_adapter_isaac.log"
 WRAPPER_TOP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+AIC_WS="$HOME/aic_humble_ws"
+AIC_REPO="$HOME/Documents/aic"
+APT_VENDOR="$AIC_WS/vendored_apt/extracted/opt/ros/humble"
+ENGINE_BIN="$AIC_WS/install/aic_engine/lib/aic_engine/aic_engine"
+ADAPTER_BIN="$AIC_WS/install/aic_adapter/lib/aic_adapter/aic_adapter"
+ENGINE_PID=""
+ADAPTER_PID=""
 
 cleanup() {
     echo "[wrapper] cleanup"
-    docker stop "$MODEL_CONTAINER" "$EVAL_CONTAINER" 2>/dev/null || true
-    docker rm   "$MODEL_CONTAINER" "$EVAL_CONTAINER" 2>/dev/null || true
+    [ -n "$ENGINE_PID" ] && kill -TERM "$ENGINE_PID" 2>/dev/null || true
+    [ -n "$ADAPTER_PID" ] && kill -TERM "$ADAPTER_PID" 2>/dev/null || true
+    sleep 1
+    [ -n "$ENGINE_PID" ] && kill -KILL "$ENGINE_PID" 2>/dev/null || true
+    [ -n "$ADAPTER_PID" ] && kill -KILL "$ADAPTER_PID" 2>/dev/null || true
+    docker stop "$MODEL_CONTAINER" 2>/dev/null || true
+    docker rm   "$MODEL_CONTAINER" 2>/dev/null || true
     if [[ "$CLEAN" == "1" ]]; then
         bash "$HOME/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh" kill 2>/dev/null || true
     fi
@@ -62,13 +82,14 @@ echo "============================================================"
 echo "[wrapper] start $WRAPPER_TOP  trial=$TRIAL_KEY  ground_truth=$GROUND_TRUTH"
 echo "============================================================"
 
-# ---------- pre-flight: docker images ----------
-if ! docker image inspect "$EVAL_IMAGE" &>/dev/null; then
-    echo "[wrapper] ERROR: $EVAL_IMAGE not found."
-    echo "  Build it first:"
-    echo "    bash $(dirname "$0")/../docker/my-eval-isaac/build.sh"
+# ---------- pre-flight: host aic_engine + aic_adapter binaries ----------
+if [ ! -x "$ENGINE_BIN" ] || [ ! -x "$ADAPTER_BIN" ]; then
+    echo "[wrapper] ERROR: host aic_engine / aic_adapter binaries missing."
+    echo "  Build them first:"
+    echo "    bash $(dirname "$0")/build_aic_engine_host.sh"
     exit 1
 fi
+# ---------- pre-flight: docker images ----------
 if ! docker image inspect "$MODEL_IMAGE" &>/dev/null; then
     echo "[wrapper] ERROR: $MODEL_IMAGE not found."
     echo "  Build it first (per ~/Documents/aic/CLAUDE.md):"
@@ -157,19 +178,40 @@ if [ "$WAIT_OK" != "1" ]; then
     echo "[wrapper] WARNING: /joint_states never observed; continuing anyway (engine may still discover)"
 fi
 
-# ---------- launch eval (engine-only) container ----------
-echo "[wrapper] launching $EVAL_CONTAINER ($EVAL_IMAGE)"
-docker rm -f "$EVAL_CONTAINER" 2>/dev/null || true
-docker run -d \
-    --name "$EVAL_CONTAINER" \
-    --gpus all \
-    --net=host \
-    -e DISPLAY="${DISPLAY:-:0}" \
-    -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
-    -e ROS_DOMAIN_ID=7 \
-    -e RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
-    -e CONFIG_PATH=/ws_aic/install/share/aic_engine/config/sample_config.yaml \
-    "$EVAL_IMAGE" >/dev/null
+# ---------- launch host aic_adapter + aic_engine processes ----------
+echo "[wrapper] launching host aic_adapter (humble, ROS_DOMAIN_ID=7)"
+: > "$ADAPTER_LOG"
+(
+    set +u   # /opt/ros/humble/setup.bash uses unbound vars (AMENT_TRACE_SETUP_FILES)
+    set -e
+    source /opt/ros/humble/setup.bash
+    source "$AIC_WS/install/setup.bash"
+    export AMENT_PREFIX_PATH="$APT_VENDOR:$AMENT_PREFIX_PATH"
+    export LD_LIBRARY_PATH="$APT_VENDOR/lib:${LD_LIBRARY_PATH:-}"
+    export ROS_DOMAIN_ID=7
+    export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+    exec "$ADAPTER_BIN" --ros-args -p use_sim_time:=true \
+        >>"$ADAPTER_LOG" 2>&1
+) &
+ADAPTER_PID=$!
+
+echo "[wrapper] launching host aic_engine (humble, ROS_DOMAIN_ID=7)"
+: > "$ENGINE_LOG"
+(
+    set +u   # /opt/ros/humble/setup.bash uses unbound vars (AMENT_TRACE_SETUP_FILES)
+    set -e
+    source /opt/ros/humble/setup.bash
+    source "$AIC_WS/install/setup.bash"
+    export AMENT_PREFIX_PATH="$APT_VENDOR:$AMENT_PREFIX_PATH"
+    export LD_LIBRARY_PATH="$APT_VENDOR/lib:${LD_LIBRARY_PATH:-}"
+    export ROS_DOMAIN_ID=7
+    export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+    exec "$ENGINE_BIN" --ros-args \
+        -p config_file_path:="$AIC_REPO/aic_engine/config/sample_config.yaml" \
+        -p use_sim_time:=true \
+        >>"$ENGINE_LOG" 2>&1
+) &
+ENGINE_PID=$!
 
 # ---------- launch model (policy) container ----------
 echo "[wrapper] launching $MODEL_CONTAINER ($MODEL_IMAGE) policy=$POLICY"
@@ -184,11 +226,8 @@ docker run -d \
     "$MODEL_IMAGE" \
     --ros-args -p "policy:=$POLICY" -p use_sim_time:=true >/dev/null
 
-# ---------- tail engine log until "Engine Stopped" or container exit ----------
-echo "[wrapper] tailing $EVAL_CONTAINER logs → $ENGINE_LOG (max 240s)"
-: > "$ENGINE_LOG"
-docker logs -f "$EVAL_CONTAINER" >>"$ENGINE_LOG" 2>&1 &
-TAIL_PID=$!
+# ---------- wait for engine completion or exit (max 240s) ----------
+echo "[wrapper] waiting for aic_engine completion (PID=$ENGINE_PID, log=$ENGINE_LOG, max 240s)"
 ENGINE_DONE="0"
 for i in $(seq 1 240); do
     if grep -qE "Engine Stopped|process has finished cleanly.*aic_engine|Finished scoring" "$ENGINE_LOG" 2>/dev/null; then
@@ -196,17 +235,19 @@ for i in $(seq 1 240); do
         echo "[wrapper] engine reached completion at t=${i}s"
         break
     fi
-    if ! docker ps --filter "name=$EVAL_CONTAINER" -q | grep -q .; then
-        echo "[wrapper] engine container exited at t=${i}s"
+    if ! kill -0 "$ENGINE_PID" 2>/dev/null; then
+        echo "[wrapper] engine process exited at t=${i}s"
         ENGINE_DONE="exit"
         break
     fi
     sleep 1
 done
-kill "$TAIL_PID" 2>/dev/null || true
 
 echo ""
 echo "[wrapper] ============================================================"
 echo "[wrapper] trial=$TRIAL_KEY engine_done=$ENGINE_DONE"
-docker logs "$EVAL_CONTAINER" 2>&1 | tail -40 || true
+echo "[wrapper] --- aic_engine log (last 40 lines) ---"
+tail -40 "$ENGINE_LOG" || true
+echo "[wrapper] --- aic_adapter log (last 10 lines) ---"
+tail -10 "$ADAPTER_LOG" || true
 echo "[wrapper] ============================================================"
