@@ -174,3 +174,31 @@ Resume file: .planning/HANDOFF.json (autonomous M1 mode persistent — kept unti
 | C (TEX-03) | low | 921 sweep hits in texture-sweep.md not categorized into a fix log; 8 camera prim-not-found warnings in setup_wrist_cameras (orphan code path); ~13 actual MDL/texture/fallback warnings; 43 cosmetic ISO_4762/V1015120 unresolved sub-refs | inline doc work or defer |
 | Gap E mount-rails | latent | Plan 09 mount-rail USDs (LC/SFP/SC Mount + NIC Card Mount/`*_visual.usd`) at mPU=0.01+Y-up; default add_objects path doesn't fire them (present=False) but SCENE-01 trial spawning requires them at correct scale | follow-up: bake xformOp:scale=(100,100,100) + rotateX=90 in build_mount_rail_usds.py |
 | PARITY-05 rate verifiability | doc | parity_05_wrench_framing.txt missing Gazebo expected rate snapshot | re-run snapshot script |
+
+## Runtime Stage Audit Findings (2026-05-07 — surfaced post-resume)
+
+User-requested live audit of `quick_start` outputs flagged 6 verification gaps that closed-phase verifiers missed:
+
+| # | Severity | Finding | Status |
+|---|----------|---------|--------|
+| 1 | HIGH | **Duplicate /World/Objects spawn namespace** — Plan 01-09 "ADDITIVE clubbing" left /World/Objects/{task_board_base,sc_port_1,sc_port_2,nic_card} firing alongside the canonical /World/TaskBoard/{base_visual,SCPort_0/1,NICCard}. 173 duplicate prims with double physics materials + double collision approximations. Phase 4 scoring publishers + load_trial only reference /World/TaskBoard, so /World/Objects was dead code creating ghost dynamics. | ✅ FIXED commit b07acd6 (add_objects skips legacy path on new-atom success; total_prims 658→485) |
+| 2 | HIGH | **`/fts_broadcaster/wrench` publishes garbage zeros** — `[Force callback] 'Articulation' object has no attribute '_physics_view'` fires every physics tick (~30Hz). Caught by try/except in _on_physics_step_force; topic publishes at 13.6Hz with all-zero payload. Phase 2 smoke_test_aic_controller.py Step 5 verified topic rate but never sampled payload. PARITY-05 verification has been silently broken. | 🟡 PARTIAL fix commit 6fc6d26 (path+hasattr guard mirroring parity_publishers); root cause still open — get_measured_joint_forces() raises even when is_physics_handle_valid() returns True. Need /nvidia-suite-docs deep dive on Isaac Sim 5.0 Articulation lifecycle. |
+| 3 | MEDIUM | **Wrist cameras NEVER published** — WRIST_CAMERAS prim_suffix expects `center_camera_optical/center_camera` (Camera child of Xform); live USD has `center_camera_optical` as Xform with only `visuals`/`collisions` children — NO Camera prims anywhere in the unified robot USD. setup_wrist_cameras silently logs "Setup 0/3" each quick_start. ROS2 surface has zero camera topics. | OPEN — needs /nvidia-suite-docs for Isaac Sim 5.0 Camera prim authoring under existing Xform + ROS-frame -Z-forward → +X-forward quaternion (per `isaac-sim-extension-dev` "wrist camera attachment pattern"). |
+| 4 | LOW | **Arm joint drives ≠ AIC URDF defaults** — CLAUDE.md spec: stiffness=2000, damping=100, maxForce=87. Live values: stiffness 95→1322 across joints, damping 0.038→0.529, maxForce 28 or 150. load_robot doesn't set drive params; values inherited from on-disk USD's OEM defaults. | OPEN — could be intentional (matches OEM URDF) or oversight. Needs cross-check vs `~/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro`. |
+| 5 | LOW | **Cable physics doesn't move under gravity** — Phase 3 SCENE-05 closed with per-link `MassAPI.CreateDensityAttr(0.00005)` + per-joint `DriveAPI(stiffness=1.0, damping=10.0)`. Live audit: 21 cable links density=5e-5; over 1.5s sim time + stiffness=0 patch test, all sampled links moved <1mm. With density=5e-5 each link mass ~4e-13 kg; gravity moment ~5e-9 N·m vs damping=10 dwarfs gravity by 10 orders of magnitude. Cable is decorative-only. | OPEN — NOT a M1 ship blocker (scoring is contact-based on plug-end geometric proximity, not cable shape). Density needs 7+ orders of magnitude bump (~1000 kg/m³) to behave realistically. Skip for M1; revisit M2. |
+| 6 | LOW | **4 task-board prims kinematic with `RigidBodyAPI` applied** — `/World/TaskBoard/{base_visual, SCPort_0/sc_port_visual, SCPort_1/sc_port_visual, NICCard/nic_card_visual}` have mass=0 AND density=0 with RigidBodyAPI applied → PhysX silently treats as kinematic. Functionally OK (matches Gazebo's bolted-board state) but authoring-style inconsistency. | OPEN — defer; not affecting M1 trial outcome parity. |
+
+### Live ROS2 topic surface (post-quick_start, ROS_DOMAIN_ID=7)
+
+14 topics published; rates measured 5s window:
+- `/joint_states` 27.3 Hz ✅ real values (6/7 positions nonzero gravity drift)
+- `/tf` 27.1 Hz ✅
+- `/tf_static` (latched, 22 transforms) ✅
+- `/clock` 13.6 Hz ✅
+- `/fts_broadcaster/wrench` 13.6 Hz 🚨 garbage zeros (Finding #2)
+- `/aic_controller/controller_state` 27.1 Hz ✅
+- `/scoring/tf` 27.3 Hz ✅
+- `/objects_poses_real` 27.1 Hz ✅
+- `/aic/gazebo/contacts/off_limit` 0 Hz (event-only — expected)
+- `/scoring/insertion_event` 0 Hz (event-only — expected)
+- `/aic_controller/joint_commands`, `/aic_controller/pose_commands`, `/parameter_events`, `/rosout` (subscribers/internal)
