@@ -175,6 +175,40 @@ Class definition free of `omni.*` / `rclpy` imports; all heavy imports inside `s
 
 ---
 
+<surface_adjacency>
+## Forward-pull scan
+
+**Retrofitted 2026-05-08** per CLAUDE.md "Forward-pull enforcement" policy (added in commit `a2a86b5`). Phase 4 was discussed before the rule was formalized; this scan applies the rule retroactively to the in-progress phase.
+
+**Phase 4 primary surface** (files Phase 4 has touched in commits `aa14256..7943536` + will touch in 04-04 + 04-05):
+- `exts/aic-dt/aic_dt/extension.py` (load_trial atom, scoring publishers wiring, _start_aic_scoring_publishers signature, _on_physics_step_force, _lazy_init_articulation)
+- `exts/aic-dt/aic_dt/scoring_publishers.py` (D-13 setter, recursive contact-tag walk)
+- `exts/aic-dt/aic_dt/controller_loop.py` (PARITY-09/10 joint_indices fixes)
+- `exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh`
+- `exts/aic-dt/scripts/build_aic_engine_host.sh`
+- `exts/aic-dt/scripts/audit_dx02.py`
+- `exts/aic-dt/source_pivots/*` (aic_engine + aic_adapter + aic_scoring humble-build patches)
+- `.planning/REQUIREMENTS.md`, `.planning/STATE.md`, `.planning/ROADMAP.md`
+- New in 04-04: `exts/aic-dt/scripts/parity_report.py`
+- New in 04-05: `exts/aic-dt/docs/README.md`, `exts/aic-dt/docs/CHANGELOG.md`
+
+**Future-phase requirements** (M2 = v2 pose-source swap; only one currently scoped):
+
+| Future Req | Future Phase | Surface | Decision | Rationale |
+|---|---|---|---|---|
+| POSE-01 (replace ground_truth=true /tf publisher with 6D pose estimator) | M2 | `scoring_publishers.py` + `extension.py::_start_aic_scoring_publishers` | DEFERRED | Research-gated on `aic_vision` pose estimator readiness; pulling forward fakes the strategy decision and locks M1 to a non-existent estimator. Phase 4-02's `ground_truth=False` kwarg pre-sets the seam — that's the M1 deliverable for the M2 surface, sufficient. |
+| POSE-02 (cross-sim redeploy via topic-publisher swap only) | M2 | publisher signatures across `parity_publishers.py` + `scoring_publishers.py` | DEFERRED | Architecturally satisfied by the topic-parity law in PROJECT.md — Phase 4 makes no changes that violate it. No code-level pull-forward needed. |
+| POSE-03 (camera fidelity 1152×1024 @ 20fps Basler match) | M2 | wrist camera prim authoring + `setup_wrist_cameras` | DEFERRED | CheatCode doesn't read cameras (M1 explicit out-of-scope). Pulling forward would expand camera scope into M1; rejected. |
+
+**Verdict:** No M2 requirements pull-forward into Phase 4. The pose-source seam is structurally preserved by `ground_truth=False` already shipped; M2 swap is a publisher-replacement, not a Phase 4 concern.
+
+**Note on prior-phase deferred items:** the *backward* sweep (which deferrals to close because Phase 4 touched their surface) lives in `04-BACKLOG-SWEEP.md` — separate artifact for closure-time discipline.
+
+</surface_adjacency>
+
+---
+
 *Phase: 04-trial-loader*
 *Context gathered: 2026-05-05*
 *Mode: --auto (autonomous M1) — all 6 gray areas auto-selected; recommended option chosen for each, rationale logged inline.*
+*Surface-adjacency scan retrofitted: 2026-05-08*
