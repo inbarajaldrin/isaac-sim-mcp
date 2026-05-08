@@ -327,6 +327,37 @@ The cost of splitting requirements that share a surface is invisible at plan tim
 
 This rule applies recursively: when planning Phase 2, scan Phase 3+ for the same overlap criteria; same for Phase 3 looking at Phase 4. The roadmap is the *plan*, not a *contract*.
 
+### Phase closure discipline — backlog sweep + payload sanity
+
+**Surfaced 2026-05-08 after a runtime audit found 5 over-claimed closures (PARITY-05/09/10/12, SCENE-05) and 6 stale-Pending entries that were actually closed.** Two structural failures:
+
+1. **Closure ceremony only updated downstream artifacts.** Phase 3 + Phase 4 plan landings updated `STATE.md` and the inline `[x]/[ ]/[~]` checkboxes in REQUIREMENTS.md but never refreshed the **traceability table at the bottom of REQUIREMENTS.md**, which became the most-quoted-but-most-stale signal. Future status reports keep reading the wrong source.
+2. **Verifiers were structural, not runtime.** Smoke tests checked "topic exists + rate > 0 + frame_id matches" but never sampled payload. PARITY-05 wrench passed rate=13.6Hz + frame_id=ati/tool_link gates but emitted all-zeros. PARITY-09 buffered+applied joint commands but never published a real cmd and read /joint_states for delta.
+
+**Two policies enforced going forward:**
+
+**(A) Backlog sweep at every phase closure.** Before declaring a phase `[x]` closed:
+- Scan the **cumulative deferred-items list** across ALL prior phase SUMMARY.md files.
+- For each deferred item whose surface (file / data structure / UI atom) the closing phase touched, **either close it now or document explicitly why the deferral persists** (with the new gating dependency).
+- Update the REQUIREMENTS.md traceability table **as part of closure** — same commit as STATE.md update + ROADMAP plan checkbox flip. Closure isn't atomic if any of those drift.
+
+**(B) Runtime payload sanity gate in every verifier.** `verify_phase_*.sh` harnesses must include for each published topic:
+- One sample read with `rclpy` (or equivalent) within N seconds of `quick_start`.
+- Assertion that payload has at least one nonzero field (or, for event topics, that the trigger fires deterministically under a known-good stimulus — e.g. CheatCode plug-into-port for PARITY-07).
+- For each subscribed topic, a publish-then-read round-trip: publish a known-good command, read the topic that should reflect the response, assert delta within tolerance.
+
+**Status-reading discipline for any agent reporting M1 progress:**
+
+| Source | Truth status | When to consult |
+|---|---|---|
+| `REQUIREMENTS.md` **inline `[x]/[~]/[ ]`** checkboxes per requirement | **Primary** | When asked "is requirement X done?" |
+| `REQUIREMENTS.md` **traceability table** (bottom of file) | Derived; verify against inline | Cross-check, never sole source |
+| `STATE.md` progress block | Snapshot at last phase boundary | Direction + magnitude of progress, not per-requirement truth |
+| `HANDOFF.json` blockers + completed_tasks | Live | Active blockers + last session's deltas |
+| Live `ros2 topic` / runtime probe | Ground truth | When `[x]` claim is uncertain or the requirement is runtime-behavioral |
+
+**Rule:** never quote the traceability table as gospel without cross-checking inline checkboxes. If they diverge, run a runtime probe before declaring status. The 2026-05-08 reconciliation pass was forced by exactly this divergence.
+
 ---
 
 ## Next step
