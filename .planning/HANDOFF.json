@@ -1,148 +1,205 @@
 {
   "version": "1.0",
-  "timestamp": "2026-05-07T12:19:44.523Z",
+  "timestamp": "2026-05-08T21:02:14.000Z",
   "phase": "04-trial-loader",
   "phase_name": "Phase 4: Trial Loader & End-to-End Verification (M1 ship phase)",
   "phase_dir": ".planning/phases/04-trial-loader",
-  "plan": "04-03 (deliverables landed) → 04-04 (NOT_STARTED, gated on model-zenoh) → 04-05 (NOT_STARTED, gated on 04-04)",
-  "task": "post-04-03 — model-zenoh downstream blocker remediation",
-  "total_tasks": 5,
+  "plan": "04-3.5 (NEW; bundles 5 CLOSE-NOW items from runtime audit) → 04-04 (gated) → 04-05 (gated)",
+  "task": "post-04-3.5-creation — ready to execute first task of Plan 04-3.5",
+  "total_tasks": 6,
   "status": "paused_user",
   "completed_tasks": [
     {
-      "id": "phase-3-close",
-      "name": "Phase 3 closed (cable physics + scoring publishers + object TF)",
+      "id": "session-resume-bootstrap",
+      "name": "Resume from prior session (autonomous M1 mode); read STATE/HANDOFF/CLAUDE",
       "status": "done"
     },
     {
-      "id": "phase-4-context",
-      "name": "Phase 4 CONTEXT.md (--auto): 13 D-decisions across 6 gray areas",
+      "id": "runtime-stage-audit",
+      "name": "Runtime stage audit at user request — surfaced 7 findings, 4 fixed-or-partial-fixed live",
       "status": "done",
-      "commit": "c923c35"
+      "commits": ["b07acd6 (duplicate /World/Objects)", "5d47d33 (_physics_view hasattr guard)", "6fc6d26 (force-publisher path correction)", "e88d5cb (audit findings recorded in STATE)"]
     },
     {
-      "id": "phase-4-plans",
-      "name": "Phase 4 plans authored (5 plans + research + plan-checker PASSED)",
-      "status": "done"
+      "id": "parity-09-controller-roundtrip-discovery",
+      "name": "PARITY-09 round-trip test discovered controller subscriber 100% broken (ValueError shape mismatch (1,6) vs (1,46) — Phase 3 cable activation expanded articulation 6→46 DOFs without joint_indices scoping)",
+      "status": "done",
+      "commit": "b682de1 (joint_indices=[[0..5]] on 4 call sites; post-fix Δ≈16% commanded amplitude)"
     },
     {
-      "id": "phase-4-01",
-      "name": "Plan 04-01: pre-flight A2/A4 probes — A2=PASS (custom-msg humble subscriber), A4=MISMATCH (live spawn paths /World/TaskBoard/SCPort_0/NICCardMount_0/NICCard mismatch hardcoded _PORT_LINK_PATHS)",
+      "id": "parity-10-pose-roundtrip-discovery",
+      "name": "PARITY-10 pose-cmd round-trip 100% broken — same shape-mismatch bug 5th call site in _apply_pose_cmd Lula IK write",
       "status": "done",
-      "commits": ["ff6ca28", "400ac01", "41117c4"]
+      "commit": "922a7d5 (joint_indices on Lula IK write; runtime re-verification deferred to Plan 04-3.5)"
     },
     {
-      "id": "phase-4-02",
-      "name": "Plan 04-02: load_trial MCP atom (4-surface DX-02) + ground_truth kwarg + adapter helpers _extract_cable_kwargs + _dispatch_rail_block; audit_dx02 at 30 PRESENT atoms; 3 trials dispatch offline",
+      "id": "requirements-reconciliation",
+      "name": "REQUIREMENTS.md reconciled to truthful state — 5 over-claimed closures reopened ([~]) + 6 stale-Pending entries flipped to closed [x]/[~]",
       "status": "done",
-      "commits": ["aa14256", "82fc1a7", "d3d6764"]
+      "commit": "b6d1169",
+      "details": "PARITY-05/09/10/12 + SCENE-05 [x]→[~]; PARITY-08, SCENE-02/03/06, TRIAL-01/02 [ ]→[x]; TRIAL-03 [ ]→[~]; root cause: traceability table was last refreshed 2026-05-03 at Phase 2 closure; Phase 3 + Phase 4 plan landings did not refresh it"
     },
     {
-      "id": "phase-4-03-deliverables",
-      "name": "Plan 04-03 deliverables: my-eval-isaac:v1 Docker image (DEPRECATED, archival) + run_aic_engine_against_isaac_sim.sh wrapper + D-13 1-surface setter (AicScoringPublishers.set_port_link_paths) + recursive PhysxContactReportAPI tag-walk fix + iter-4 fastrtps RMW blocker diagnosis + iter-5/6/7 host-build pivot",
+      "id": "closure-discipline-policy",
+      "name": "Backlog-sweep + payload-sanity + status-reading discipline added to CLAUDE.md operating policy",
       "status": "done",
-      "commits": ["50792b8", "e3aa68a", "041105b", "7943536"]
+      "commit": "b6d1169",
+      "details": "Three policies: (1) backlog sweep before phase [x] closure, (2) runtime payload sanity gate in verify_phase_*.sh, (3) status-reading discipline (inline checkboxes are primary, traceability table is derived)"
     },
     {
-      "id": "phase-4-03-host-build-pivot",
-      "name": "Host-build aic_engine + aic_adapter + aic_scoring + 4 interface packages against humble in ~/aic_humble_ws/. 5 source pivots captured in exts/aic-dt/source_pivots/ (gz_math_vendor→gz-math7, ScoringTier2 humble rosbag2 API, libfmt drop-in for std::format). aic_engine reaches 'Engine Stopped' with full lifecycle traversed (init → trial validate → reset → scoring summary). iter-4 fastrtps RMW blocker RESOLVED.",
+      "id": "forward-pull-formalization",
+      "name": "Forward-pull discipline formalized with 3 enforcement checkpoints in CLAUDE.md (was soft guideline, now enforced)",
       "status": "done",
-      "commit": "7943536"
+      "commit": "a2a86b5",
+      "details": "(1) discuss-phase mandatory '## Forward-pull scan' block in CONTEXT.md, (2) plan-checker verifies block + cross-checks task list against future-phase surfaces, (3) execute-phase halts on surface-touch surprise"
+    },
+    {
+      "id": "phase-4-forward-pull-retrofit",
+      "name": "Phase 4 retroactive forward-pull scan added to 04-CONTEXT.md (verdict: no M2 requirements pull forward; pose-source seam already preserved by ground_truth=False kwarg)",
+      "status": "done",
+      "commit": "5088aa5"
+    },
+    {
+      "id": "phase-4-backlog-sweep",
+      "name": "Phase 4 backlog sweep (first-dogfood run) — 23 deferred items inventoried, 4-status decisions: 5 CLOSE-NOW + 2 ALREADY-CLOSED + 3 SUPERSEDED + 12 PERSIST-DEFERRED. Lives at 04-BACKLOG-SWEEP.md",
+      "status": "done",
+      "commit": "5088aa5"
+    },
+    {
+      "id": "plan-04-3.5-created",
+      "name": "Plan 04-3.5 'Runtime payload + round-trip gate before 04-04 ship-gate exercise' created — bundles 5 CLOSE-NOW items as 6 tasks; gates Plan 04-04",
+      "status": "done",
+      "commit": "403002f"
+    },
+    {
+      "id": "g03-g04-supersession",
+      "name": "G03 + G04 marked [SUPERSEDED] in ROADMAP with citation to commit 079afd8 (rclpy parity_publishers bypassed OGN approach those plans scoped)",
+      "status": "done",
+      "commit": "403002f",
+      "verification": "Read both plan bodies + parity_publishers.py source 2026-05-08; same observable outcome (slash frame_ids on /tf, 7 alphabetical joints with gripper/left_finger_joint, frame_id=base_link), different mechanism (single Python file vs 17 OGN nodes / strategy-pick)"
+    },
+    {
+      "id": "port-link-paths-closed-flag",
+      "name": "_PORT_LINK_PATHS parameterization closed in 03-SUMMARY 'Decisions honored' (referenced Plan 04-03 commit e3aa68a D-13 setter)",
+      "status": "done",
+      "commit": "403002f"
     }
   ],
   "remaining_tasks": [
     {
-      "id": "phase-4-03-summary-finalize",
-      "name": "Commit uncommitted edits: 04-03-SUMMARY.md (iter-7 + new blocker section), dryrun_trial_1.txt (iter-5/6/7 + verdict), run_aic_engine_against_isaac_sim.sh (host-build pivot wrapper), config.json (workflow.use_worktrees=false), .planning/.user_pause deletion",
-      "status": "wip",
-      "estimate": "5min — atomic commit captured by /gsd-pause-work"
+      "id": "plan-04-3.5-execution",
+      "name": "Execute Plan 04-3.5 — 6 tasks bundling the 5 CLOSE-NOW items from the audit",
+      "status": "not_started",
+      "estimate": "3-4.5 hours focused single-session",
+      "subtasks": [
+        "Task 1: PARITY-09 motion deficit hunt (≥95% commanded amplitude) — 3-hypothesis ladder (OGN PD residual / cable mass-coupling / set_joint_positions vs PD-target interaction)",
+        "Task 2: PARITY-10 round-trip re-verification post-fix 922a7d5",
+        "Task 3: gripper/tcp ingress path verification (Phase 2 Pitfall 2 Option A complete chain)",
+        "Task 4: PARITY-05 wrench root cause via nvidia-suite-docs Articulation lifecycle deep-dive — 3-tier acceptance (root-caused / workaround / diagnosed-but-unsolvable)",
+        "Task 5: Truthful state refresh atomic commit (REQUIREMENTS inline + traceability table + STATE + 04-BACKLOG-SWEEP all flip together)",
+        "Task 6: 04-3.5-SUMMARY.md with diagnostic trail material for upstream nvidia-suite-docs contribution"
+      ]
     },
     {
       "id": "model-zenoh-mitigation",
-      "name": "Resolve downstream blocker: my-solution:v1 (CheatCode policy) requires zenoh transport (RMW=zenoh + AIC_ROUTER_ADDR). Host humble engine + kilted zenoh model can't see each other. 3 mitigation options identified (see blockers).",
+      "name": "Resolve open blocker (carried from prior session): my-solution:v1 CheatCode policy requires zenoh transport; host humble fastrtps engine + kilted zenoh model can't discover each other",
       "status": "not_started",
-      "estimate": "30-90min depending on path chosen"
+      "estimate": "30-90min depending on path chosen",
+      "mitigation_paths": [
+        "(a) Host-side zenohd + fastdds↔zenoh bridge — ~30min — risks 'no bridges' architectural law",
+        "(b) Host-build aic_model humble-native (mirror 04-03 pivot) — ~60-90min — cleanest path; preserves architectural law",
+        "(c) Stub lifecycle node mimicking /aic_model/get_state for PARITY-07 fire-test only — ~20min — discriminator, not full M1"
+      ],
+      "user_decision_required": "Pick mitigation path",
+      "recommendation": "(c) first as 20-min discriminator, then (b) for M1 ship gate"
     },
     {
       "id": "phase-4-04",
-      "name": "Plan 04-04: parity_report.py + dual JSON+MD output + first M1 ship-gate exercise (3 trials × 2 sims). Engine-side wrapper is ready (host-build pivot). Model side gated on model-zenoh-mitigation.",
+      "name": "Plan 04-04: parity_report.py + first M1 ship-gate exercise (TRIAL-04, TRIAL-05) — gated on 04-3.5 + model-zenoh mitigation",
       "status": "not_started",
       "estimate": "2h"
     },
     {
       "id": "phase-4-05",
-      "name": "Plan 04-05: DX-05 README rewrite + CHANGELOG M1 + REQUIREMENTS flips + ROADMAP/STATE + 04-SUMMARY.md + conditional .m1_shipped touch (gated on 04-04 verdict=READY)",
+      "name": "Plan 04-05: DX-05 README + CHANGELOG M1 + REQUIREMENTS flips + ROADMAP/STATE + 04-SUMMARY.md + conditional .m1_shipped touch",
       "status": "not_started",
       "estimate": "1h"
     },
     {
       "id": "m1-ship",
-      "name": "M1 ships: every sample_config.yaml trial passes against Isaac Sim with same outcome as Gazebo; touch .planning/.m1_shipped",
+      "name": "M1 ships: every sample_config.yaml trial passes against Isaac Sim with same outcome as Gazebo",
       "status": "not_started"
     }
   ],
   "blockers": [
     {
-      "id": "phase-4-03-rmw-interop",
-      "title": "kilted ↔ humble fastrtps type-hash incompatibility for stock /clock and /joint_states",
-      "status": "RESOLVED",
-      "resolution": "Host-build pivot (commit 7943536). aic_engine + aic_adapter compiled into ~/aic_humble_ws/install/ against /opt/ros/humble. Wrapper updated to launch them as host processes. 5 source pivots captured in exts/aic-dt/source_pivots/.",
-      "verification": "iter-7 trial_1 dry-run: aic_engine reaches 'Engine Stopped' after 70s lifecycle (init → validate → reset → scoring summary)."
+      "id": "phase-4-03-model-zenoh",
+      "title": "my-solution:v1 (CheatCode policy) requires zenoh transport for service discovery",
+      "status": "OPEN",
+      "carried_from": "prior session",
+      "summary": "Host humble fastrtps engine + kilted zenoh model = no service discovery for /aic_model/get_state. AIC_ROUTER_ADDR=localhost:7447 + RMW_IMPLEMENTATION=rmw_zenoh_cpp hard-required by my-solution:v1 entrypoint",
+      "user_decision_required": "Pick mitigation a/b/c"
     },
     {
-      "id": "phase-4-03-model-zenoh",
-      "title": "my-solution:v1 (CheatCode policy container) requires zenoh transport for service discovery",
-      "discovered": "2026-05-05 iter-7",
-      "phase": "4",
-      "summary": "After host-build resolves engine-side RMW interop, model container still exits immediately with `AIC_ROUTER_ADDR must be provided`. AIC competition stack uses zenoh router (port 7447) for cross-container model↔eval lifecycle. Source: ~/Documents/aic/scripts/run_cheatcode.sh:47-49. Host humble fastrtps engine + kilted zenoh model = no service discovery for /aic_model/get_state.",
-      "evidence": ".planning/phases/04-trial-loader/dryrun_trial_1.txt — DRY-RUN VERDICT (host-build pivot) section: 'Model container started: FAIL (exits immediately: AIC_ROUTER_ADDR must be provided)'.",
-      "impact_on_phase_4": "Plan 04-04 parity_report.py can run engine side cleanly (RMW interop resolved); CheatCode-driven trials cannot complete without model side. PARITY-07 live-fire still blocked. M1 ship gate (TRIAL-04) cannot close.",
-      "mitigation_options": [
-        "(a) Stand up zenohd on host (binary ships in ~/Documents/aic/.pixi/envs/default/) + add fastdds↔zenoh bridge for engine ↔ model. ~30min infra. Risk: 'no bridges' architectural law spirit.",
-        "(b) Build aic_model + CheatCode policy humble-native (mirror the 04-03 pivot for the model side). Clone aic_example_policies + my-solution Dockerfile contents into a humble env or ~/aic_humble_ws. ~60-90min build. Cleanest M1 path; preserves architectural law. Risk: my-solution:v1 may have transitive zenoh deps in CheatCode.py itself.",
-        "(c) Stub lifecycle node mimicking aic_model's /aic_model/get_state + /aic_model/configure contract for PARITY-07 fire-test only. ~20min. Drives gripper toward port_1 deterministically; verifies /scoring/insertion_event fires; does NOT verify CheatCode trial outcome. Useful as a discriminator: if PARITY-07 fires under stub, the bug is in the model-zenoh path; if not, the bug is in the contact-pair plumbing."
-      ],
-      "user_decision_required": "Which mitigation path. Recommendation: try (c) first as a 20-min discriminator, then commit to (b) for the M1 ship gate (preserves architectural law and mirrors the 04-03 pivot pattern).",
-      "what_works": [
-        "load_trial MCP atom + adapter dispatcher (Plan 04-02)",
-        "Host humble aic_engine + aic_adapter (commit 7943536) — full lifecycle, /clock subscribed, 3 trials parsed",
-        "D-13 fallback: live port paths from spawned[] override hardcoded _PORT_LINK_PATHS",
-        "Recursive PhysxContactReportAPI tag-walk: 2 ports tagged (plug + sc_port_visual)",
-        "run_aic_engine_against_isaac_sim.sh wrapper invokes Isaac Sim + load_trial + host humble engine + adapter; only model container side fails"
-      ]
+      "id": "parity-09-motion-deficit",
+      "title": "Controller subscriber writes reach articulation but only 16% of commanded amplitude appears at joint state",
+      "status": "OPEN",
+      "discovered": "2026-05-08",
+      "summary": "Post-fix b682de1, shoulder_lift_joint round-trip on +0.10 rad command produces Δ≈0.016 rad. Writes reach DOFs (joint_indices fix works); 84% deficit dissipates somewhere — hypothesis ladder in Plan 04-3.5 Task 1",
+      "blocks": ["Plan 04-04", "all CheatCode trials"]
+    },
+    {
+      "id": "parity-05-wrench-root-cause",
+      "title": "/fts_broadcaster/wrench publishes garbage zeros despite path correction + hasattr guard",
+      "status": "OPEN",
+      "discovered": "2026-05-08",
+      "summary": "[Force callback] 'Articulation' object has no attribute '_physics_view' fires every tick. partial fix 6fc6d26; root cause needs Isaac Sim 5.0 Articulation lifecycle deep-dive (compare _lazy_init_articulation vs parity_publishers.py:_on_physics_step lazy init pattern). Plan 04-3.5 Task 4. aic_adapter consumes via Observation.wrist_wrench → reaches model"
     }
   ],
   "human_actions_pending": [
     {
       "id": "model-zenoh-mitigation-choice",
-      "title": "Pick mitigation path for model-zenoh blocker (a/b/c above)",
+      "title": "Pick mitigation path for model-zenoh blocker (a/b/c)",
       "blocking": ["Plan 04-04", "Plan 04-05", "M1 ship gate"]
     }
   ],
   "decisions": [
     {
-      "decision": "Phase 4 CONTEXT D-06 ('reuse aic_eval Docker, skip Gazebo bringup') was SUPERSEDED by RESEARCH.md finding (no start_gazebo:=false flag in aic_gz_bringup.launch.py).",
-      "rationale": "Plan 04-03 first attempted derived my-eval-isaac:v1 Docker image (Option 4B from research). Then iter-4 surfaced fastrtps cross-distro type-hash incompat. Final pivot: host-build aic_engine + aic_adapter as native humble processes (mitigation option b from blocker). Cleanest path; preserves architectural law; no Docker for engine.",
+      "decision": "REQUIREMENTS.md inline checkboxes are PRIMARY truth source; traceability table is DERIVED and was stale",
+      "rationale": "Phase 3 + Phase 4 plan landings updated inline checkboxes but skipped traceability table refresh; root cause of all bad-progress reports this session. Fix: every phase closure must atomically refresh table + STATE + ROADMAP",
+      "phase": "session-wide"
+    },
+    {
+      "decision": "Forward-pull + backward-pull (backlog sweep) discipline formalized with 3 enforcement checkpoints + atomic-closure rule",
+      "rationale": "User-flagged pattern: deferrals got punted phase-to-phase but never picked up. Forward-pull was soft guideline never enforced. Phase boundaries are scope organizers, not capability fences",
+      "phase": "session-wide",
+      "reference": "CLAUDE.md sections 'Forward-pull enforcement' (a2a86b5) + 'Phase closure discipline' (b6d1169)"
+    },
+    {
+      "decision": "Plan 04-3.5 inserted between 04-03 and 04-04 to bundle 5 CLOSE-NOW runtime items as a gate",
+      "rationale": "Without these closures, Plan 04-04's parity_report.py would flag every trial FAIL on runtime-gate failures rather than real Isaac-Sim-vs-Gazebo divergence. Closing first gives parity_report a meaningful first-run signal",
       "phase": "4"
     },
     {
-      "decision": "D-13 set_port_link_paths is a 1-surface helper method (NOT a 4-surface MCP atom).",
-      "rationale": "Per Plan 04-01 SUMMARY clarification: load_trial computes paths from spawn-atom call sites (/World/TaskBoard/SCPort_{i}, /World/TaskBoard/NICCardMount_{i}, /World/TaskBoard/NICCard) and passes via _start_aic_scoring_publishers(port_link_paths=...) kwarg. No new MCP atom needed.",
-      "phase": "4"
+      "decision": "G03 + G04 ROADMAP gap-plans marked [SUPERSEDED] (not deleted, not [x])",
+      "rationale": "Both drafted before commit 079afd8 rclpy pivot; describe an OGN-based architecture the codebase no longer takes. Plan files preserved as historical record + diagnostic trail showing why pivot was necessary. Verified 2026-05-08 by reading both bodies + parity_publishers.py source",
+      "phase": "1"
     },
     {
-      "decision": "Wave 1 A2 'PASS' verdict was insufficient — only verified custom-built aic_control_interfaces (matched ABI by same-workspace build) and humble-side host subscriber. Did NOT exercise kilted-container ↔ humble-Isaac-Sim path for stock messages.",
-      "rationale": "iter-4 dry-run revealed kilted container sees /clock in topic info but receives 0 messages. Lesson: future RMW interop probes must subscribe to a STOCK message type (sensor_msgs/JointState, rosgraph_msgs/Clock) from the OTHER end's distro, not just verify same-workspace custom messages.",
-      "phase": "4"
+      "decision": "GSD upstream contribution path: prototype locally first, then PR to gsd-build/get-shit-done as opt-in feature",
+      "rationale": "User noted forward-pull is mandatory for robotics but software projects may not need it. Upstream design = config flag workflow.surface_adjacency_required (default false) so it's strictly additive and more likely to get approved-feature label",
+      "phase": "session-wide"
     }
   ],
-  "uncommitted_files": [
-    ".planning/.user_pause (deleted; pause now captured in .continue-here.md)",
-    ".planning/config.json (workflow.use_worktrees: false — Phase 4 sequential mode)",
-    ".planning/phases/04-trial-loader/04-03-SUMMARY.md (iter-5/6/7 host-build pivot section + new blocker)",
-    ".planning/phases/04-trial-loader/dryrun_trial_1.txt (iter-5/6/7 + DRY-RUN VERDICT host-build pivot block)",
-    "exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh (host-build pivot wrapper updates)"
+  "uncommitted_files": [],
+  "background_processes": [
+    {
+      "name": "Isaac Sim aic-dt extension",
+      "port": 8768,
+      "status": "RUNNING — RESPONSIVE",
+      "note": "Cache snapshot at ~/.cache/ov/DerivedDataCache.bak.1777986848 (153.5MB). Fine to leave running for resume; kill with `bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh kill` if pausing for extended period"
+    }
   ],
-  "next_action": "User must pick model-zenoh mitigation path (a/b/c). Recommended sequence: (1) Try (c) stub lifecycle node as 20-min discriminator to verify PARITY-07 plumbing fires under deterministic plug-into-port drive. (2) If (c) PASSES, commit to (b) host-build aic_model + CheatCode humble-native for M1 ship gate. (3) Run Plan 04-04 parity_report.py once engine + model both run end-to-end. (4) Plan 04-05 closure + .m1_shipped touch.",
-  "context_notes": "Phase 4 is 60% closed: 2 plans fully done, 1 plan with deliverables landed but downstream blocker, 2 plans gated. The architectural pattern proven by Plan 04-03 (host-build cross-distro packages against humble) is the template for resolving the model-zenoh blocker via mitigation (b). Engine-side success was hard-won (4 dry-run iterations, 5 source pivots). Cache snapshot at ~/.cache/ov/DerivedDataCache.bak.1777986848 (153.5MB)."
+  "next_action": "On resume: read this HANDOFF.json + .continue-here.md + STATE.md + CLAUDE.md autonomous-mode block (per session-bootstrap rule). Then EITHER (a) start Plan 04-3.5 Task 1 (PARITY-09 motion deficit hunt — recommended; sim-side; doesn't need user decision) OR (b) prompt user for model-zenoh mitigation path choice. Recommended: (a) first since it doesn't depend on user input and unblocks the runtime-gate before model-zenoh resolution matters",
+  "context_notes": "This session was triggered by user's runtime audit request after noticing the prior progress reports kept being wrong. Discovery cascade: duplicate spawn namespace → wrench garbage zeros → wrist cameras never published → arm joint drives wrong → cable doesn't fall → kinematic task-board → controller subscriber 100% broken (PARITY-09). Root cause of bad-progress-reports was stale traceability table never refreshed since Phase 2 closure. Major policy work: backlog-sweep + forward-pull enforcement + payload-sanity gate + status-reading discipline ALL added to CLAUDE.md. First-dogfood backlog sweep on Phase 4 produced 04-BACKLOG-SWEEP.md with 23 deferrals + 4-status decisions. Plan 04-3.5 created to close 5 CLOSE-NOW items before resuming 04-04. Process discoveries (clunky bits) captured for upstream GSD PR — opt-in via config flag. Mood: methodical, defensive, user is asking right questions; trust in artifacts is being rebuilt by reconciling truth state."
 }
