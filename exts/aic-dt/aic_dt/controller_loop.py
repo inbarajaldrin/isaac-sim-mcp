@@ -689,10 +689,16 @@ class AicControllerLoop:
             try:
                 kps = np.array([arm_kps], dtype=np.float32)
                 kds = np.array([arm_kds], dtype=np.float32)
-                # Articulation has 6 DOFs in URDF order matching ARM_JOINTS_ORDERED.
-                # Do NOT pass joint_names — Isaac Sim 5.0 has the off-by-one bug
-                # for set_gains too, same as set_joint_positions.
-                self._articulation.set_gains(kps=kps, kds=kds)
+                # Phase 3 SCENE-05 activated the cable subtree, adding 40 D6
+                # joints to the articulation (6 arm + 40 cable = 46 DOFs).
+                # Without joint_indices scoping, set_gains broadcasts (1,6)
+                # against the (1,46) DOF array and raises ValueError. The arm
+                # joints sit at indices 0..5 per the live dof_names log.
+                # joint_indices is the canonical scoping API for SingleArticulation
+                # writes — joint_names hits a separate Isaac Sim 5.0 off-by-one
+                # bug per the historical comments on this surface.
+                self._articulation.set_gains(kps=kps, kds=kds,
+                                             joint_indices=np.array([[0, 1, 2, 3, 4, 5]]))
             except Exception as exc:
                 if not getattr(self, "_logged_set_gains_error", False):
                     print(f"[AIC-DT][controller] set_gains failed: {exc!r}")
@@ -727,6 +733,12 @@ class AicControllerLoop:
                 # internal off-by-one that raises IndexError when joint_names is
                 # provided.
                 arr = np.array([arm_positions], dtype=np.float32)
+                # Phase 3 cable activation expanded the articulation from 6 → 46
+                # DOFs (6 arm + 40 cable D6). Scope writes to arm-joint indices
+                # 0..5 explicitly. Without this, set_joint_positions raised
+                # ValueError every tick and the arm never moved (silent failure
+                # because _logged_apply_error went True after first error).
+                arm_indices = np.array([[0, 1, 2, 3, 4, 5]])
                 # Only set_joint_positions on cmd CHANGE — at high publish rates
                 # (aic_controller >100Hz), one-shot-clear means apply runs every
                 # physics tick (60Hz) with the same buffered cmd. Repeated
@@ -741,10 +753,11 @@ class AicControllerLoop:
                     or arm_positions != self._last_applied_arm_positions
                 )
                 if cmd_changed:
-                    self._articulation.set_joint_positions(arr)
+                    self._articulation.set_joint_positions(arr, joint_indices=arm_indices)
                     self._last_applied_arm_positions = list(arm_positions)
                 # PD target ALWAYS refreshed (cheap; no destabilization).
-                self._articulation.apply_action(ArticulationActions(joint_positions=arr))
+                self._articulation.apply_action(ArticulationActions(
+                    joint_positions=arr, joint_indices=arm_indices))
             except Exception as exc:
                 # Loud on FIRST error so future debuggers don't chase the rclpy
                 # spin layer when the actual fault is here (the silent .debug()
@@ -757,9 +770,10 @@ class AicControllerLoop:
             # doesn't accept efforts; effort is applied alongside the position target).
             if arm_efforts and len(arm_efforts) == len(arm_names):
                 try:
-                    # Same Isaac Sim 5.0 quirk — no joint_names=.
+                    # Phase 3 cable activation: 6 → 46 DOFs. Scope to arm indices 0..5.
                     self._articulation.apply_action(ArticulationActions(
                         joint_efforts=np.array([arm_efforts], dtype=np.float32),
+                        joint_indices=arm_indices,
                     ))
                 except Exception as exc:
                     if not getattr(self, "_logged_efforts_error", False):
