@@ -94,7 +94,7 @@ Smoke test (`smoke_test_aic_cable.py`) + verify harness (`verify_phase_3.sh`): N
 ## Deviations + carry-forwards
 
 - **scoring_publishers.py instead of extending parity_publishers.py**: cleaner separation; cable + scoring surface is logically distinct from joint_states + main /tf surface; lower coupling risk.
-- **Plug-port contact subscription using literal port paths**: `_PORT_LINK_PATHS` in scoring_publishers.py is a hardcoded list — `/World/TaskBoard/sc_port_1`, `sc_port_2`, `nic_card`. Should be parameterizable for non-default scenes (Phase 4 may add).
+- **Plug-port contact subscription using literal port paths**: `_PORT_LINK_PATHS` in scoring_publishers.py was a hardcoded list — `/World/TaskBoard/sc_port_1`, `sc_port_2`, `nic_card`. ✅ **CLOSED in Plan 04-03 commit `e3aa68a` (D-13 setter)** — `AicScoringPublishers.set_port_link_paths(paths)` runtime override + `_effective_port_link_paths` resolution. `load_trial` MCP atom (Plan 04-02) computes port paths from spawn-atom call sites and passes via `_start_aic_scoring_publishers(port_link_paths=...)`. The hardcoded constant remains as default for cable-only test scenes.
 - **`/scoring/insertion_event` live fire deferred**: Phase 4 trial loader is the natural cycle to verify (CheatCode drives plug into port; we expect single event published per insertion).
 - **Plan 03-06 smoke test + verify_phase_3.sh script not shipped**: Phase 4 E2E trial verification supersedes — running the actual aic_engine + CheatCode trial against Isaac Sim is the canonical Phase 3 verification.
 - **Hot-reload via `touch extension.py`**: corrupts parity_publishers' rclpy node state, causing Phase 1 smoke regression to 0/6. Restart required to recover; documented as known limitation, NOT a real regression.
