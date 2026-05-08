@@ -327,6 +327,52 @@ The cost of splitting requirements that share a surface is invisible at plan tim
 
 This rule applies recursively: when planning Phase 2, scan Phase 3+ for the same overlap criteria; same for Phase 3 looking at Phase 4. The roadmap is the *plan*, not a *contract*.
 
+### Forward-pull enforcement — three checkpoints, not a guideline
+
+**Surfaced 2026-05-08:** the original forward-pull rule above was a soft guideline with no verification. Agents were supposed to scan future-phase requirements at planning time but no checker confirmed it happened. Result: Phase 1's extension.py surface was re-edited by Phase 2 + 3 + 4 without anyone scanning forward — wrist-camera prim-path bug (Gap C / 01-G05) and the articulation-DOF coupling that broke PARITY-09 in Phase 3 are both forward-pull misses.
+
+**Three enforcement points:**
+
+**(1) discuss-phase produces a `## Forward-pull scan` block in CONTEXT.md.** Mandatory section. For every future-phase whose requirements share a surface (file / data structure / UI atom) with the current phase, list:
+
+```
+| Future Req | Future Phase | Surface overlap | Decision | Rationale |
+|------------|--------------|-----------------|----------|-----------|
+| SCENE-05   | Phase 3      | extension.py::load_robot cable subtree | DEFERRED | Research-gated on nvidia-suite-docs; pulling forward fakes the strategy decision |
+| TEX-03     | Phase 1      | exts/aic-dt/docs/texture-sweep.md | PULLED  | Sweep-script surface adjacent; no research needed |
+```
+
+If no future-phase shares a surface with this one, write `## Forward-pull scan: NONE — no surface overlap with Phase N+1, N+2, ...` with explicit justification per future phase. The empty case must be defended, not silent.
+
+**(2) plan-checker verifies the block exists + is non-vacuous.** Before approving a phase plan, the plan-checker agent:
+- Confirms `## Forward-pull scan` exists in CONTEXT.md.
+- For each future phase, confirms either at least one entry OR explicit "no overlap" justification.
+- Cross-checks: for any future-phase requirement whose declared surface (per ROADMAP.md `Requirements:` block) matches a file in the current phase's plan task list, the requirement MUST appear in the forward-pull table. Missing entries fail the checker.
+
+**(3) execute-phase halts on surface-touch surprise.** When a plan's task touches a file that's listed as primary surface for a future-phase requirement NOT in the forward-pull table, the executor halts and surfaces:
+
+```
+[FORWARD-PULL HALT] Task X edits exts/aic-dt/aic_dt/extension.py.
+This file is also the primary surface for SCENE-05 (Phase 3) per ROADMAP.md.
+SCENE-05 was not in the forward-pull table for this phase.
+Either pull SCENE-05 forward now (update CONTEXT + REQUIREMENTS + ROADMAP) or
+document why the surface-touch doesn't qualify (e.g. plan touches a different
+function in the same file).
+```
+
+This catches the late-discovered overlap that discuss-phase missed.
+
+**Forward + backward = closure principle.** Every phase scans both directions:
+- **Forward (at discuss-phase):** "What future-phase requirements could I close while I'm in this surface?"
+- **Backward (at phase-closure / backlog-sweep):** "What prior-phase deferrals can I close because this phase already edited their surface?"
+
+A surface is "done" only when all its requirements across all phases that don't have hard external dependencies (research-gated, upstream-blocker-gated) are addressed. Phase boundaries are scope organizers, not capability fences.
+
+**Concrete artifacts produced:**
+- `.planning/phases/<phase>/CONTEXT.md` `## Forward-pull scan` block (mandatory)
+- `.planning/phases/<phase>/CLOSURE.md` `## Backlog-sweep` block (mandatory at closure)
+- Both blocks reference the live REQUIREMENTS.md inline checkboxes; both flip them as part of the same atomic commit.
+
 ### Phase closure discipline — backlog sweep + payload sanity
 
 **Surfaced 2026-05-08 after a runtime audit found 5 over-claimed closures (PARITY-05/09/10/12, SCENE-05) and 6 stale-Pending entries that were actually closed.** Two structural failures:
