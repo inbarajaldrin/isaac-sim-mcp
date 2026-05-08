@@ -921,13 +921,14 @@ class AicControllerLoop:
                 if ik_positions.ndim == 1:
                     ik_positions = ik_positions.reshape(1, -1)
                 # ArticulationKinematicsSolver returns positions for the IK chain
-                # joints (URDF arm order). Articulation has exactly 6 DOFs in the same
-                # order, so positional indexing matches naturally.
-                # Do NOT pass joint_names — Isaac Sim 5.0 set_joint_positions has
-                # an internal off-by-one that raises IndexError when joint_names is
-                # provided. See _apply_joint_cmd for the full story.
+                # joints (6 arm DOFs in URDF order). Phase 3 SCENE-05 expanded the
+                # articulation to 46 DOFs (6 arm + 40 cable D6 joints), so we must
+                # scope writes to indices [0..5] explicitly — without this, the
+                # write fails with ValueError shape mismatch (1,6) vs (1,46) and
+                # the arm doesn't move. Mirrors _apply_joint_cmd fix.
                 self._articulation.set_joint_positions(
-                    ik_positions.astype(np.float32)
+                    ik_positions.astype(np.float32),
+                    joint_indices=np.array([[0, 1, 2, 3, 4, 5]]),
                 )
         except Exception as exc:
             if not self._logged_apply_error:
