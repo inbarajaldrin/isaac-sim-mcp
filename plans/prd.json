@@ -436,7 +436,7 @@
       "title": "Implement chosen model-zenoh path",
       "category": "integration",
       "priority": "critical",
-      "passes": false,
+      "passes": true,
       "requires_sim": false,
       "files_likely": [
         "depends on path chosen — see exts/aic-dt/docs/zenoh-decision.md after zenoh-path-research"

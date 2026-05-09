@@ -1,0 +1,12 @@
+[
+  {
+    "ts": "2026-05-09T16:45:00Z",
+    "task_id": "zenoh-path-implementation",
+    "repo_path": "system",
+    "file_path": "/var/cache/apt + /opt/ros/humble (apt install ros-humble-rmw-zenoh-cpp)",
+    "reason": "Path (a) zenoh-decision.md: install rmw_zenoh_cpp + rmw_zenohd via apt — unified zenoh transport for Isaac Sim host + aic_engine + my-solution model container",
+    "reversibility": "reversible",
+    "commit_sha": null,
+    "notes": "Pulled ros-humble-zenoh-cpp-vendor (9.6MB) + ros-humble-rmw-zenoh-cpp (189KB), version 0.1.8-1jammy. rmw_zenohd binary at /opt/ros/humble/lib/rmw_zenoh_cpp/rmw_zenohd. Apt-removable via: sudo apt remove ros-humble-rmw-zenoh-cpp ros-humble-zenoh-cpp-vendor"
+  }
+]

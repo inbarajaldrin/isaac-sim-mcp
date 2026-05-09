@@ -226,11 +226,28 @@ if status != "success":
     sys.exit(3)
 PY
 
+# ---------- pre-flight: host zenoh router (per zenoh-decision.md Path (a)) ----------
+# All three peers (Isaac Sim rclpy, host aic_engine/adapter, model container)
+# unify on rmw_zenoh_cpp + AIC_ROUTER_ADDR=localhost:7447. The router is the
+# single discovery point — mirrors AIC docker-compose topology where
+# aic_eval container hosted the router.
+bash "$(dirname "$0")/launch_host_zenohd.sh" launch >/dev/null
+if ! ss -tln 2>/dev/null | grep -qE ':7447\b'; then
+    echo "[wrapper] ERROR: zenoh router did not come up on tcp/[::]:7447"
+    tail -20 /tmp/aic_zenohd.log 2>/dev/null || true
+    exit 1
+fi
+
+# Common zenoh peer override applied to every host process below.
+# transport/shared_memory disabled per AIC eval Dockerfile:63 (cross-distro safety).
+PEER_OVERRIDE='connect/endpoints=["tcp/localhost:7447"];transport/shared_memory/enabled=false'
+
 # ---------- wait for /joint_states on the bus ----------
 echo "[wrapper] waiting for /joint_states on ROS_DOMAIN_ID=7 (max 30s)"
 WAIT_OK="0"
 for i in $(seq 1 30); do
-    if ROS_DOMAIN_ID=7 RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
+    if ROS_DOMAIN_ID=7 RMW_IMPLEMENTATION=rmw_zenoh_cpp \
+        ZENOH_CONFIG_OVERRIDE="$PEER_OVERRIDE" \
         timeout 2 ros2 topic echo --once /joint_states >/dev/null 2>&1; then
         echo "[wrapper] /joint_states live (${i}s)"
         WAIT_OK="1"
@@ -243,7 +260,7 @@ if [ "$WAIT_OK" != "1" ]; then
 fi
 
 # ---------- launch host aic_adapter + aic_engine processes ----------
-echo "[wrapper] launching host aic_adapter (humble, ROS_DOMAIN_ID=7)"
+echo "[wrapper] launching host aic_adapter (humble, ROS_DOMAIN_ID=7, RMW=zenoh)"
 : > "$ADAPTER_LOG"
 (
     set +u   # /opt/ros/humble/setup.bash uses unbound vars (AMENT_TRACE_SETUP_FILES)
@@ -253,13 +270,15 @@ echo "[wrapper] launching host aic_adapter (humble, ROS_DOMAIN_ID=7)"
     export AMENT_PREFIX_PATH="$APT_VENDOR:$AMENT_PREFIX_PATH"
     export LD_LIBRARY_PATH="$APT_VENDOR/lib:${LD_LIBRARY_PATH:-}"
     export ROS_DOMAIN_ID=7
-    export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+    export RMW_IMPLEMENTATION=rmw_zenoh_cpp
+    export ZENOH_ROUTER_CHECK_ATTEMPTS=-1
+    export ZENOH_CONFIG_OVERRIDE="$PEER_OVERRIDE"
     exec "$ADAPTER_BIN" --ros-args -p use_sim_time:=true \
         >>"$ADAPTER_LOG" 2>&1
 ) &
 ADAPTER_PID=$!
 
-echo "[wrapper] launching host aic_engine (humble, ROS_DOMAIN_ID=7)"
+echo "[wrapper] launching host aic_engine (humble, ROS_DOMAIN_ID=7, RMW=zenoh)"
 : > "$ENGINE_LOG"
 (
     set +u   # /opt/ros/humble/setup.bash uses unbound vars (AMENT_TRACE_SETUP_FILES)
@@ -269,7 +288,9 @@ echo "[wrapper] launching host aic_engine (humble, ROS_DOMAIN_ID=7)"
     export AMENT_PREFIX_PATH="$APT_VENDOR:$AMENT_PREFIX_PATH"
     export LD_LIBRARY_PATH="$APT_VENDOR/lib:${LD_LIBRARY_PATH:-}"
     export ROS_DOMAIN_ID=7
-    export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+    export RMW_IMPLEMENTATION=rmw_zenoh_cpp
+    export ZENOH_ROUTER_CHECK_ATTEMPTS=-1
+    export ZENOH_CONFIG_OVERRIDE="$PEER_OVERRIDE"
     exec "$ENGINE_BIN" --ros-args \
         -p config_file_path:="$AIC_REPO/aic_engine/config/sample_config.yaml" \
         -p use_sim_time:=true \
@@ -278,6 +299,11 @@ echo "[wrapper] launching host aic_engine (humble, ROS_DOMAIN_ID=7)"
 ENGINE_PID=$!
 
 # ---------- launch model (policy) container ----------
+# Container speaks zenoh internally (Dockerfile entrypoint exports rmw_zenoh_cpp
+# unconditionally — see zenoh-decision.md "latent bug" note). With --net=host the
+# container shares the host network namespace, so AIC_ROUTER_ADDR=localhost:7447
+# resolves to the host-side rmw_zenohd we just launched. ZENOH_ROUTER_CHECK_ATTEMPTS
+# must be >0 (or unset) so the model waits for the router instead of bailing.
 echo "[wrapper] launching $MODEL_CONTAINER ($MODEL_IMAGE) policy=$POLICY"
 docker rm -f "$MODEL_CONTAINER" 2>/dev/null || true
 docker run -d \
@@ -285,8 +311,8 @@ docker run -d \
     --gpus all \
     --net=host \
     -e ROS_DOMAIN_ID=7 \
-    -e RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
-    -e ZENOH_ROUTER_CHECK_ATTEMPTS=0 \
+    -e AIC_ROUTER_ADDR=localhost:7447 \
+    -e ZENOH_CONFIG_OVERRIDE="$PEER_OVERRIDE" \
     "$MODEL_IMAGE" \
     --ros-args -p "policy:=$POLICY" -p use_sim_time:=true >/dev/null
 
