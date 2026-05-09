@@ -1359,6 +1359,14 @@ class DigitalTwin(omni.ext.IExt):
                 cable_prim.SetActive(True)
                 print(f"SCENE-05: activated {prim_path}/cable (per-link mass authored — see author_cable_physics_offline.py)")
 
+        # joint-drives-urdf-reconcile: author USD DriveAPI on the 6 arm joints
+        # BEFORE articulation init so PhysX picks up the canonical AIC values
+        # at reset_async. Source-of-truth: aic_isaaclab/.../aic_task_env_cfg.py
+        # ImplicitActuatorCfg(stiffness=2000, damping=100, effort_limit_sim=87)
+        # — confirmed in exts/aic-dt/docs/aic-isaaclab-leverage.md.
+        # Articulation root solver iter counts likewise: pos=16, vel=8.
+        self._configure_arm_drives(stage, prim_path)
+
         # Setup Articulation
         self._robot_view = ArticulationView(prim_paths_expr=prim_path, name="ur5e_view")
         World.instance().scene.add(self._robot_view)
@@ -1417,25 +1425,53 @@ class DigitalTwin(omni.ext.IExt):
             print(f"[AIC-DT] SCENE-03 gripper_initial_pos={gripper_initial_pos} recorded (no DOF — see D-09)")
         return joint_path
 
-        self._articulation = Articulation(prim_path)
+    def _configure_arm_drives(self, stage, prim_path: str) -> None:
+        """Author USD DriveAPI + PhysxArticulationAPI on the unified-robot arm.
 
-        # Configure joint drives (from Isaac Lab config)
-        # NOTE: joints live under the unified-robot articulation root prim, not directly
-        # under /World/UR5e — the f-string was wrong pre-Plan 04 and produced a 6x
-        # "Joint not found" warning per load_robot in the Kit log. Per RESEARCH Pitfall #2.
+        joint-drives-urdf-reconcile: arm joint drives previously inherited the
+        on-disk USD's OEM defaults (stiffness 95→1322, damping 0.038→0.529,
+        maxForce 28 or 150). Canonical values come from AIC's Isaac Lab env
+        (`aic_task_env_cfg.py::ImplicitActuatorCfg`):
+          - stiffness=2000, damping=100, effort_limit_sim=87 on each arm joint
+          - articulation root solver iters: pos=16, vel=8
+
+        Authoring happens BEFORE ArticulationView init / reset_async so PhysX
+        picks the values up at first articulation cook. Joint-not-found is a
+        soft warning (legacy USD layouts may differ); solver-API absence is
+        likewise non-fatal — values stay USD-only and runtime defaults apply.
+        """
         for joint_name in self._joint_names:
             joint_path = f"{prim_path}/aic_unified_robot/joints/{joint_name}"
             joint_prim = stage.GetPrimAtPath(joint_path)
             if not joint_prim.IsValid():
-                print(f"Warning: Joint not found at {joint_path}")
+                print(f"[AIC-DT] joint-drives-urdf-reconcile: joint not found at {joint_path}")
                 continue
             drive_api = UsdPhysics.DriveAPI.Apply(joint_prim, "angular")
-            drive_api.GetMaxForceAttr().Set(self._ur5e_max_force)
-            drive_api.GetStiffnessAttr().Set(self._ur5e_stiffness)
-            drive_api.GetDampingAttr().Set(self._ur5e_damping)
-            print(f"Set {joint_name}: maxForce={self._ur5e_max_force}, stiffness={self._ur5e_stiffness}, damping={self._ur5e_damping}")
+            drive_api.CreateMaxForceAttr().Set(self._ur5e_max_force)
+            drive_api.CreateStiffnessAttr().Set(self._ur5e_stiffness)
+            drive_api.CreateDampingAttr().Set(self._ur5e_damping)
+            print(
+                f"[AIC-DT] joint-drives-urdf-reconcile: {joint_name} → "
+                f"stiffness={self._ur5e_stiffness} damping={self._ur5e_damping} "
+                f"maxForce={self._ur5e_max_force}"
+            )
 
-        print("UR5e robot loaded successfully (with integrated Robotiq Hand-E gripper and cable)!")
+        # Articulation root sits at /World/UR5e/aic_unified_robot per
+        # _articulation_root_prim_path. Author solver iters from aic_isaaclab.
+        artic_root_prim = stage.GetPrimAtPath(self._articulation_root_prim_path)
+        if artic_root_prim.IsValid():
+            try:
+                physx_artic = PhysxSchema.PhysxArticulationAPI.Apply(artic_root_prim)
+                physx_artic.CreateSolverPositionIterationCountAttr().Set(16)
+                physx_artic.CreateSolverVelocityIterationCountAttr().Set(8)
+                print("[AIC-DT] joint-drives-urdf-reconcile: solver iters pos=16 vel=8")
+            except Exception as exc:  # noqa: BLE001 — solver iter authoring is best-effort
+                print(f"[AIC-DT] joint-drives-urdf-reconcile: solver iter author skipped: {exc}")
+        else:
+            print(
+                f"[AIC-DT] joint-drives-urdf-reconcile: articulation root prim "
+                f"not found at {self._articulation_root_prim_path}"
+            )
 
     async def setup_action_graph(self):
         import omni.graph.core as og

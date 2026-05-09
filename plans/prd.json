@@ -116,7 +116,7 @@
       "title": "Reconcile arm joint drives to URDF defaults",
       "category": "runtime-gate",
       "priority": "tracer-bullet",
-      "passes": false,
+      "passes": true,
       "requires_sim": true,
       "files_likely": [
         "exts/aic-dt/aic_dt/extension.py (load_robot — set drive params after articulation init)",
