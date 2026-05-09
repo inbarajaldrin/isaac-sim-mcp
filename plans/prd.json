@@ -216,7 +216,7 @@
       "title": "Verify PARITY-10 pose-cmd round-trip post-fix 922a7d5",
       "category": "runtime-gate",
       "priority": "critical",
-      "passes": false,
+      "passes": true,
       "requires_sim": true,
       "files_likely": [
         "exts/aic-dt/aic_dt/controller_loop.py (verify only; fix may already be in place)",

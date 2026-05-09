@@ -459,6 +459,29 @@ class AicControllerLoop:
                 print(f"[AIC-DT][controller] OGN articulation_controller deactivation failed: {exc!r}")
                 self._ogn_articulation_ctrl_removed = True  # don't keep retrying on permanent failure
 
+        # Self-heal: when the stage is destroyed + recreated mid-session
+        # (e.g. operator runs another quick_start, or load_trial swaps the
+        # task board), PhysX deletes the underlying `_physics_view` buffer
+        # on the existing Articulation pointer. Subsequent set_joint_positions
+        # raises AttributeError("'Articulation' object has no attribute
+        # '_physics_view'") — same root cause that wrench-rootcause patched
+        # in extension._lazy_init_articulation. Mirror that fix here:
+        # detect the missing buffer, NULL the handle + reset the
+        # initialization flag so the recreate-after-30-ticks branch below
+        # rebuilds against the now-fresh stage. Without this, _apply_pose_cmd
+        # and _apply_joint_cmd fail silently after any stage reset and the
+        # arm stops responding to commands until the extension is reloaded.
+        if (self._articulation_reinitialized
+                and self._articulation is not None
+                and not (hasattr(self._articulation, "_physics_view")
+                         and self._articulation._physics_view is not None)):
+            print("[AIC-DT][controller] articulation _physics_view invalidated "
+                  "(stage destroyed mid-session); recreating handle")
+            self._articulation = None
+            self._kinematics = None
+            self._articulation_reinitialized = False
+            self._init_wait_ticks = 0
+
         # Wait several ticks then RECREATE the Articulation handle (not just
         # re-initialize). Empirically, calling initialize() on the existing
         # handle from physics-tick thread doesn't populate _physics_view.
