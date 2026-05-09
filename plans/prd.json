@@ -63,7 +63,8 @@
         "Capture is reproducible: re-running the documented steps produces the same insertion_event/offlimit verdicts (run twice if uncertain)"
       ],
       "verify_command": "test -f exts/aic-dt/docs/trial_outcomes/trial_1__gazebo.json && test -f exts/aic-dt/docs/trial_outcomes/trial_2__gazebo.json && test -f exts/aic-dt/docs/trial_outcomes/trial_3__gazebo.json && python3 -c \"import json; [json.load(open(f'exts/aic-dt/docs/trial_outcomes/trial_{i}__gazebo.json')) for i in (1,2,3)]\" && test -f exts/aic-dt/docs/gazebo-baseline-capture.md",
-      "notes": "Independent — picks up early. Cross-repo touches into ~/Documents/aic likely (read-only or invocation; track any actual edits in plans/cross_repo_changes.json). Hardware reality: running Gazebo concurrently with Isaac Sim may stress the machine — operator may want to kill Isaac Sim before this task runs and relaunch after."
+      "notes": "Independent — picks up early. Cross-repo touches into ~/Documents/aic likely (read-only or invocation; track any actual edits in plans/cross_repo_changes.json). Hardware reality: running Gazebo concurrently with Isaac Sim may stress the machine — operator may want to kill Isaac Sim before this task runs and relaunch after.",
+      "verification_mode": "docker"
     },
     {
       "id": "gripper-tcp-ingress",
@@ -76,14 +77,17 @@
         "exts/aic-dt/aic_dt/controller_loop.py (verify gripper/tcp branch only)",
         "exts/aic-dt/scripts/probe_gripper_tcp_ingress.py (NEW)"
       ],
-      "skills_required": ["isaac-sim-extension-dev"],
+      "skills_required": [
+        "isaac-sim-extension-dev"
+      ],
       "description": "Plan 02-04 cached the static SE(3) offset from USD prim hierarchy at _setup_kinematics. _apply_pose_cmd applies the inverse transform when frame_id='gripper/tcp'. Code shipped, never round-tripped under live sim. Same procedure as pose-roundtrip-verify but with header.frame_id='gripper/tcp'. Expect tool0 to move; gripper/tcp follows by the static offset. Informal hint: pose-roundtrip-verify's fix likely needs to be in place first for the underlying joint motion to behave correctly.",
       "acceptance": [
         "TF lookup base_link→gripper/tcp post-command shows the commanded delta within 0.005m tolerance",
         "Confirms Plan 02-04's deferred trial verdict — does the cached offset apply correctly?"
       ],
       "verify_command": "python3 exts/aic-dt/scripts/probe_gripper_tcp_ingress.py --axis z --delta -0.03 --tolerance 0.005",
-      "notes": "Tracer-bullet — small standalone slice. Independent of transport / parity work."
+      "notes": "Tracer-bullet — small standalone slice. Independent of transport / parity work.",
+      "verification_mode": "sim"
     },
     {
       "id": "isaaclab-leverage-research",
@@ -95,14 +99,17 @@
       "files_likely": [
         "exts/aic-dt/docs/aic-isaaclab-leverage.md (NEW)"
       ],
-      "skills_required": ["nvidia-suite-docs"],
+      "skills_required": [
+        "nvidia-suite-docs"
+      ],
       "description": "AIC ships an Isaac Lab environment somewhere under ~/Documents/aic/. The existing GSD work built on Isaac Sim 5.0 extension-based path (aic-dt) without leveraging AIC's Isaac Lab env at any point. Investigate whether this is a missed leverage point. Steps: (1) locate and read AIC's Isaac Lab env source (find / locate any aic_isaaclab / *_isaaclab / Isaac Lab task definitions under ~/Documents/aic/); (2) catalog reusable assets — USD paths, robot init logic, controller wiring patterns, scoring/contact pipelines, environment registration; (3) compare against what aic-dt currently re-implements; (4) verdict: leverage now (M1) / leverage in M2 / not-applicable (Isaac Lab env serves a different purpose). This is INFORMATIONAL — does not gate any other task; if the verdict is 'leverage now' and re-pointing aic-dt at AIC's Isaac Lab env saves significant work, raise as a blocker note in progress.txt and we re-scope.",
       "acceptance": [
         "exts/aic-dt/docs/aic-isaaclab-leverage.md committed with sections: 'Located at' (path or 'not found'), 'What it contains' (catalog), 'Overlap with aic-dt' (matrix of features), 'Verdict' (leverage now / leverage M2 / N/A), 'Rationale'",
         "If verdict is 'leverage now', a follow-up note appended to plans/progress.txt suggesting PRD restructure"
       ],
       "verify_command": "test -f exts/aic-dt/docs/aic-isaaclab-leverage.md && grep -q 'Verdict' exts/aic-dt/docs/aic-isaaclab-leverage.md && grep -q 'Located at' exts/aic-dt/docs/aic-isaaclab-leverage.md",
-      "notes": "Independent of all sim work. Cheap (30-60min). Picked up early reduces risk of duplicating work AIC already shipped."
+      "notes": "Independent of all sim work. Cheap (30-60min). Picked up early reduces risk of duplicating work AIC already shipped.",
+      "verification_mode": "doc-only"
     },
     {
       "id": "joint-drives-urdf-reconcile",
@@ -115,7 +122,10 @@
         "exts/aic-dt/aic_dt/extension.py (load_robot — set drive params after articulation init)",
         "exts/aic-dt/scripts/probe_joint_drives.py (NEW; reads live drive params from articulation)"
       ],
-      "skills_required": ["isaac-sim-extension-dev", "nvidia-suite-docs"],
+      "skills_required": [
+        "isaac-sim-extension-dev",
+        "nvidia-suite-docs"
+      ],
       "description": "Live audit found arm joint drives are inherited from on-disk USD's OEM defaults (stiffness 95→1322 across joints, damping 0.038→0.529, maxForce 28 or 150) which differ from AIC URDF spec (stiffness=2000, damping=100, maxForce=87 per ~/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro). load_robot doesn't set drive params after articulation init. Two steps: (1) cross-check the URDF source-of-truth values (read ur_gz.urdf.xacro joint definitions); (2) call set_gains / drive API on each arm joint after articulation init in load_robot to match URDF. If URDF + live values are intentionally divergent (e.g., OEM defaults give better Isaac Sim physics behavior), document the rationale instead.",
       "acceptance": [
         "After quick_start, all 6 arm joint drives match URDF spec values (stiffness=2000 ±5%, damping=100 ±5%, maxForce=87 ±5%) — verified by probe_joint_drives.py",
@@ -123,7 +133,8 @@
         "If divergence is intentional, exts/aic-dt/docs/joint-drives-rationale.md documents WHY (e.g., simulation stability) with citations to live behavior — and this task closes with passes:true on grounds of intentional divergence (not ignored)"
       ],
       "verify_command": "python3 exts/aic-dt/scripts/probe_joint_drives.py --expected-stiffness 2000 --expected-damping 100 --expected-max-force 87 --tolerance-pct 5",
-      "notes": "Audit finding #4. Could affect trial outcomes if PD response on the arm is off — hence runtime-gate category."
+      "notes": "Audit finding #4. Could affect trial outcomes if PD response on the arm is off — hence runtime-gate category.",
+      "verification_mode": "sim"
     },
     {
       "id": "motion-deficit-hunt",
@@ -137,7 +148,10 @@
         "exts/aic-dt/aic_dt/extension.py",
         "exts/aic-dt/scripts/probe_motion_roundtrip.py (NEW)"
       ],
-      "skills_required": ["isaac-sim-extension-dev", "nvidia-suite-docs"],
+      "skills_required": [
+        "isaac-sim-extension-dev",
+        "nvidia-suite-docs"
+      ],
       "description": "Post-fix b682de1 (joint_indices=[[0..5]] on 4 call sites), shoulder_lift_joint round-trip on +0.10 rad command produces Δ≈0.016 rad — only 16% commanded amplitude reaches /joint_states. Writes reach DOFs but 84% dissipates. Hunt the root cause through this hypothesis ladder: (1) OGN articulation_controller PD residual still pulling toward stale /joint_states target — verify via og.Controller.attribute('inputs:enabled', node).get(); (2) Phase 3 cable activation expanded articulation 6→46 DOFs; cable mass-coupling on arm joints — temporarily SetActive(False) on /World/UR5e/cable, re-run, compare; (3) set_joint_positions vs apply_action(PD target) interaction — log _articulation._physics_view.get_dof_position_targets() post-write to compare commanded vs actual. Apply the fix from the winning hypothesis. If multiple contribute, fix all.",
       "acceptance": [
         "Round-trip on +0.10 rad shoulder_lift_joint command produces Δ ≥ 0.095 rad in /joint_states within 2 seconds",
@@ -146,7 +160,8 @@
       ],
       "verify_command": "python3 exts/aic-dt/scripts/probe_motion_roundtrip.py --joint shoulder_lift_joint --target 0.10 --tolerance 0.095 --window-seconds 2",
       "verify_recipe": "If probe_motion_roundtrip.py doesn't exist yet, write it: subscribe /joint_states; record initial joint position; publish JointMotionUpdate to /aic_controller/joint_commands with shoulder_lift_joint=initial+target; sleep window-seconds; read /joint_states; assert |final - (initial+target)| <= tolerance.",
-      "notes": "Reference .planning/phases/04-trial-loader/04-3.5-PLAN.md Task 1 for the full hypothesis ladder."
+      "notes": "Reference .planning/phases/04-trial-loader/04-3.5-PLAN.md Task 1 for the full hypothesis ladder.",
+      "verification_mode": "sim"
     },
     {
       "id": "parity-report-run",
@@ -167,7 +182,8 @@
         "parity_report.py exits 0 (all trials match across sims)"
       ],
       "verify_command": "python3 exts/aic-dt/scripts/parity_report.py && grep -q 'all trials match' docs/parity-report.md",
-      "notes": "If outcomes diverge, this task FAILS — agent does not flip passes:true. Iteration must investigate which trial diverged + why."
+      "notes": "If outcomes diverge, this task FAILS — agent does not flip passes:true. Iteration must investigate which trial diverged + why.",
+      "verification_mode": "unit-test"
     },
     {
       "id": "parity-report-tool",
@@ -192,7 +208,8 @@
       ],
       "verify_command": "bash exts/aic-dt/scripts/test_parity_report.sh",
       "verify_recipe": "Agent writes test_parity_report.sh: creates 2 mock trial_outcomes JSON files, runs parity_report.py, asserts the markdown table contains both, asserts deterministic output (run twice, diff = 0), cleans up mocks.",
-      "notes": "Independent of all sim work. Ideal early iteration target."
+      "notes": "Independent of all sim work. Ideal early iteration target.",
+      "verification_mode": "unit-test"
     },
     {
       "id": "pose-roundtrip-verify",
@@ -205,14 +222,18 @@
         "exts/aic-dt/aic_dt/controller_loop.py (verify only; fix may already be in place)",
         "exts/aic-dt/scripts/probe_pose_roundtrip.py (NEW)"
       ],
-      "skills_required": ["isaac-sim-extension-dev", "nvidia-suite-docs"],
+      "skills_required": [
+        "isaac-sim-extension-dev",
+        "nvidia-suite-docs"
+      ],
       "description": "Pose-cmd round-trip is 100% broken pre-fix; fix 922a7d5 added joint_indices on 5th call site (Lula IK write) but TF tree desynced after hot-reload prevented mid-session re-test. Validate it now. Procedure: clean-restart Isaac Sim with venv activate + ROS_DOMAIN_ID=7; quick_start; subscribe TF base_link→tool0 to capture x0/y0/z0/q0; publish MotionUpdate with pose.position.z = z0 - 0.05, header.frame_id=base_link, mode=POSITION, stiffness=200, damping=20; hold publish at 30Hz for 3s; re-read TF; compute Δ. Informal hint: if motion-deficit-hunt's fix isn't in place, this task may close simultaneously with it — same surface (controller_loop.py).",
       "acceptance": [
         "|Δz + 0.05| ≤ 0.005m (≥90% commanded amplitude — Cartesian uses Lula IK, looser tolerance than joint cmd)",
         "Round-trip captured deterministically by probe_pose_roundtrip.py — must be re-runnable without manual steps"
       ],
       "verify_command": "python3 exts/aic-dt/scripts/probe_pose_roundtrip.py --axis z --delta -0.05 --tolerance 0.005",
-      "notes": "If motion-deficit-hunt closes the OGN articulation_controller fight, this task likely closes simultaneously."
+      "notes": "If motion-deficit-hunt closes the OGN articulation_controller fight, this task likely closes simultaneously.",
+      "verification_mode": "sim"
     },
     {
       "id": "ship-paperwork",
@@ -239,7 +260,8 @@
         ".planning/.m1_shipped exists (touch)"
       ],
       "verify_command": "test -f .planning/.m1_shipped && grep -q 'M1' README.md && grep -q 'M1' exts/aic-dt/docs/CHANGELOG.md && grep -q 'TRIAL-04.*\\[x\\]' .planning/REQUIREMENTS.md && grep -q 'TRIAL-05.*\\[x\\]' .planning/REQUIREMENTS.md",
-      "notes": "Final task. After this passes, all PRD tasks have passes:true and the iteration prompt's COMPLETE sentinel fires."
+      "notes": "Final task. After this passes, all PRD tasks have passes:true and the iteration prompt's COMPLETE sentinel fires.",
+      "verification_mode": "doc-only"
     },
     {
       "id": "taskboard-prim-authoring",
@@ -252,7 +274,10 @@
         "exts/aic-dt/aic_dt/extension.py OR exts/aic-dt/aic_dt/scoring_publishers.py (depending on where authoring happens)",
         "exts/aic-dt/scripts/probe_taskboard_authoring.py (NEW)"
       ],
-      "skills_required": ["isaac-sim-extension-dev", "nvidia-suite-docs"],
+      "skills_required": [
+        "isaac-sim-extension-dev",
+        "nvidia-suite-docs"
+      ],
       "description": "4 task-board prims (/World/TaskBoard/base_visual, /World/TaskBoard/SCPort_0/sc_port_visual, /World/TaskBoard/SCPort_1/sc_port_visual, /World/TaskBoard/NICCard/nic_card_visual) have RigidBodyAPI applied AND mass=0 AND density=0. PhysX silently treats them as kinematic. Functional outcome matches Gazebo's bolted-board state, BUT the contact pipeline depends on these being correctly authored as rigid bodies for PhysxContactReportAPI to fire /scoring/insertion_event. Plan 04-03's recursive contact-tag walk fix specifically had to descend into SCPort_0/sc_port_visual because root-only tagging missed rigid-body descendants — so the authoring matters for scoring correctness. Three options: (a) remove RigidBodyAPI entirely (truly static) — simplest, but PhysX may then skip these from contact reports altogether; (b) set kinematicEnabled=true on RigidBodyAPI explicitly — preserves contact reporting, makes intent explicit; (c) give them real mass + density — risks unintended dynamics if anchoring isn't already in place. Use isaac-sim-extension-dev + nvidia-suite-docs skills to check live PhysX 5.0 behavior for kinematic+RigidBodyAPI vs static-no-API contact-report semantics; pick the option that preserves contact firing reliably.",
       "acceptance": [
         "All 4 prims authored consistently (one of the 3 options above), with rationale in commit message citing live PhysX 5.0 contact-report behavior from nvidia-suite-docs",
@@ -260,7 +285,8 @@
         "Probe script captures the 4 prims' final API state (RigidBodyAPI applied? mass? density? kinematicEnabled?) and logs it; this becomes the authoring contract"
       ],
       "verify_command": "python3 exts/aic-dt/scripts/probe_taskboard_authoring.py && bash exts/aic-dt/scripts/probe_insertion_event_fires.sh",
-      "notes": "Audit finding #6. Connection to M1: scoring topic fires depend on this. Trial fires need this in place."
+      "notes": "Audit finding #6. Connection to M1: scoring topic fires depend on this. Trial fires need this in place.",
+      "verification_mode": "sim"
     },
     {
       "id": "trial-1-fire",
@@ -272,7 +298,9 @@
       "files_likely": [
         "exts/aic-dt/docs/trial_outcomes/trial_1__isaacsim.json (NEW)"
       ],
-      "skills_required": ["isaac-sim-extension-dev"],
+      "skills_required": [
+        "isaac-sim-extension-dev"
+      ],
       "description": "Run unmodified aic_engine + CheatCode policy against Isaac Sim for trial_1 of sample_config.yaml with quick_start(enable_cameras=False). Use the wrapper extended in wrapper-json-emit to capture per-trial outcome JSON. Gazebo baseline is captured separately by gazebo-baselines-capture. Informal prerequisites: motion-deficit-hunt + pose-roundtrip-verify + wrench-rootcause + gripper-tcp-ingress + joint-drives-urdf-reconcile + taskboard-prim-authoring + zenoh-path-implementation + wrapper-json-emit. If those aren't in place, this task's verify will fail; pick a different task instead.",
       "acceptance": [
         "exts/aic-dt/docs/trial_outcomes/trial_1__isaacsim.json exists with shape {trial_id, sim:'isaacsim', insertion_event_fired, offlimit_contact_count, completed_steps, ts}",
@@ -280,7 +308,8 @@
         "Outcome match vs Gazebo verified separately in parity-report-run — this task only captures the Isaac Sim side"
       ],
       "verify_command": "test -f exts/aic-dt/docs/trial_outcomes/trial_1__isaacsim.json && python3 -c \"import json; j=json.load(open('exts/aic-dt/docs/trial_outcomes/trial_1__isaacsim.json')); assert j['sim'] == 'isaacsim' and 'insertion_event_fired' in j and 'offlimit_contact_count' in j\"",
-      "notes": "Capture is the unit; parity assertion is parity-report-run's job."
+      "notes": "Capture is the unit; parity assertion is parity-report-run's job.",
+      "verification_mode": "sim+docker"
     },
     {
       "id": "trial-2-fire",
@@ -292,12 +321,15 @@
       "files_likely": [
         "exts/aic-dt/docs/trial_outcomes/trial_2__isaacsim.json (NEW)"
       ],
-      "skills_required": ["isaac-sim-extension-dev"],
+      "skills_required": [
+        "isaac-sim-extension-dev"
+      ],
       "description": "Same as trial-1-fire but for trial_2 of sample_config.yaml. Reuses the running sim + container state from trial-1-fire. Informal prerequisite: trial-1-fire (proves the wrapper + transport + sim work end-to-end on at least one trial).",
       "acceptance": [
         "exts/aic-dt/docs/trial_outcomes/trial_2__isaacsim.json exists with the standard shape, produced by the wrapper extension from wrapper-json-emit"
       ],
-      "verify_command": "test -f exts/aic-dt/docs/trial_outcomes/trial_2__isaacsim.json && python3 -c \"import json; j=json.load(open('exts/aic-dt/docs/trial_outcomes/trial_2__isaacsim.json')); assert j['sim'] == 'isaacsim' and 'insertion_event_fired' in j and 'offlimit_contact_count' in j\""
+      "verify_command": "test -f exts/aic-dt/docs/trial_outcomes/trial_2__isaacsim.json && python3 -c \"import json; j=json.load(open('exts/aic-dt/docs/trial_outcomes/trial_2__isaacsim.json')); assert j['sim'] == 'isaacsim' and 'insertion_event_fired' in j and 'offlimit_contact_count' in j\"",
+      "verification_mode": "sim+docker"
     },
     {
       "id": "trial-3-fire",
@@ -309,12 +341,15 @@
       "files_likely": [
         "exts/aic-dt/docs/trial_outcomes/trial_3__isaacsim.json (NEW)"
       ],
-      "skills_required": ["isaac-sim-extension-dev"],
+      "skills_required": [
+        "isaac-sim-extension-dev"
+      ],
       "description": "Same as trial-1-fire / trial-2-fire but for trial_3 — uses sfp_sc_cable_reversed cable type. Tests the cable-rotation edge case. Informal prerequisite: trial-2-fire (sequencing reuses sim + container state).",
       "acceptance": [
         "exts/aic-dt/docs/trial_outcomes/trial_3__isaacsim.json exists with the standard shape, produced by the wrapper extension from wrapper-json-emit"
       ],
-      "verify_command": "test -f exts/aic-dt/docs/trial_outcomes/trial_3__isaacsim.json && python3 -c \"import json; j=json.load(open('exts/aic-dt/docs/trial_outcomes/trial_3__isaacsim.json')); assert j['sim'] == 'isaacsim' and 'insertion_event_fired' in j and 'offlimit_contact_count' in j\""
+      "verify_command": "test -f exts/aic-dt/docs/trial_outcomes/trial_3__isaacsim.json && python3 -c \"import json; j=json.load(open('exts/aic-dt/docs/trial_outcomes/trial_3__isaacsim.json')); assert j['sim'] == 'isaacsim' and 'insertion_event_fired' in j and 'offlimit_contact_count' in j\"",
+      "verification_mode": "sim+docker"
     },
     {
       "id": "wrapper-json-emit",
@@ -336,7 +371,8 @@
       ],
       "verify_command": "bash exts/aic-dt/scripts/test_wrapper_json_emit.sh",
       "verify_recipe": "Agent writes test_wrapper_json_emit.sh: invokes wrapper with --output-json on trial_1 (or a stub trial), asserts JSON file exists with required keys, asserts JSON is parseable, asserts the run without --output-json doesn't write the JSON. Cleans up test artifacts.",
-      "notes": "Sister script for Gazebo path may be needed in gazebo-baselines-capture — let that task decide whether to extend the same wrapper for --gazebo mode or create a sibling wrapper based on how AIC's pipeline already runs Gazebo trials."
+      "notes": "Sister script for Gazebo path may be needed in gazebo-baselines-capture — let that task decide whether to extend the same wrapper for --gazebo mode or create a sibling wrapper based on how AIC's pipeline already runs Gazebo trials.",
+      "verification_mode": "docker"
     },
     {
       "id": "wrench-rootcause",
@@ -349,7 +385,10 @@
         "exts/aic-dt/aic_dt/extension.py",
         "exts/aic-dt/aic_dt/parity_publishers.py (reference for lazy-init pattern)"
       ],
-      "skills_required": ["isaac-sim-extension-dev", "nvidia-suite-docs"],
+      "skills_required": [
+        "isaac-sim-extension-dev",
+        "nvidia-suite-docs"
+      ],
       "description": "/fts_broadcaster/wrench publishes 13.6Hz with all-zero payload. '[Force callback] Articulation object has no attribute _physics_view' fires every tick despite path-correction commit 6fc6d26 + hasattr guard. Investigation: (1) use nvidia-suite-docs skill to fetch Isaac Sim 5.0 Articulation lifecycle — when does _physics_view populate post-initialize()? Does Articulation (multi-prim) differ from SingleArticulation for prim_paths_expr=root_joint? (2) Compare _lazy_init_articulation in extension.py vs parity_publishers.py:_on_physics_step lazy init — parity_publishers WORKS for /joint_states (positions read fine), find the divergence in init order or method-access pattern. (3) If a fundamental gap exists requiring a workaround pattern (manual physics-view reconstruction, alternate Articulation subclass), document the workaround clearly — don't claim full closure if fragile.",
       "acceptance": [
         "/fts_broadcaster/wrench publishes nonzero force/torque on idle gravity-loaded robot (idle weight should produce nonzero z-axis)",
@@ -358,7 +397,8 @@
         "If solution is a workaround (not root-cause fix), label it as such honestly; verdict tier = root-caused / workaround / diagnosed-but-unsolvable"
       ],
       "verify_command": "python3 exts/aic-dt/scripts/probe_wrench_nonzero.py --window-seconds 5 --min-z-magnitude 0.5",
-      "notes": "aic_adapter consumes via Observation.wrist_wrench → reaches model. Without this, every CheatCode trial gets garbage wrench and may behave unpredictably. Parity_publishers gives a known-good lazy-init reference."
+      "notes": "aic_adapter consumes via Observation.wrist_wrench → reaches model. Without this, every CheatCode trial gets garbage wrench and may behave unpredictably. Parity_publishers gives a known-good lazy-init reference.",
+      "verification_mode": "sim"
     },
     {
       "id": "wrist-cameras-restore",
@@ -373,7 +413,10 @@
         "exts/aic-dt/scripts/probe_camera_topics.sh (NEW)",
         "exts/aic-dt/docs/wrist-cameras.md (NEW; documents the 3 frame_ids + topics + ROS-frame quaternion convention)"
       ],
-      "skills_required": ["isaac-sim-extension-dev", "nvidia-suite-docs"],
+      "skills_required": [
+        "isaac-sim-extension-dev",
+        "nvidia-suite-docs"
+      ],
       "description": "Currently zero camera topics publish. setup_wrist_cameras logs 'Setup 0/3' every quick_start because the WRIST_CAMERAS prim_suffix expects center_camera_optical/center_camera (Camera child of Xform) but the live unified-robot USD has center_camera_optical as Xform with only visuals/collisions children — NO Camera prims authored anywhere. Three steps: (1) author 3 Camera prims under existing wrist Xform parents (left_camera_optical/left_camera, center_camera_optical/center_camera, right_camera_optical/right_camera) with ROS-frame -Z-forward → +X-forward orientation correction (per nvidia-suite-docs Isaac Sim 5.0 Camera prim authoring + isaac-sim-extension-dev wrist-camera attachment pattern); (2) verify setup_wrist_cameras now logs 'Setup 3/3' and publishes /wrist_camera_left/image_raw, /wrist_camera_center/image_raw, /wrist_camera_right/image_raw (or whatever the Gazebo-faithful topic names are — capture from aic_eval Docker before authoring); (3) add enable_cameras: bool=False kwarg on quick_start, gate setup_wrist_cameras call on it, default False so parity-report-run ship-gate runs without camera bandwidth (Docker engine consumes ground_truth, not vision). Operator can flip to True for vision testing.",
       "acceptance": [
         "Calling quick_start(enable_cameras=True) results in 3 camera topics publishing (verified by ros2 topic list | grep -c camera = 3)",
@@ -385,7 +428,8 @@
       ],
       "verify_command": "bash exts/aic-dt/scripts/probe_camera_topics.sh",
       "verify_recipe": "Script: (1) call quick_start(enable_cameras=False) via MCP; assert ros2 topic list shows 0 wrist-camera topics; (2) call quick_start(enable_cameras=True); assert 3 camera topics with rate >5Hz; (3) ros2 topic echo --once on each, assert non-empty data + nonzero width/height; (4) exit 0 only if both branches pass.",
-      "notes": "Absorbs Phase 1 Plan 01-G05's setup_wrist_cameras prim path correction. Cross-repo touch likely: capturing Gazebo topic names requires aic_eval container, which is read-only for this purpose."
+      "notes": "Absorbs Phase 1 Plan 01-G05's setup_wrist_cameras prim path correction. Cross-repo touch likely: capturing Gazebo topic names requires aic_eval container, which is read-only for this purpose.",
+      "verification_mode": "sim"
     },
     {
       "id": "zenoh-path-implementation",
@@ -409,14 +453,15 @@
       ],
       "verify_command": "bash exts/aic-dt/scripts/verify_zenoh_path.sh",
       "verify_recipe": "If verify_zenoh_path.sh doesn't exist, the agent creates it as part of this task — script must validate the path-specific acceptance items above and exit 0 only if all pass.",
-      "notes": "This is the gate that opens up wrapper-json-emit + trial-N-fire."
+      "notes": "This is the gate that opens up wrapper-json-emit + trial-N-fire.",
+      "verification_mode": "docker"
     },
     {
       "id": "zenoh-path-research",
       "title": "Research & decide model-zenoh transport path",
       "category": "integration-research",
       "priority": "critical",
-      "passes": false,
+      "passes": true,
       "requires_sim": false,
       "files_likely": [
         "exts/aic-dt/docs/zenoh-decision.md (NEW)"
@@ -429,7 +474,8 @@
         "If neither (a) nor (b) is clearly cheaper, the doc says so and recommends (c) as a discriminator-only smoke test before committing to (b)"
       ],
       "verify_command": "test -f exts/aic-dt/docs/zenoh-decision.md && grep -q 'Why zenoh' exts/aic-dt/docs/zenoh-decision.md && grep -q 'Path verdict' exts/aic-dt/docs/zenoh-decision.md && grep -q 'Implementation plan' exts/aic-dt/docs/zenoh-decision.md",
-      "notes": "Operator preference: rebuild humble-native is fine if not a multi-file rewrite; bridge is fine if it preserves architectural fidelity. Decision belongs to research, not preference."
+      "notes": "Operator preference: rebuild humble-native is fine if not a multi-file rewrite; bridge is fine if it preserves architectural fidelity. Decision belongs to research, not preference.",
+      "verification_mode": "doc-only"
     }
   ]
 }
