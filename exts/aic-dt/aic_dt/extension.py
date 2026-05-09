@@ -3418,6 +3418,21 @@ class DigitalTwin(omni.ext.IExt):
             xform.ClearXformOpOrder()
             xform.AddTranslateOp().Set(Gf.Vec3d(float(position[0]), float(position[1]), float(position[2])))
             xform.AddRotateXYZOp().Set(Gf.Vec3f(float(rpy[0]), float(rpy[1]), float(rpy[2])))
+            # taskboard-prim-authoring (audit finding #6): explicitly mark any
+            # RigidBodyAPI descendant kinematic_enabled=True. The on-disk
+            # task_board_rigid.usd / sc_port.usd / nic_card.usd carry RigidBodyAPI
+            # with mass=0 + density=0, which PhysX silently treats as kinematic —
+            # but the authoring is fragile. AIC's Isaac Lab env at
+            # ~/Documents/aic/aic_utils/aic_isaac/aic_isaaclab/.../aic_task_env_cfg.py
+            # uses RigidObjectCfg(kinematic_enabled=True) on all task-board parts;
+            # mirror that explicit authoring so PhysX contact-report semantics are
+            # deterministic and PhysxContactReportAPI tagging finds rigid bodies
+            # reliably (per scoring_publishers._tag_rigid_bodies_under).
+            spawned_prim = stage.GetPrimAtPath(prim_path)
+            if spawned_prim and spawned_prim.IsValid():
+                for desc in Usd.PrimRange(spawned_prim):
+                    if desc.HasAPI(UsdPhysics.RigidBodyAPI):
+                        UsdPhysics.RigidBodyAPI(desc).CreateKinematicEnabledAttr().Set(True)
             return {"status": "success",
                     "message": f"Spawned {prim_path} pose=({position[0]:.4f},{position[1]:.4f},{position[2]:.4f}, RPY=({rpy[0]:.4f},{rpy[1]:.4f},{rpy[2]:.4f}))"}
         except Exception as e:

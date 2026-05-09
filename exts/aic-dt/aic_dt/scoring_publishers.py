@@ -58,7 +58,22 @@ _OBJECTS_POSES_FRAMES = [
 ]
 
 # Plug-port pair for /scoring/insertion_event detection (Plan 03-05).
-_PLUG_END_LINK_PATH = "/World/UR5e/cable/Rope/Rope/link_20"
+# Both paths qualify as "the plug" for contact-report purposes:
+#   - /World/UR5e/cable/Rope/Rope/link_20 — cable rope chain end (Plan 03-01
+#     topology probe). RigidBodyAPI + CollisionAPI live on link_20 itself.
+#   - /World/UR5e/cable/sc_plug_visual — plug visual body (RigidBodyAPI on the
+#     parent prim, CollisionAPI on 13 child mesh prims). taskboard-prim-authoring
+#     iter (2026-05-09) discovered that sustained (link_20 ↔ port) contact is
+#     rare under live cable-physics + kinematic-port stimulus, while
+#     (sc_plug_visual ↔ port) contacts dominate — so the rope-end-only filter
+#     was effectively starving _maybe_publish_insertion_event of input. Both
+#     are mechanically the plug for trial scoring.
+_PLUG_PATH_PREFIXES = (
+    "/World/UR5e/cable/Rope/Rope/link_20",
+    "/World/UR5e/cable/sc_plug_visual",
+)
+# Backwards-compat alias retained for any external imports / test harnesses.
+_PLUG_END_LINK_PATH = _PLUG_PATH_PREFIXES[0]
 # Default _PORT_LINK_PATHS — used by Phase 3 cable-only scenes that don't
 # spawn the full task board. Plan 04-03 D-13 fallback (Wave 1 A4=MISMATCH):
 # load_trial overrides via AicScoringPublishers.set_port_link_paths(...) to
@@ -221,9 +236,10 @@ class AicScoringPublishers:
             applied = 0
             effective_ports = self._effective_port_link_paths()
             tag_audit = {}
-            plug_count, plug_tagged = _tag_rigid_bodies_under(_PLUG_END_LINK_PATH)
-            applied += plug_count
-            tag_audit[_PLUG_END_LINK_PATH] = plug_tagged
+            for plug_prefix in _PLUG_PATH_PREFIXES:
+                plug_count, plug_tagged = _tag_rigid_bodies_under(plug_prefix)
+                applied += plug_count
+                tag_audit[plug_prefix] = plug_tagged
             for path in effective_ports:
                 c, t = _tag_rigid_bodies_under(path)
                 applied += c
@@ -418,10 +434,12 @@ class AicScoringPublishers:
             except Exception:
                 continue
             # Determine if this is a plug↔port pair (use effective override if set)
+            def _is_plug(path):
+                return any(path.startswith(prefix) for prefix in _PLUG_PATH_PREFIXES)
             for port_path in self._effective_port_link_paths():
                 hit = (
-                    (actor0.startswith(_PLUG_END_LINK_PATH) and actor1.startswith(port_path))
-                    or (actor1.startswith(_PLUG_END_LINK_PATH) and actor0.startswith(port_path))
+                    (_is_plug(actor0) and actor1.startswith(port_path))
+                    or (_is_plug(actor1) and actor0.startswith(port_path))
                 )
                 if hit:
                     port_name = port_path.rsplit("/", 1)[-1]

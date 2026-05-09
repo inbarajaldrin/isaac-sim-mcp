@@ -268,7 +268,7 @@
       "title": "Reconcile 4 task-board prim authoring (RigidBodyAPI + mass=0 + density=0)",
       "category": "scene-authoring",
       "priority": "critical",
-      "passes": false,
+      "passes": true,
       "requires_sim": true,
       "files_likely": [
         "exts/aic-dt/aic_dt/extension.py OR exts/aic-dt/aic_dt/scoring_publishers.py (depending on where authoring happens)",
