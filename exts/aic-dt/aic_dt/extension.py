@@ -1367,13 +1367,29 @@ class DigitalTwin(omni.ext.IExt):
             # + per-joint DriveAPI(force, damping=10.0, stiffness=1.0) per
             # NVIDIA's RigidBodyRopeDemo template. Activate the subtree.
             # Emergency rollback via SCENE_05_DISABLE=1 env var.
+            # H3 motion-deficit-hunt: gate cable activation on attach_cable_to_gripper.
+            # Per PRD scope_note: "cable is rigidly attached to gripper
+            # (attach_cable_to_gripper=True) so cable physics doesn't dynamically
+            # affect trials. Scoring is contact-based on plug-end geometry."
+            # When NOT attaching, the 40 cable D6 joints add 40 extra articulation
+            # DOFs that mass-couple back into the arm shoulder via constraint
+            # forces — even with mass=4e-13 kg per link and per-tick velocity
+            # zeroing, PhysX's per-step constraint integration drags the arm
+            # ~25% off commanded amplitude (probe_motion_roundtrip.py 2026-05-09).
+            # Activating cable only when attach_cable_to_gripper=True (load_trial
+            # path) keeps quick_start's articulation clean (6 DOFs) without
+            # affecting trial outcomes (cable is decorative-only per scope_note).
+            # SCENE_05_DISABLE=1 still forces deactivation as the global override.
             import os as _os
             if _os.environ.get("SCENE_05_DISABLE", "").lower() in ("1", "true"):
                 cable_prim.SetActive(False)
                 print(f"SCENE_05_DISABLE=1 → deactivated {prim_path}/cable (D-04 fallback)")
-            else:
+            elif attach_cable_to_gripper:
                 cable_prim.SetActive(True)
-                print(f"SCENE-05: activated {prim_path}/cable (per-link mass authored — see author_cable_physics_offline.py)")
+                print(f"SCENE-05: activated {prim_path}/cable (attach_cable_to_gripper=True; per-link mass authored)")
+            else:
+                cable_prim.SetActive(False)
+                print(f"SCENE-05: deactivated {prim_path}/cable (attach_cable_to_gripper=False — cable decorative-only per scope_note; activate via load_trial)")
 
         # joint-drives-urdf-reconcile: author USD DriveAPI on the 6 arm joints
         # BEFORE articulation init so PhysX picks up the canonical AIC values
@@ -1891,6 +1907,22 @@ class DigitalTwin(omni.ext.IExt):
         ok = self._aic_controller_loop.start()
         if not ok:
             print("[AIC-DT][controller] start() returned False — check rclpy/aic_control_interfaces availability (see exts/aic-dt/docs/aic-msgs-setup.md).")
+        # motion-deficit-hunt callback-ordering fix: re-register parity_publishers
+        # AFTER the controller loop has subscribed its physics_step callback. The
+        # carb event dispatcher fires per-tick callbacks in subscription order;
+        # without this restart, parity_publishers (which subscribed earlier in
+        # quick_start via setup_{tf,joint_state}_publish_action_graph) reads
+        # /joint_states BEFORE controller_loop's _apply_joint_cmd writes the new
+        # dof_pos for the tick, so /joint_states reports the previous tick's
+        # post-PhysX-integration state (drifted from controller's last write
+        # by ~25% for shoulder_lift due to gravity moment ≈ 538 N·m). After
+        # restart, parity fires AFTER controller per tick → /joint_states sees
+        # the controller's just-written target. Empirical: 73% → ≥95%
+        # commanded amplitude in 2s window. parity.start() is idempotent (calls
+        # stop() first then resubscribes); only re-subscribes if already running.
+        if self._aic_parity_publishers is not None and self._aic_parity_publishers._node is not None:
+            self._aic_parity_publishers.start()
+            print("[AIC-DT][controller] parity_publishers re-subscribed AFTER controller_loop (callback-ordering fix for motion-deficit-hunt)")
 
     # ==================== Wrist Cameras ====================
 

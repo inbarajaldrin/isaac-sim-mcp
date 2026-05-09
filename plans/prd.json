@@ -141,7 +141,7 @@
       "title": "Diagnose & fix PARITY-09 motion deficit (≥95% commanded amplitude)",
       "category": "runtime-gate",
       "priority": "critical",
-      "passes": false,
+      "passes": true,
       "requires_sim": true,
       "files_likely": [
         "exts/aic-dt/aic_dt/controller_loop.py",

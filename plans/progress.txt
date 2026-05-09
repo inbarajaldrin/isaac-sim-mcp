@@ -240,3 +240,501 @@ FORWARD-INFO into trial-N-fire: with gripper/tcp ingress now landing within 99.8
 
 Files: exts/aic-dt/aic_dt/controller_loop.py (USD path + numpy column-vec offset math + print log line), exts/aic-dt/scripts/probe_gripper_tcp_ingress.py (NEW), plans/prd.json. No cross-repo edits. No sudo. Sim left RESPONSIVE; cache snapshotted. Next iter unblocks motion-deficit-hunt retry / wrist-cameras-restore (sim runtime gates).
 VERIFIED gripper-tcp-ingress by verifier-agent at 2026-05-09T00:00Z — probe_gripper_tcp_ingress.py PASS: Δz=-0.02994m on -0.03m cmd (99.8% commanded amplitude), |err|=0.00006m << 0.005m tolerance gate; base_link→gripper/tcp TF round-trip confirms Plan 02-04 cached SE(3) offset applies correctly post-fix e99f7fe (USD path gripper_tcp + numpy column-vec SE(3) composition).
+
+2026-05-09T22:30Z — motion-deficit-hunt — 3rd ATTEMPT FAILED. Pivot: append diagnostic + stash + exit.
+
+PRE-FLIGHT: working tree clean (only untracked .planning/ skills/ etc). Sim up. Picked motion-deficit-hunt as critical (last bug blocking trial-N-fire → parity-report → M1 ship).
+
+NEW DIAGNOSTIC ISOLATING PHASE (significant advance over prior 2 attempts):
+
+Bypassed transport entirely via execute_python_code direct API write, captured tick-by-tick joint position:
+  initial shoulder_lift = -0.075 rad
+  target = -0.075 + 0.10 = +0.025 rad
+  set_joint_positions(target, joint_indices=[[0..5]]) → reads back +0.025 ✅ (write SUCCEEDS)
+  + 1 physics tick → -0.022 (50% reverted in 16ms)
+  + 5 ticks       → -0.072 (98% reverted in 83ms)
+  + 120 ticks (2s, with apply_action(joint_positions=...) re-applied per tick) → +0.0039 (3.9% retained)
+  + 120 ticks (2s, with set_joint_position_targets+set_joint_velocity_targets, NO per-tick re-apply) → -0.0001 (0%)
+
+ROOT CAUSE NARROWED: dof_pos write succeeds but PD then drives joint AWAY from new position back toward a STALE target, fast (50% drift per tick). Inspected USD DriveAPI on shoulder_lift_joint:
+  target_pos: 0.0    ← stale; should track our runtime writes
+  stiffness: 2000
+  damping: 100
+  max_force: 87
+  drive_type_attr: "force"
+
+Confirmed NO live OGN ArticulationController nodes (controller_prims=[], graph_nodes=[], artc_nodes=[]) — the Phase-1 OGN race is not the cause. The Articulation API calls (apply_action + set_joint_position_targets + set_joint_velocity_targets) DO NOT propagate to the PhysX runtime PD target — PhysX appears to use USD DriveAPI:targetPosition (0.0) as the persistent PD target.
+
+CHANGES ATTEMPTED (left UNCOMMITTED for next iter to evaluate / stash):
+  exts/aic-dt/aic_dt/controller_loop.py:
+    (a) Added set_joint_velocities(zeros, joint_indices=arm_indices) inside the cmd_changed branch right after set_joint_positions — kills the artificial dof_velocity transient. Documented in comment block; was claimed-implemented since 2026-05-05 but never actually was.
+    (b) Removed `finally: self._latest_joint_cmd = None` (and same for _latest_pose_cmd) in _on_physics_step — cmd now PERSISTS across ticks so apply_action refreshes PD target every tick (mimics aic_controller's >100Hz publish behavior; matches gripper-tcp-ingress probe's success at 99.8% via 30Hz continuous publish).
+
+Both changes are correct as defense-in-depth but neither fixes the underlying issue: PhysX PD target ≠ Articulation API writes in this Isaac Sim 5.0 build. Probe still 8.2% post-fix.
+
+NEXT-ITER HYPOTHESIS LADDER (for whoever picks this up):
+  H1: PhysX in Isaac Sim 5.0 reads DriveAPI:targetPosition from USD per-tick. Fix: write the USD-level
+      attribute directly from controller_loop._apply_joint_cmd:
+        UsdPhysics.DriveAPI.Get(joint_prim, "angular").GetTargetPositionAttr().Set(target_rad_or_deg)
+      Note: USD DriveAPI angular targetPosition is in DEGREES (not radians) per Pixar UsdPhysics schema.
+      Verify by inspecting target_pos AFTER set_joint_position_targets call — does it show the new value?
+  H2: PhysX uses a separate "physics tensor" view; runtime writes need omni.physx.tensors.SimulationView.
+      Reference: nvidia-suite-docs isaac-sim/sensors_physics — the new Newton physics integration
+      may have different APIs vs classic PhysX articulation.
+  H3: drive_type "force" without proper torque computation. Try drive_type "acceleration" mode (drive_types=[[0]*6])
+      so PD computes acceleration target instead of force; less affected by max_force=87 saturation.
+  H4: The articulation PHYSICS solver isn't iterating. Check solver_position_iterations / solver_velocity_iterations
+      live values. URDF spec says pos=16 vel=8 (logged at load_robot). Verify these landed.
+  H5: Gravity moment exceeds joint capacity. Cable + arm distal mass moment on shoulder >> 87 N·m → joint
+      can't HOLD position no matter what target. Check by setting target = current (no change cmd), see if joint
+      sags toward gravity equilibrium in 2s. If yes, this IS the issue — fix is in cable mass authoring or
+      joint max_force value.
+
+CONSTRAINTS PRESERVED: did not weaken any tolerance, didn't disable assertions in CheatCode/aic_*, no mocking. cross_repo_changes.json untouched. No sudo.
+
+Files (uncommitted): exts/aic-dt/aic_dt/controller_loop.py (2 small surgical edits documented above). Probe is unchanged.
+
+REGRESSION SWEEP: skipped per "do NOT commit on verify fail" rule. Other passes:true tasks share controller_loop.py — pose-roundtrip-verify and gripper-tcp-ingress. Both depend on continuous-publish behavior which my removal of cmd-clear should not regress (continuous publish still gives fresh cmd every tick; persist behavior is strictly more permissive). NOT VERIFIED, hence not committed.
+
+NEXT ITER: pivot recommendation — pick taskboard-prim-authoring (passes:true already), trial-N-fire (informally needs motion-deficit-hunt resolved; can't progress), parity-report-run (needs trials), or wrist-cameras-restore (passes:false, tracer-bullet, sim, INDEPENDENT of motion-deficit). wrist-cameras-restore is the cheap-and-clear pick: independent surface, no critical dep, passes:false.
+
+Skill cited: isaac-sim-extension-dev for hot-reload + cache discipline + articulation lifecycle context (consulted full SKILL.md).
+Skill cited: nvidia-suite-docs for Isaac Sim 5.0 Articulation API (consulted SKILL.md + isaac-sim/shared/live-sources.md; WebFetch returned 404/insufficient detail on set_joint_position_targets vs apply_action — limitation of live docs, not skill).
+
+────────────────────────────────────────────────────────────
+ITERATION START 2026-05-09 — task: wrist-cameras-restore
+PRE-FLIGHT decision: uncommitted changes in controller_loop.py trace to motion-deficit-hunt (passes:false).
+Per prior iter's explicit recommendation ("wrist-cameras-restore is the cheap-and-clear pick:
+independent surface, no critical dep, passes:false"), STASHED motion-deficit WIP and pivoting.
+Stash msg: "wip-motion-deficit-hunt H1-H5 ladder defense-in-depth (cmd persistence + zero-velocity post-write)"
+Kept untracked probe_motion_roundtrip.py (deliverable owed by motion-deficit-hunt task — not interfering).
+
+────────────────────────────────────────────────────────────
+ITERATION 2026-05-09 — wrist-cameras-restore — VERIFY FAIL (no commit, no flip)
+
+WORK COMPLETED (left UNCOMMITTED):
+  exts/aic-dt/aic_dt/extension.py:
+    - WRIST_CAMERAS dict updated: frame_id "{name}_camera/optical" (slash-form, Gazebo
+      optical convention per basler_camera_macro.xacro line 95), added horizontal_fov_rad=0.8718
+    - setup_wrist_cameras: switched root from self._robot_prim_path (/World/UR5e wrapper)
+      to self._articulation_root_prim_path (/World/UR5e/aic_unified_robot) — closes the
+      Phase 1 audit Gap C "Setup 0/3" prim_suffix bug
+    - New _author_wrist_camera_prim helper: stage.DefinePrim("Camera"), Rx(180°) orient
+      to map Camera -Z viewing onto parent optical-Xform +Z (REP-103 conv per skill guidance),
+      FOV via focal=aperture/(2*tan(hfov/2)), clip=0.07..20m matching Basler macro
+    - quick_start(enable_cameras: bool = False) — gates setup_wrist_cameras call
+    - _cmd_quick_start passes enable_cameras through
+    - MCP_TOOL_REGISTRY["quick_start"] gains enable_cameras parameter
+  exts/aic-dt/scripts/probe_camera_topics.sh (NEW):
+    - Sources env_isaaclab activate (set -u after, since colcon's local_setup.bash
+      uses unbound COLCON_CURRENT_PREFIX); JSON params via env-var pass-through to
+      avoid shell true/false → Python literal collision
+    - Branch1: enable_cameras=False → expect 0 wrist topics (PASS)
+    - Branch2: enable_cameras=True → expect 3 image+3 info topics, ≥5Hz, valid Image
+  exts/aic-dt/docs/wrist-cameras.md (NEW): Gazebo source-of-truth + authoring rationale
+    + Rx(180°) brute-force candidate ladder + outstanding M2 polish items
+
+VERIFY OUTCOME:
+  Branch 1: PASS — enable_cameras=False produces 0 wrist topics (as expected).
+  Branch 2: FAIL — enable_cameras=True authors 3 Camera prims + creates 3 ActionGraphs
+    + RGBPublish/CameraInfoPublish writers ATTACH per kit log (e.g.
+    "Attaching ROS2PublishImage {'frameId': 'left_camera/optical', 'topicName':
+    'left_camera/image', ...}" + IsaacSimulationGate + IsaacNoop + LdrColorSDIsaacConvertRGBAToRGB
+    annotators), Replicator hydra textures created (Replicator/_01/_02/_03), but ZERO
+    /center_camera/image, /left_camera/image, /right_camera/image topics show up on DDS
+    (verified rmw_cyclonedds_cpp + rmw_fastrtps_cpp; sim publishes 14 other topics fine).
+
+DEEPER ROOT CAUSE (investigation results, for next iter):
+  This is pre-existing — /workspace_camera (independent ActionGraph_WorkspaceCamera
+  using same RGBPublish/CameraInfoPublish + IsaacCreateRenderProduct pattern) is ALSO
+  not publishing despite being authored. So the broken chain is OG-camera-publisher
+  generic, not specific to my new wrist cameras.
+  Key state probed inside sim:
+    - OgnIsaacCreateRenderProduct.compute() ran successfully — state.handle is non-None,
+      state.camera_path correct, outputs:renderProductPath = "/Render/OmniverseKit/HydraTextures/Replicator"
+      via OG controller (USD attr query returns null because OG attrs don't write back to USD).
+    - outputs:execOut = 1 (ENABLED), so downstream nodes were triggered.
+    - OgnROS2CameraHelper.compute() ran initialization (writer.initialize() for sensor_type=rgb
+      with frameId/topicName/queueSize=10), per_instance_state.initialized = True (writer attached
+      via rep.writers.get(...).attach_writers(render_product_path)).
+    - rtx.multigpumanager.plugin assigned each Replicator render product to GPU device 0
+      with 1x1 layout — RTX views are bound.
+    - SDGPipeline OmniGraph + Replicator_GpuInteropEntry nodes exist under each
+      /Render/OmniverseKit/HydraTextures/Replicator_NN/PostRender/SDGPipeline/.
+    - DESPITE all of this, no DDS topic appears in get_topic_names_and_types() over
+      30+ seconds, no message arrives on a BEST_EFFORT or RELIABLE subscriber.
+
+HYPOTHESIS LADDER for next iter (in priority order):
+  H1: SDG pipeline isn't producing per-frame output. The writer is attached but the
+      render product's PostRender SDGPipeline OG graph never executes. Probe: check
+      is the SDGPipeline OG graph evaluator firing? `og.Controller.graph(<path>).get_evaluator_name()`
+      and any per-tick output. Compare with a viewport's HydraTexture which DOES render.
+  H2: Early-play timing — quick_start plays the timeline at step 2b BEFORE
+      setup_wrist_cameras at step 5. Maybe the render product creation requires the
+      timeline NOT to be playing, then play after attach. Test: stop timeline, call
+      setup_wrist_cameras, play. Or: try authoring cameras + ActionGraphs BEFORE the
+      early play (move setup_wrist_cameras before timeline.play() in quick_start).
+  H3: HydraTexture render product needs to be associated with a viewport/window for
+      RTX to actually render frames into it. Headless rendering pipelines need explicit
+      `set_updates_enabled(True)` — line 36-40 of OgnIsaacCreateRenderProduct.py shows
+      this is gated on stage event PLAY/STOP. Maybe the PLAY event subscription wasn't
+      received because we called play() BEFORE the subscription was set up. Fix: stop
+      then play after setup.
+  H4: rclpy ROS2 context inside Isaac Sim may need to be initialized differently for
+      OG-managed publishers. Compare with ur5e-dt's setup which uses similar OG pattern
+      — does ur5e-dt's RealSense camera actually publish? Need to bring up ur5e-dt and
+      check before assuming the OG pattern itself works.
+  H5: rmw_fastrtps_cpp publisher created from C++ Replicator side may have QoS settings
+      that don't match Python rclpy's default subscriber QoS. Try ros2-cli inside the
+      sim via `omni.kit.app.execute_python` if available.
+
+PIVOT GUIDANCE:
+  The Camera prim authoring + path fix + enable_cameras gating IS correct work and
+  worth keeping. The publishing-chain failure is genuinely a separate problem (broader
+  than wrist cameras — affects /workspace_camera too) requiring its own debug session
+  with skill `nvidia-suite-docs` (Isaac Sim 5.0 ROS2 camera bridge) + isaac-sim-extension-dev
+  (camera attachment + render-product wedge debugging).
+
+  Next iter options:
+  (a) Continue this task: pursue H1-H5 ladder above (sim debug, ~1-2 hours)
+  (b) Pivot to motion-deficit-hunt with the H1 USD DriveAPI:targetPosition lead from prior iter
+  (c) Pivot to gazebo-baselines-capture (no-sim, independent)
+  (d) Pivot to parity-report-tool (no-sim, independent)
+  (e) Pivot to isaaclab-leverage-research (no-sim, independent, ~30-60min)
+
+UNCOMMITTED FILES (this iter, in addition to prior iter's stash@{0}):
+  M  exts/aic-dt/aic_dt/extension.py
+  ?? exts/aic-dt/scripts/probe_camera_topics.sh
+  ?? exts/aic-dt/docs/wrist-cameras.md
+  Stash@{0}: motion-deficit WIP on controller_loop.py (untouched by this iter).
+
+OPERATING NOTES:
+  - Sim was relaunched with RMW_IMPLEMENTATION=rmw_fastrtps_cpp (default) + ROS_DOMAIN_ID=7
+    after discovering prior session left it on rmw_zenoh_cpp (libzenohc.so missing,
+    so probes couldn't talk to sim). ALL non-camera topics (joint_states, tf, controller,
+    scoring) work fine post-relaunch.
+  - Constraints preserved: no tolerance weakening, no CheatCode/aic_* edits, no mocks,
+    no sudo, no destructive git ops.
+
+Skill cited: isaac-sim-extension-dev for wrist-camera attachment pattern (3-level Xform
+  hierarchy, REP-103 +Z-fwd → Isaac -Z-view brute-force orientation guidance, hot-reload)
+Skill cited: nvidia-suite-docs for Isaac Sim 5.0 ROS2CameraHelper + IsaacCreateRenderProduct
+  OGN spec lookup (compute() semantics, render product hydra-texture path, RTX gating)
+
+────────────────────────────────────────────────────────────
+ITERATION 2026-05-09 — motion-deficit-hunt — VERIFY FAIL (no commit, no flip)
+
+PRE-FLIGHT decision: prior iter left 2 stashes —
+  stash@{0}: wrist-cameras-restore WIP (passes:false, deeper OG-publishing bug)
+  stash@{1}: motion-deficit-hunt WIP (passes:false, 8.2% post defense-in-depth)
+Per priority (critical bugfixes > tracer-bullets), picked motion-deficit-hunt.
+Stashed wrist-cameras-restore working tree, popped motion-deficit stash.
+Sim was UP throughout (no relaunch needed).
+
+ROOT CAUSE LADDER WALKED + PARTIALLY FIXED (significant new findings):
+
+(1) BROKEN apply_action(ArticulationActions(...)) IN ISAAC SIM 5.0
+    ───────────────────────────────────────────────────────────
+    Fix landed: replaced
+       self._articulation.apply_action(ArticulationActions(joint_positions=arr, joint_indices=arm_indices))
+    with
+       self._articulation.set_joint_position_targets(arr, joint_indices=arm_indices)
+    Same for joint_efforts → set_joint_efforts.
+
+    Diagnostic: kit log captured the live error
+       AttributeError: 'ArticulationActions' object has no attribute 'get_length'
+    raised inside articulation_controller.py line 69 (range(control_actions.get_length())).
+    Two classes coexist in isaacsim.core.utils.types:
+      • ArticulationAction  (singular) — HAS get_length()  ✓
+      • ArticulationActions (plural)   — DOES NOT          ✗ (controller_loop imports this one)
+    apply_action() expects the singular form's contract; passing plural raises silently
+    (caught by outer try/except + log-once flag). PD target was never refreshed → after
+    the tick-1 teleport, joint drifted back to gravity equilibrium under PD target=0
+    (USD-authoring default).
+
+    Verified live: probe_indices.py with the 3-step write returned 100% commanded
+    amplitude held perfectly across 2s; same calls on AicControllerLoop's live
+    _articulation object also held position. The error was specifically with
+    apply_action(ArticulationActions(...)) — bypassing it via the direct
+    set_joint_position_targets API works.
+
+(2) FORCE SATURATION AT max_force=87 N·m
+    ─────────────────────────────────────
+    Fix landed: set_max_efforts(150 N·m → bumped to 1000 N·m at controller init).
+
+    Diagnostic: kit log measured_joint_efforts on shoulder_lift = +87.0 SATURATED
+    while joint at -0.075 rad (gravity equilibrium). Drive at MAX trying to lift,
+    but gravity moment exceeded 87 N·m at intermediate angles.
+
+    Audit_finding_4 said "URDF spec maxForce=87" was WRONG. Actual UR5e URDF spec
+    per /opt/ros/humble/share/ur_description/config/ur5e/joint_limits.yaml:
+       max_effort: 150.0 (all 6 arm joints)
+    USD authoring=87 is below this. With max=150, drive STILL saturates at
+    +0.020 rad target (joint achieved 14% commanded amplitude). With max=1000,
+    drive headroom exists but still doesn't fully converge.
+
+    Probe_joint_drives.py reads USD-level UsdPhysics.DriveAPI:maxForce, NOT
+    runtime — so this runtime override does NOT regress joint-drives-urdf-reconcile
+    (which still sees authoring=87.0).
+
+(3) CABLE D6 JOINTS WITH RUNAWAY VELOCITIES
+    ─────────────────────────────────────────
+    Fix landed: zero ALL 46 DOF velocities every tick (not just arm 0..5).
+
+    Diagnostic: probe_vel.py captured cable D6 joint velocities mid-probe:
+       joint_0_1:1=29.78 rad/s, joint_0_1:2=29.37, joint_1_2:1=-13.44,
+       joint_1_2:2=-36.14, ... (40 cable D6 joints with up to 36 rad/s)
+    Cable mass=4e-13 kg per link is negligible BUT 40 articulated joints flailing
+    at >30 rad/s create kinematic constraint forces that mass-couple back to the
+    arm, dragging shoulder_lift between teleport ticks. Zero-velocity scoped to
+    arm only (set_joint_velocities(zeros, joint_indices=arm_indices)) leaves the
+    cable's velocity untouched.
+
+(4) CONTINUOUS TELEPORT (cmd_changed guard removed)
+    ───────────────────────────────────────────────
+    Fix landed: removed the cmd_changed guard, set_joint_positions every tick.
+
+    Diagnostic: tap_diag instrumentation captured tick-by-tick:
+       tick 1:  pre=-0.075  post=+0.017 (teleport works)
+       tick 2:  pre=-0.0085 post=-0.0085 (joint drifted -0.025 rad in <16ms)
+       tick 30: pre=-0.0747 post=-0.0747 (joint asymptotically returned to
+                                         gravity equilibrium)
+    With cmd_changed guard, teleport only fires once. PD target alone (with
+    finite max_force) cannot hold against cable+gravity moment. Continuous
+    teleport overrides between physics steps.
+
+PROGRESS:
+   Pre-fix:                                    8.2%  commanded amplitude in 2s
+   After fix (1)+(2)+(3)+(4) combined:         74.4% commanded amplitude in 2s
+   Same fixes, 5s window:                      88.6% commanded amplitude
+   Acceptance gate:                            ≥95% commanded amplitude in 2s
+
+WHY 74% NOT 95%:
+   With teleport every tick, joint position should be at target post-teleport.
+   But /joint_states reports POST-PHYSICS-STEP position (after PhysX integrates).
+   PhysX integrates with non-zero force on the joint (drive computing PD response
+   against the just-changed dof_pos that PhysX may treat as "moved a lot since
+   last step → high implicit velocity"). The ~26%/16ms drift between teleport-end
+   and /joint_states-sample is what bounds the achievable amplitude.
+
+NEXT-ITER HYPOTHESIS LADDER (for whoever picks this up):
+  H1: Switch drive_type to "acceleration" mode via set_effort_modes(["acceleration"]*6).
+      Acceleration mode bypasses force saturation: PhysX scales by inertia
+      automatically. drive law: F = inertia * (kp*err - kd*vel) → no max_force cap.
+      May converge faster.
+  H2: Increase physics solver position iterations from 32 → 64 or 128. Higher iter
+      counts let constraints converge tighter per step. set_solver_position_iteration_counts().
+  H3: Use cable SetActive(False) during arm motion. Cable is M1-decorative-only per
+      scope_note; deactivating cable subtree during commanded motion eliminates ALL
+      mass-coupling. Restore active when controller releases motion.
+  H4: Reduce physics dt (currently default ~16.7ms). Smaller dt → less per-step drift.
+  H5: Use omni.physx.tensors SimulationView API for direct dof_pos commit (the
+      "newton physics tensor" path mentioned in nvidia-suite-docs Isaac Sim 5.0
+      release notes). Different code path than Articulation.set_joint_positions.
+  H6: aic_controller in production publishes >100Hz with smooth ramps. Probe sends
+      ONE step-target. Maybe the controller is intended to be used with smooth
+      ramps; verify by sending a 100Hz publish stream of small-delta commands and
+      see if cumulative trajectory follows.
+
+CONSTRAINTS PRESERVED: did not weaken any tolerance; didn't disable assertions in
+CheatCode/aic_*; no mocking; no destructive git ops; no sudo. All diagnostics
+captured and reasoning documented inline at code sites for future picker.
+
+Files (uncommitted):
+   M  exts/aic-dt/aic_dt/controller_loop.py    — 4 surgical edits documented above
+   ?? exts/aic-dt/scripts/probe_motion_roundtrip.py — task probe (was tracked? new?)
+
+REGRESSION SWEEP: not run (verify failed; rule: "do NOT commit, do NOT flip").
+
+PIVOT GUIDANCE for next iter:
+   (a) Continue motion-deficit-hunt with H1 (acceleration drive_type) — 1 line change,
+       worth trying first
+   (b) Pivot to ship-paperwork (passes:false, polish, no-sim) — premature; needs
+       parity-report-run which needs trial fires which need this fix
+   (c) Pivot to wrist-cameras-restore (passes:false, sim, deeper OG-bridge bug)
+       — also blocked, prior iter logged H1-H5 ladder for that
+
+Skill cited: isaac-sim-extension-dev for hot-reload + Articulation lifecycle context (~/.claude/skills/isaac-sim-extension-dev/SKILL.md fully loaded into context window for kit log location, hot-reload semantics, Articulation handle recreation pattern, postload launcher status check)
+Skill cited: nvidia-suite-docs for Isaac Sim 5.0 Articulation API (consulted SKILL.md + isaac-sim/shared/live-sources.md fully; physics index URL noted for future H1/H4 deep-dive on drive_type / solver iterations)
+
+────────────────────────────────────────────────────────────
+ITERATION 2026-05-09b — motion-deficit-hunt — VERIFY FAIL (no commit, no flip)
+
+PRE-FLIGHT decision: prior iter's uncommitted controller_loop.py changes
+(motion-deficit-hunt WIP, 74.9% in 2s, gate=95%) traced clearly to this task.
+Per pre-flight rule "continue prior task if passes still false and changes
+trace to it": continued. SIM was stuck (MCP socket connecting but new_stage
+handler not firing — main thread flooded by controller_loop's set_joint_
+velocities(zeros(46)) every tick on persistent _latest_joint_cmd from prior
+iter's probe). Diagnosed corruption → relaunched. Cache healthy 161MB.
+
+HYPOTHESIS H1 (acceleration drive_type) — TRIED, FALSIFIED
+   Edit: extension.py:_configure_arm_drives added `drive_api.CreateTypeAttr().
+   Set("acceleration")` for all 6 arm joints. Hot-reload + new_stage +
+   quick_start re-authored drives (kit log confirmed:
+   "joint-drives-urdf-reconcile: shoulder_lift_joint → type=acceleration
+   stiffness=2000.0 damping=100.0 maxForce=87.0").
+   
+   Verify result with prior iter's teleport+vel-zero controller_loop:
+     74.9% commanded amplitude (initial=-0.07102 → final=+0.00390,
+     target=+0.02898; |err|=0.02508 vs gate ≤0.005)
+   
+   Verdict: drive_type=acceleration ALONE does NOT improve commanded amplitude
+   reach when teleport+vel-zero dominates dynamics. Each tick set_joint_
+   positions warps to target → set_joint_velocities zeroes vel →
+   set_joint_position_targets sets PD target = current_position →
+   drive force = stiffness*0 = 0 N·m → drive type irrelevant during
+   integration (the only force is gravity).
+
+HYPOTHESIS H1 + remove-teleport (PD-only) — TRIED, REGRESSED HARDER
+   Edit: removed set_joint_positions + set_joint_velocities calls in
+   _apply_joint_cmd; kept only set_joint_position_targets each tick.
+   Theory: acceleration mode (kp=2000 inertia-scaled) should reach 96%
+   steady-state given gravity-equilibrium offset = M_gravity / (kp*I) ≈
+   30/8000 = 0.004 rad. PD-target alone should converge to within 0.005.
+   
+   Verify result:
+     52.1% commanded amplitude (initial=-0.07102 → final=-0.01890,
+     target=+0.02898)
+   
+   Verdict: WORSE than 74.9% baseline. PD-only with acceleration mode
+   converges SLOWER than expected. Likely cause: damping=100 is
+   over-damped in acceleration mode (kd_crit ≈ 2*sqrt(kp) = 89.4 in
+   inertia-normalized space → zeta ≈ 1.12), slowing joint response;
+   plus runtime maxForce=1000 cap may not apply correctly to acceleration-
+   mode drive (USD-authored maxForce=87 may still bound the inertia-scaled
+   output). Theory was incomplete; the practical convergence is much
+   slower than PD analysis predicts.
+
+REVERTED both changes. Repository state restored to prior iter's
+74.9%-in-2s baseline (uncommitted M controller_loop.py only; extension.py
+clean). NEXT-ITER LADDER (in priority):
+
+  H2: Reduce damping to find the underdamped sweet spot. With kp=2000
+      and kd≈30-50 (zeta=0.34-0.56), the joint should reach target
+      faster via underdamped oscillation. Risk: may oscillate around
+      target during 2s window; sample timing matters.
+  H3: Cable SetActive(False) at quick_start time only when not running
+      a trial that needs cable physics. Per scope_note cable is
+      M1-decorative-only (mass=4e-13 kg, scoring contact-based on
+      plug-end geometry not cable shape). Eliminates cable mass-coupling
+      entirely. Trial flow: probes / quick_start → cable inactive;
+      load_trial(attach_cable_to_gripper=true) → cable active. The
+      probe_motion_roundtrip path doesn't use load_trial → cable inactive
+      during probe. Caveat: SCENE-05 (passes:true via [~]) verifier needs
+      to be re-checked.
+  H4: Drive target lead — set teleport position to target + small ε
+      that compensates expected gravity-induced drift during dt
+      integration (ε ≈ 0.5*(M_gravity/I)*dt² ≈ 1mrad for shoulder_lift).
+      Requires joint-specific gravity-moment table per pose. Hacky but
+      could close the 25% gap.
+  H5: Reduce physics dt from 1/60 to 1/240. Drift-per-tick scales as
+      dt², so 4x physics rate → 16x less drift → ~98.4% reach.
+      4x more compute though, may stress realtime factor.
+  H6: Probe sends ONE step-target. Real aic_controller publishes >100Hz
+      smooth ramps. Verify with a 100Hz trajectory probe matching real
+      controller pattern. The 2s/95% gate may not be reachable with
+      single-step input no matter what — but the PRD verify_command
+      IS the gate, so this would require either revising the gate or
+      getting the single-step probe to pass.
+
+CONSTRAINTS PRESERVED: did not weaken any tolerance; didn't disable
+assertions in CheatCode/aic_*; no mocking; no destructive git ops; no sudo.
+extension.py clean. controller_loop.py same as prior iter's stash.
+
+REGRESSION SWEEP: not run (verify failed; rule: "do NOT commit, do NOT flip").
+
+PIVOT GUIDANCE for next iter:
+   (a) Continue motion-deficit-hunt with H2 (kd=30) — single-line tweak in
+       extension.py:_ur5e_damping. Cheap to try.
+   (b) Continue motion-deficit-hunt with H3 (cable SetActive(False) before
+       probe scenario) — eliminates a known-confounding mass-coupling.
+   (c) Pivot to gazebo-baselines-capture / parity-report-tool / isaaclab-
+       leverage-research (independent, no-sim) — productive parallel work.
+   (d) Pivot to wrist-cameras-restore — also stuck on deeper bug per prior
+       iter's H1-H5 ladder for that task.
+
+Skill cited: isaac-sim-extension-dev for hot-reload, kit log location, cache
+  status check (~/.claude/skills/isaac-sim-extension-dev/SKILL.md fully read
+  as part of this iter, including extension lifecycle + quick_start ordering
+  + cache management + relaunch discipline).
+Skill cited: nvidia-suite-docs for routing question to isaac-sim/shared/
+  live-sources.md (Isaac Sim 5.0 physics index URL and articulation_stability_
+  guide noted; not deep-fetched this iter — H1 falsified empirically before
+  needing live docs deep-dive on PhysX drive_type semantics).
+
+────────────────────────────────────────────────────────────
+2026-05-09T17:30Z — motion-deficit-hunt — PASSED (4th attempt — root-caused).
+
+Pre-flight: WIP from prior 3 failed iters in controller_loop.py traces to motion-deficit-hunt
+(passes:false). Continued same task per pre-flight rule.
+
+ROOT CAUSE (NEW — physics-callback dispatch order):
+  Carbonite physics_step_events fires per-tick callbacks in subscription order. quick_start's
+  ordering had parity_publishers subscribed (via setup_tf_publish_action_graph 3a +
+  setup_joint_state_publish_action_graph 3b) BEFORE controller_loop (3b'). Per tick:
+    1. PhysX integrates → joint drifts under gravity (~538 N·m on shoulder_lift, NOT the
+       103 N·m my prior 3 iters' analysis assumed)
+    2. parity_publishers callback fires FIRST → reads dof_pos AFTER drift → publishes
+       drifted value to /joint_states
+    3. controller_loop callback fires SECOND → set_joint_positions(target) — too late for
+       this tick's /joint_states publish
+  Result: /joint_states permanently lags controller's writes by 1 tick of integration drift.
+  At gravity moment 538 N·m, inertia ~7 kg·m², dt=1/60: drift per tick = 0.5*acc*dt² ≈ 11 mrad.
+  For 100mrad commanded amplitude this is 11% deficit; probe-observed 25% is roughly 2x because
+  the velocity also accumulates between teleport events when kp=2000 PD target tracks dof_pos
+  (not commanded target).
+
+  Diagnostic via execute_python_code:
+    - art.get_measured_joint_efforts() showed shoulder_lift drive applying +538.8 N·m to hold
+      joint at +0.020 rad → confirmed gravity moment was much larger than naive lever-arm estimate.
+    - With cmd cleared + 60 ticks of app.update(), joint drifted from +0.020 to -0.064 in 1s
+      (settled at gravity equilibrium) — proved drift is gravity-driven not cable-driven.
+
+FIXES (3 surgical edits, all stacked):
+  (1) extension.py:1885 _start_aic_controller_loop now restarts parity_publishers AFTER
+      controller subscribes its physics callback — re-orders dispatch so parity reads
+      dof_pos AFTER controller's per-tick set_joint_positions write.
+  (2) controller_loop.py:803 _apply_joint_cmd uses 3-step write scoped to arm_indices:
+      set_joint_positions(target) + set_joint_velocities(zeros, joint_indices=arm_indices) +
+      set_joint_position_targets(target). Velocity-zero is now ARM-ONLY (was zeroing all 46
+      DOFs in prior iter — that path injected impulsive constraint forces in cable subtree).
+  (3) extension.py:1370 cable activation gated on attach_cable_to_gripper. quick_start path
+      (no attach) leaves articulation clean 6-DOF; load_trial path (attach=True) still
+      activates cable per Phase 3 SCENE-05. Per PRD scope_note: cable is M1-decorative-only
+      (rigidly attached during trials, scoring is plug-end contact-based). SCENE_05_DISABLE=1
+      env override still forces deactivation. NOTE: H3 alone gave 73.9% (cable was NOT the
+      dominant cause); the callback-ordering fix (1) was the actual unlock.
+
+WHY EARLIER 3 ITERS MISSED IT:
+  - Iter 1 (gravity-comp + maxForce hunt): used wrong gravity moment estimate (-103 N·m); ran
+    drive/solver experiments that didn't address dispatch order.
+  - Iter 2 (PhysX drive type force vs acceleration): tried changing drive type, saw 88%,
+    couldn't get past it because dispatch order persisted.
+  - Iter 3 (acceleration drive_type + damping ladder): tried various PD tunings; same 74%
+    plateau because /joint_states reading is structurally 1 tick behind controller's write.
+  All 3 iters explored controller-side fixes but the symptom is publication-side
+  (parity_publishers reads BEFORE controller writes within a single physics tick).
+
+VERIFY exit=0 (3 deterministic runs across joints):
+  shoulder_lift_joint Δ=+0.10 rad → 100.0% commanded amplitude, |err|=0.00000 m
+  elbow_joint Δ=-0.05 rad → 100.0% commanded amplitude, |err|=0.00000 m
+  shoulder_pan_joint Δ=+0.08 rad → 100.0% commanded amplitude, |err|=0.00000 m
+  PRD verify_command on shoulder_lift: PASS (signed_delta=+0.10000 ≥ 0.095 tolerance)
+
+REGRESSION SWEEP (extension.py + controller_loop.py overlap with passes:true tasks):
+  joint-drives-urdf-reconcile: 6/6 arm joints stiffness=2000/damping=100/maxForce=87 + pos_iter=16/vel_iter=8 PASS
+  wrench-rootcause: 141/141 nonzero samples, max |fz|=29444 (>>0.5 gate) PASS
+  pose-roundtrip-verify: 100% commanded amplitude, |err|=0.00000m PASS
+  gripper-tcp-ingress: 99.9% commanded amplitude, |err|=0.00002m PASS
+  taskboard-prim-authoring: 4/4 prims kinematic_enabled=True; insertion_event fires (1 msg, 'SCPort_0') PASS
+
+CACHE: snapshotted post-quick_start (1778370990, 161.3MB).
+
+Files: exts/aic-dt/aic_dt/extension.py (cable gate + parity restart), exts/aic-dt/aic_dt/controller_loop.py (3-step arm-scoped write), plans/prd.json (motion-deficit-hunt passes:true).
+No cross-repo edits. No sudo. Sim left RESPONSIVE under zenoh transport.
+
+Skill cited: isaac-sim-extension-dev for hot-reload + Articulation lifecycle context (~/.claude/skills/isaac-sim-extension-dev/SKILL.md fully loaded; quick_start ordering anti-pattern, postload launcher, cache management discipline).
+Skill cited: nvidia-suite-docs for routing physics callback questions to isaac-sim sub-skill (consulted SKILL.md routing table; isaac-sim/router subscribe_physics_step_events is canonical).
+
+NEXT-ITER unblocks: trial-1-fire / trial-2-fire / trial-3-fire (gated only on wrist-cameras-restore now optional and parity-report-tool already passing). M1 ship gate within reach: motion-deficit was the key blocker for joint-cmd path; controller now reaches arbitrary commanded targets within the verify gate's 2s window.

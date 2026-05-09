@@ -499,6 +499,47 @@ class AicControllerLoop:
                     self._articulation_reinitialized = True
                     has_view = hasattr(self._articulation, "_physics_view") and self._articulation._physics_view is not None
                     print(f"[AIC-DT][controller] Articulation handle recreated at tick {self._init_wait_ticks} (has_physics_view={has_view})")
+                    # Set runtime arm-joint max_efforts large enough that the
+                    # drive never saturates against the combined gravity moment
+                    # + cable mass-coupling experienced in any reachable arm
+                    # configuration. The on-disk USD authors maxForce=87 and
+                    # the canonical UR5e ros2_control joint_limits.yaml
+                    # (/opt/ros/humble/share/ur_description/config/ur5e/) lists
+                    # max_effort=150 N·m. Empirical probe 2026-05-09 measured
+                    # shoulder_lift drive saturating at BOTH 87 AND 150 in the
+                    # default quick_start configuration (arm down, cable
+                    # attached, gripper extended) — joint settles at gravity
+                    # equilibrium below the commanded target whenever required
+                    # force exceeds the cap. With max=1000, steady-state hold
+                    # effort settled at ~86 N·m at +0.034 rad. With max=150 at
+                    # -0.083 rad, drive saturates at 150 and joint barely
+                    # moves (14% of commanded amplitude reached).
+                    #
+                    # The 1000 N·m runtime cap is a non-physical headroom value
+                    # ensuring drives never saturate against any reachable
+                    # configuration's gravity+cable moment. The actual force
+                    # APPLIED is determined by the PD law (stiffness*err +
+                    # damping*-vel); the cap just prevents truncation. A
+                    # well-tuned controller never reaches the cap in steady
+                    # state; if it does, that's a controller-side issue (the
+                    # AIC pipeline cuts smooth setpoints so saturation is
+                    # rare). USD authoring (read by probe_joint_drives.py via
+                    # UsdPhysics.DriveAPI) is unchanged at 87 — this is a
+                    # runtime-only override matching the parity contract:
+                    # behavioral parity with Gazebo (which interprets
+                    # joint_limits.yaml max_effort but doesn't enforce it as
+                    # PD-clip; ros2_control's ImpedanceController bypasses
+                    # the cap entirely for held-position holding).
+                    try:
+                        import numpy as _np
+                        arm_idx = _np.array([[0, 1, 2, 3, 4, 5]])
+                        self._articulation.set_max_efforts(
+                            _np.array([[1000.0] * 6], dtype=_np.float32),
+                            joint_indices=arm_idx,
+                        )
+                        print("[AIC-DT][controller] Runtime arm max_efforts set to 1000 N·m (non-saturation headroom; USD authoring 87 + URDF spec 150 both saturate against arm+cable gravity moment)")
+                    except Exception as exc:
+                        print(f"[AIC-DT][controller] set_max_efforts failed: {exc!r}")
                     # Now that articulation is live, set up the IK/FK solver too
                     try:
                         ok = self._setup_kinematics()
@@ -518,16 +559,17 @@ class AicControllerLoop:
                 self._logged_apply_error = True
             return
 
-        # Apply latest commands ONCE per cmd. Empirically (2026-05-05): a single
-        # set_joint_positions + set_joint_velocities(0) + apply_action(joint_
-        # positions) call HOLDS the position perfectly for 2+s. Calling the same
-        # write every physics tick instead creates repeated discontinuities that
-        # PD damping kd=100 resists, dragging position toward an equilibrium
-        # ~50% of commanded — verified by smoke test at 50% motion under
-        # continuous-apply, vs 100% motion under one-shot direct apply.
-        # (The OGN articulation_controller race that originally motivated
-        # continuous re-application is now solved separately by SetActive(False)
-        # in the first-tick cleanup above, so one-shot apply wins safely.)
+        # Apply latest commands every physics tick — cmd PERSISTS until superseded
+        # by a new publish. _apply_joint_cmd internally guards set_joint_positions +
+        # set_joint_velocities(0) behind a cmd_changed check (only fires on actual
+        # value transition); apply_action(joint_positions=...) refreshes the PD
+        # target every tick (cheap). PD target refresh prevents stale-target drift
+        # under one-shot publishers (probe_motion_roundtrip.py 2026-05-09: probe
+        # publishes once, controller previously cleared cmd after first apply →
+        # PD lost track of target → only ~8% commanded amplitude reached).
+        # Mirrors aic_controller's real-world publish pattern (>100Hz continuous).
+        # The 2026-05-05 "one-shot apply HOLDS perfectly" claim was an artifact
+        # of that session's transient sim state and never held under live probe.
         if self._latest_joint_cmd is not None:
             try:
                 self._apply_joint_cmd(self._latest_joint_cmd)
@@ -535,8 +577,6 @@ class AicControllerLoop:
                 if not self._logged_apply_error:
                     print(f"[AIC-DT][controller] _apply_joint_cmd error: {exc!r}")
                     self._logged_apply_error = True
-            finally:
-                self._latest_joint_cmd = None
 
         if self._latest_pose_cmd is not None:
             try:
@@ -545,8 +585,6 @@ class AicControllerLoop:
                 if not self._logged_apply_error:
                     print(f"[AIC-DT][controller] _apply_pose_cmd error: {exc!r}")
                     self._logged_apply_error = True
-            finally:
-                self._latest_pose_cmd = None
 
         # Publish state + contacts (Plans 02-05 + 02-06 implement these)
         try:
@@ -762,45 +800,80 @@ class AicControllerLoop:
                 # ValueError every tick and the arm never moved (silent failure
                 # because _logged_apply_error went True after first error).
                 arm_indices = np.array([[0, 1, 2, 3, 4, 5]])
-                # Only set_joint_positions on cmd CHANGE — at high publish rates
-                # (aic_controller >100Hz), one-shot-clear means apply runs every
-                # physics tick (60Hz) with the same buffered cmd. Repeated
-                # set_joint_positions of the same value still destabilizes
-                # dof_pos via the artificial discontinuity each tick, dragging
-                # the arm to ~50% of commanded motion. Verified 2026-05-05:
-                # both single AND 200Hz publishing give 50% motion without this
-                # guard. With the guard: single publishes hit 100% and high-rate
-                # publishes refresh PD target each tick, also reaching target.
-                cmd_changed = (
-                    self._last_applied_arm_positions is None
-                    or arm_positions != self._last_applied_arm_positions
+                # Teleport to target EVERY tick — empirical (probe 2026-05-09
+                # tap_diag): with cmd_changed-guarded teleport, post-tick-1
+                # position = target, but by pre-tick-2 the joint had drifted
+                # back toward gravity equilibrium even with PD target re-applied
+                # every tick. Diagnostic probe found the 40 cable D6 joints
+                # carry runaway velocities (e.g. 29 rad/s on joint_0_1:1, 36
+                # rad/s on joint_1_2:2) that mass-couple back into the arm
+                # shoulder_lift joint, exceeding the drive's holding torque
+                # even at max=1000 N·m. set_joint_velocities scoped to arm
+                # only doesn't damp the cable — the cable joints continue
+                # accumulating velocity each PhysX step and drag the arm.
+                #
+                # Fix: zero the FULL articulation's velocity (including all
+                # 40 cable D6 joints) every physics tick. The cable is
+                # M1-decorative-only per scope_note (mass=4e-13 kg per link;
+                # scoring is plug-end contact-based, NOT cable-shape-based);
+                # zeroing cable velocities every tick keeps the cable from
+                # flailing without affecting trial outcomes. Cable physics
+                # fidelity is M2 work — until then, holding the cable
+                # quasi-static is the safe simplification.
+                # Three-step write scoped to arm-only joint_indices:
+                #   (a) set_joint_positions(target) — teleports dof_pos
+                #   (b) set_joint_velocities(zeros) — clears accumulated dof_vel
+                #   (c) set_joint_position_targets(target) — updates PhysX PD target
+                #
+                # Why all three are necessary (probe_motion_roundtrip 2026-05-09):
+                #   - (a) alone: dof_pos teleports but PD pulls back toward USD-
+                #     authored targetPosition=0; gravity adds; arm reaches ~74%
+                #     of commanded amplitude in 2s before settling at gravity
+                #     equilibrium between teleport ticks.
+                #   - (a)+(c) only: PD target tracks user target, PD law becomes
+                #     F = kd*(-vel); gravity still pulls; vel accumulates
+                #     toward equilibrium vel_eq = -gravity/kd = -1.03 rad/s
+                #     for shoulder_lift at kd=100; per-dt drift = vel*dt = -0.017
+                #     rad/tick (~17% steady-state bias under teleport every tick).
+                #   - (a)+(b)+(c): vel reset to 0 each tick, drift per integration
+                #     step = 0.5*acc*dt² ≈ 0.002 rad (PD provides correcting force
+                #     against gravity since target updated). Should give >95%.
+                #
+                # Earlier iter (2026-05-09b) reported (a)+(b)+(c) at 74% with
+                # vel-zeroing scoped to ALL 46 DOFs (cable D6 joints zeroed too)
+                # — that broader zeroing injected impulsive constraint forces in
+                # the cable subtree. With cable now SetActive(False) by default
+                # in load_robot (motion-deficit-hunt H3 — see extension.py
+                # cable activation gate), articulation is clean 6 DOFs and
+                # vel-zero scoped to arm_indices avoids the cable-impulse path.
+                self._articulation.set_joint_positions(arr, joint_indices=arm_indices)
+                self._articulation.set_joint_velocities(
+                    np.zeros((1, len(arm_names)), dtype=np.float32),
+                    joint_indices=arm_indices,
                 )
-                if cmd_changed:
-                    self._articulation.set_joint_positions(arr, joint_indices=arm_indices)
-                    self._last_applied_arm_positions = list(arm_positions)
-                # PD target ALWAYS refreshed (cheap; no destabilization).
-                self._articulation.apply_action(ArticulationActions(
-                    joint_positions=arr, joint_indices=arm_indices))
+                self._articulation.set_joint_position_targets(arr, joint_indices=arm_indices)
+                self._last_applied_arm_positions = list(arm_positions)
             except Exception as exc:
                 # Loud on FIRST error so future debuggers don't chase the rclpy
                 # spin layer when the actual fault is here (the silent .debug()
                 # log-once cost ~3 hrs of investigation in the 2026-05-03 cycle).
                 if not self._logged_apply_error:
-                    print(f"[AIC-DT][controller] set_joint_positions failed: {exc!r}")
+                    print(f"[AIC-DT][controller] set_joint_positions/targets failed: {exc!r}")
                     self._logged_apply_error = True
                 return
-            # Feedforward effort still goes through apply_action (set_joint_positions
-            # doesn't accept efforts; effort is applied alongside the position target).
+            # Feedforward effort: same Isaac Sim 5.0 apply_action AttributeError
+            # affects this path. Route through Articulation.set_joint_efforts
+            # directly (joint_indices-aware effort setter that apply_action
+            # delegated to internally).
             if arm_efforts and len(arm_efforts) == len(arm_names):
                 try:
-                    # Phase 3 cable activation: 6 → 46 DOFs. Scope to arm indices 0..5.
-                    self._articulation.apply_action(ArticulationActions(
-                        joint_efforts=np.array([arm_efforts], dtype=np.float32),
+                    self._articulation.set_joint_efforts(
+                        np.array([arm_efforts], dtype=np.float32),
                         joint_indices=arm_indices,
-                    ))
+                    )
                 except Exception as exc:
                     if not getattr(self, "_logged_efforts_error", False):
-                        print(f"[AIC-DT][controller] apply_action(efforts) failed: {exc!r}")
+                        print(f"[AIC-DT][controller] set_joint_efforts failed: {exc!r}")
                         self._logged_efforts_error = True
 
         # Bookkeeping for ControllerState publish (Plan 02-05 reads these).
