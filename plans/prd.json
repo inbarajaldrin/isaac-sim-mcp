@@ -356,7 +356,7 @@
       "title": "Extend run_aic_engine_against_isaac_sim.sh to emit per-trial outcome JSON",
       "category": "dev-infrastructure",
       "priority": "tracer-bullet",
-      "passes": false,
+      "passes": true,
       "requires_sim": false,
       "files_likely": [
         "exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh (extend)"

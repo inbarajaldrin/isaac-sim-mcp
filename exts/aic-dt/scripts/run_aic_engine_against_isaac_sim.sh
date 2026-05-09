@@ -20,6 +20,16 @@
 #   bash exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh trial_1
 #   bash exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh trial_2 --ground-truth=false
 #   bash exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh trial_1 --clean   # also kill Isaac Sim at end
+#   bash exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh trial_1 --output-json /path/out.json
+#       Emit per-trial outcome JSON consumed by exts/aic-dt/scripts/parity_report.py.
+#       Shape (matches parity_report.REQUIRED_KEYS):
+#           {trial_id, sim:'isaacsim', insertion_event_fired (bool),
+#            offlimit_contact_count (int), completed_steps (int — -1 sentinel
+#            since aic_engine doesn't expose a per-trial step counter),
+#            ts (ISO 8601 of run start)}
+#       JSON is flushed via the EXIT trap, so it's written even when the
+#       wrapper bails early (e.g. missing host engine binary). Counters
+#       reflect whatever was observable up to the point of exit.
 #
 # Requirements:
 #   - Isaac Sim aic-dt extension launched (this script will start it if not running)
@@ -34,18 +44,22 @@ TRIAL_KEY="${1:-}"
 shift || true
 GROUND_TRUTH="true"
 CLEAN="0"
-for a in "$@"; do
+OUTPUT_JSON=""
+while [ "$#" -gt 0 ]; do
+    a="$1"
     case "$a" in
-        --ground-truth=true)  GROUND_TRUTH="true" ;;
-        --ground-truth=false) GROUND_TRUTH="false" ;;
-        --clean) CLEAN="1" ;;
-        *) echo "[wrapper] unknown arg: $a (accepted: --ground-truth=true|false, --clean)"; exit 2 ;;
+        --ground-truth=true)  GROUND_TRUTH="true"; shift ;;
+        --ground-truth=false) GROUND_TRUTH="false"; shift ;;
+        --clean) CLEAN="1"; shift ;;
+        --output-json=*) OUTPUT_JSON="${a#--output-json=}"; shift ;;
+        --output-json) OUTPUT_JSON="${2:-}"; shift 2 ;;
+        *) echo "[wrapper] unknown arg: $a (accepted: --ground-truth=true|false, --clean, --output-json=PATH)"; exit 2 ;;
     esac
 done
 GROUND_TRUTH_LOWER="$GROUND_TRUTH"  # JSON-friendly already
 
 if [[ -z "$TRIAL_KEY" ]]; then
-    echo "Usage: $0 <trial_key> [--ground-truth=true|false] [--clean]"
+    echo "Usage: $0 <trial_key> [--ground-truth=true|false] [--clean] [--output-json=PATH]"
     exit 2
 fi
 
@@ -55,16 +69,66 @@ POLICY="aic_example_policies.ros.CheatCode"
 ENGINE_LOG="/tmp/aic_engine_isaac.log"
 ADAPTER_LOG="/tmp/aic_adapter_isaac.log"
 WRAPPER_TOP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-AIC_WS="$HOME/aic_humble_ws"
-AIC_REPO="$HOME/Documents/aic"
+# Env-overridable so test_wrapper_json_emit.sh can force precond failure
+# without touching the real workspace.
+AIC_WS="${AIC_WS:-$HOME/aic_humble_ws}"
+AIC_REPO="${AIC_REPO:-$HOME/Documents/aic}"
 APT_VENDOR="$AIC_WS/vendored_apt/extracted/opt/ros/humble"
 ENGINE_BIN="$AIC_WS/install/aic_engine/lib/aic_engine/aic_engine"
 ADAPTER_BIN="$AIC_WS/install/aic_adapter/lib/aic_adapter/aic_adapter"
 ENGINE_PID=""
 ADAPTER_PID=""
 
+# ---------- outcome accumulators (read by emit_outcome_json) ----------
+# Defaults are the CheatCode passing-trial baseline; cleanup() updates them
+# from the engine log before the trap calls emit_outcome_json.
+INSERTION_EVENT_FIRED="false"
+OFFLIMIT_CONTACT_COUNT=0
+COMPLETED_STEPS=-1   # aic_engine has no step counter — sentinel per parity_report contract.
+
+emit_outcome_json() {
+    # Idempotent JSON writer. Called from cleanup() trap when --output-json set.
+    [ -z "$OUTPUT_JSON" ] && return 0
+    mkdir -p "$(dirname "$OUTPUT_JSON")" 2>/dev/null || true
+    python3 - "$OUTPUT_JSON" "$TRIAL_KEY" "$INSERTION_EVENT_FIRED" \
+                "$OFFLIMIT_CONTACT_COUNT" "$COMPLETED_STEPS" "$WRAPPER_TOP" <<'PY'
+import json, sys
+out_path, trial_id, insertion_str, offlimit_str, steps_str, ts = sys.argv[1:7]
+data = {
+    "trial_id": trial_id,
+    "sim": "isaacsim",
+    "insertion_event_fired": insertion_str.lower() == "true",
+    "offlimit_contact_count": int(offlimit_str),
+    "completed_steps": int(steps_str),
+    "ts": ts,
+}
+with open(out_path, "w") as f:
+    json.dump(data, f, indent=2, sort_keys=True)
+    f.write("\n")
+PY
+    echo "[wrapper] outcome JSON written: $OUTPUT_JSON"
+}
+
+parse_engine_log_outcomes() {
+    # Mirrors extract_gazebo_baseline.py signal extraction for parity.
+    # Both wrappers parse the SAME aic_engine binary's stdout; the canonical
+    # tier-3 message ("Cable insertion successful"/"failed") and tier-2 message
+    # ("No contact detected") are the source-of-truth signals.
+    [ -f "$ENGINE_LOG" ] || return 0
+    if grep -q "Cable insertion successful" "$ENGINE_LOG" 2>/dev/null; then
+        INSERTION_EVENT_FIRED="true"
+    elif grep -q "Cable insertion failed" "$ENGINE_LOG" 2>/dev/null; then
+        INSERTION_EVENT_FIRED="false"
+    fi
+    if grep -q "No contact detected" "$ENGINE_LOG" 2>/dev/null; then
+        OFFLIMIT_CONTACT_COUNT=0
+    fi
+}
+
 cleanup() {
     echo "[wrapper] cleanup"
+    parse_engine_log_outcomes || true
+    emit_outcome_json || true
     [ -n "$ENGINE_PID" ] && kill -TERM "$ENGINE_PID" 2>/dev/null || true
     [ -n "$ADAPTER_PID" ] && kill -TERM "$ADAPTER_PID" 2>/dev/null || true
     sleep 1
