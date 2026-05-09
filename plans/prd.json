@@ -94,7 +94,7 @@
       "title": "Research spike: AIC Isaac Lab env leverage assessment",
       "category": "research-spike",
       "priority": "polish",
-      "passes": false,
+      "passes": true,
       "requires_sim": false,
       "files_likely": [
         "exts/aic-dt/docs/aic-isaaclab-leverage.md (NEW)"
