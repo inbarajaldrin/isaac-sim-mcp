@@ -1,0 +1,17 @@
+2026-05-09 — onboarded to tug by aldrin. PRD has 18 tasks. Stop condition: 3 sample_config trials pass under CheatCode against Isaac Sim with same outcome as Gazebo (parity_report.py green + .planning/.m1_shipped touched). Cross-repo edits to ~/Documents/aic + ~/IsaacSim-ros_workspaces are PERMITTED in service of correct Isaac Sim integration but prohibited if they artificially make trials pass; every cross-repo edit logged in plans/cross_repo_changes.json. Autonomous-mode Stop hook silenced via .planning/.user_pause for the duration of the tug run.
+
+2026-05-09 — scope rev 4 (Pocock kanban purification). All 18 tasks renamed to descriptive kebab-case (no sequence numbers — IDs no longer imply order). depends_on field REMOVED from prd.json — tasks are independently grabbable, agent picks freely from full pool. Informal prerequisites surfaced naturally in each task's description text. Operator-only dependency tracking lives in plans/dependency_map.md (NOT loaded by iteration prompt). Iteration prompt now says "no inter-task gates; pick freely from entire pool of passes:false tasks; use judgment if a task's informal prerequisite is plainly missing".
+
+Independently grabbable tasks (any of the 18 can be picked on iter 1, agent decides):
+  gazebo-baselines-capture, gripper-tcp-ingress, isaaclab-leverage-research, joint-drives-urdf-reconcile,
+  motion-deficit-hunt, parity-report-run, parity-report-tool, pose-roundtrip-verify, ship-paperwork,
+  taskboard-prim-authoring, trial-1-fire, trial-2-fire, trial-3-fire, wrapper-json-emit, wrench-rootcause,
+  wrist-cameras-restore, zenoh-path-implementation, zenoh-path-research
+
+Skills mandate: every iteration touching Isaac Sim 5.0 / OpenUSD / OmniGraph / articulation / sensors / aic-dt internals MUST invoke isaac-sim-extension-dev + nvidia-suite-docs before writing code.
+
+Scene authoring source-of-truth: AIC Gazebo configs (~/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro, aic_bringup/launch/*.launch.py, aic_engine/config/sample_config.yaml) are canonical for any default value. Mirror Gazebo, don't invent Isaac-idiomatic defaults.
+
+Sim discipline: Isaac Sim stays running across iterations; agent calls quick_start() over MCP at start of any sim-bound iter to reset scene; no kill+relaunch unless diagnosed corruption.
+
+2026-05-09T11:30Z — parity-report-tool — PASSED. Wrote exts/aic-dt/scripts/parity_report.py + test_parity_report.sh + docs/trial_outcomes/.gitkeep. 5/5 gates green: (1) empty dir→exit 1 + warn, (2) matching pair→exit 0+1-row+summary, (3) byte-identical re-run, (4) --help documents shape, (5) divergent→exit 1+Match=no. Path resolution: parents[3] from scripts/ → repo root. Output default: docs/parity-report.md. Determinism via sorted(glob) + sorted(trial_id keys). Files: exts/aic-dt/scripts/parity_report.py, exts/aic-dt/scripts/test_parity_report.sh, exts/aic-dt/docs/trial_outcomes/.gitkeep, plans/prd.json. Next iter can pick gazebo-baselines-capture or wrapper-json-emit (both feed this tool) or zenoh-path-research (gates wrapper-json-emit cleanly).
