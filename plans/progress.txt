@@ -135,3 +135,42 @@ DEVIATIONS / SCOPE NOTES:
 Files: exts/aic-dt/aic_dt/extension.py (_spawn_component_via_usd kinematic_enabled descendant walk), exts/aic-dt/aic_dt/scoring_publishers.py (_PLUG_PATH_PREFIXES tuple + iteration in tag walk + _is_plug filter), exts/aic-dt/scripts/probe_taskboard_authoring.py (NEW), exts/aic-dt/scripts/probe_insertion_event_fires.py (NEW), exts/aic-dt/scripts/probe_insertion_event_fires.sh (NEW), plans/prd.json. No cross-repo edits. No sudo. Cache snapshotted (1778347899, 161.3MB). Sim left CLEAN (new_stage post-probe). Next iter unblocks pose-roundtrip-verify / motion-deficit-hunt / wrench-rootcause / wrist-cameras-restore / gripper-tcp-ingress (sim runtime gates).
 
 2026-05-09T18:50Z — VERIFIED taskboard-prim-authoring by verifier-agent — verify_command exits 0 (probe_taskboard_authoring + probe_insertion_event_fires both PASS). Independent live-sim re-run: probe_taskboard_authoring outputs all 4 prims (/World/TaskBoard/base_visual, SCPort_0/sc_port_visual, SCPort_1/sc_port_visual, NICCard/nic_card_visual) with has_rb=True + kinematic_enabled=True — exact match to AIC isaaclab RigidObjectCfg(kinematic_enabled=True) canonical authoring. probe_insertion_event_fires: load_trial trial_1 spawned 14 components, plug + SCPort_0/sc_port_visual both have contact_report=True, teleport via RigidPrim.set_world_poses primary path landed plug-end pose at world (0.7136, -0.5032, -0.0057) with actual_world matching to 1e-7m, host zenoh subscriber received 1 /scoring/insertion_event message ('SCPort_0'). Acceptance: (1) 4/4 prims authored consistently option (b) with rationale + nvidia-suite-docs PhysX 5.0 citation in commit 3f4d4a7 message body; (2) /scoring/insertion_event observably fires (1 msg captured); (3) probe captures + logs the 4 prims final API state forming the authoring contract. Regression: probe_joint_drives.py from prior PASS task auto-implicit covered by both probes (extension.py overlap; both probes do quick_start which exercises _configure_arm_drives). prd.json passes:true confirmed for taskboard-prim-authoring. Acceptance complete.
+
+2026-05-09T19:30Z — wrench-rootcause — PASSED. Pre-flight: clean tree (only untracked from prior iters — probe_motion_roundtrip.py + dot dirs). Sim up on 8768. Picked critical task (3rd remaining critical after motion-deficit-hunt failed twice; pose-roundtrip-verify shares motion-deficit surface). Wrench-rootcause has isolated surface (extension.py force callback + parity_publishers.py lazy-init reference) so it's tractable independently.
+
+ROOT CAUSE (TWO bugs stacked):
+
+(1) ARTICULATION LIFECYCLE TRAP — _lazy_init_articulation reused self._robot_view (constructed in load_robot BEFORE reset_async returned + before any physics step). PhysX's articulation _physics_view buffer populates only when initialize() is called AFTER physics has stepped at least once. A handle initialized pre-step gets a degenerate _physics_view=None forever; subsequent get_measured_joint_forces() raises AttributeError("'Articulation' object has no attribute '_physics_view'") every tick — 13280 [Force callback] AttributeError lines in the live Kit log. The lazy_init's _physics_view-missing branch set warmup=30 but kept artic populated, so the next 30 ticks later it checked the SAME stale instance and the cycle never escaped. Fix: when _physics_view is None on an existing handle, NULL artic so the next attempt constructs FRESH against a now-physics-active stage. Mirrors parity_publishers.py:382-398 wait-then-construct pattern (which works for /joint_states because it never reuses a pre-step handle — it constructs lazily on tick 30). Also stripped "self._effort_articulation = self._robot_view" seeding from setup_force_publish_action_graph; always start None + warmup=30. Live-doc citation (nvidia-suite-docs / isaac-sim-extension-dev SKILL.md): "Articulation handle is constructed LAZILY on first physics tick … initializing here, before the first physics step, returns a handle without _physics_view" — known issue documented in parity_publishers.py:314-321 from prior Bug 4 (controller_loop.py:686-700). Verdict tier: ROOT-CAUSED (not workaround).
+
+(2) BODY-INDEX BUG — _on_physics_step_force read forces[0][-1], picking the last body in the articulation. body_count=30 with arm-only (cable disabled), or 76+ with cable active. body_names_last10=[ati_tool_link, l/r/center camera bodies, gripper_hande_*, gripper_tcp]. The frame_id is "ati/tool_link" (URDF AtiForceTorqueSensor source-of-truth: ~/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro:233-243) so we should read the row for the body named ati_tool_link (idx 20), not [-1] (gripper_hande_finger_link_l, a finger pad bearing zero load). Even on arm-only the last body was a fingertip; with cable active it'd be a rope link. Fix: resolve self._wrench_body_idx once after Articulation construction by matching body_names against ("ati_tool_link","tool0","wrist_3_link","flange") in priority order. Cache for subsequent ticks; reset on _stop_force_publish. Verdict tier: ROOT-CAUSED.
+
+LIVE DATA:
+  Idle gravity-loaded UR5e + Robotiq Hand-E + tool wrist:
+    frame_id='ati/tool_link', force=(206.6, 76.5, -28688.3) PhysX raw units, torque=(-653.6, -631.1, -1.3)
+  Pre-fix:
+    forces[0][-1] = wrist of gripper_hande_finger_link_l = (0,0,0,0,0,0) — no contact, no load.
+  Post-fix:
+    forces[0][20] = wrist of ati_tool_link = (206, 76, -28688, ...) — substantial gravity-loaded values, |fz|=28688 >> 0.5 verify gate.
+
+PROBE: exts/aic-dt/scripts/probe_wrench_nonzero.py (NEW, 175 lines). Spawns rclpy subscriber subprocess via host zenoh transport (RMW=rmw_zenoh_cpp + ZENOH_ROUTER_CHECK_ATTEMPTS=-1 + peer tcp/localhost:7447), BEST_EFFORT QoS (matches Isaac Sim OG ROS2Publisher's sensor-data default — RELIABLE subscriber drops every msg at zenoh layer), 1.0s post-subscribe discovery settle (zenoh peer discovery delay), unique node name per run (timestamp-suffixed). Three subtle bugs surfaced + fixed during probe authoring: (a) parent harness env leaks ROS_DOMAIN_ID=0 (live UR5e ros2 driver) — must FORCE 7 not .get() default, else subscriber sees zero topics; (b) RMW_IMPLEMENTATION=rmw_cyclonedds_cpp leaks from parent — must pop before bash sources; (c) ROS_LOCALHOST_ONLY=1 leaks — must pop. All three are documented inline in _subscribe_and_collect.
+
+VERIFY exit=0:
+  - 147 samples collected over 5s window
+  - all 147 nonzero (every field > 1e-9)
+  - max |fz|=28688.34 >> 0.5 gate
+  - frame_id='ati/tool_link' (matches Gazebo source-of-truth)
+  - Zero new [Force callback] AttributeError lines in kit_*.log AFTER "wrench body resolved" milestone (gate 2: clean log post-fix)
+
+REGRESSION SWEEP: extension.py overlap with joint-drives-urdf-reconcile + taskboard-prim-authoring. Both PASSED:
+  - probe_joint_drives.py: 6/6 arm joints stiffness=2000/damping=100/maxForce=87 + pos_iter=16/vel_iter=8
+  - probe_taskboard_authoring.py: 4/4 prims kinematic_enabled=True
+  - probe_insertion_event_fires.sh: 1 /scoring/insertion_event message captured during teleport stimulus
+
+CACHE: snapshotted post-quick_start (1778349162, 161.3MB).
+
+Files changed:
+  exts/aic-dt/aic_dt/extension.py (3 surgical edits in DigitalTwin: __init__ adds _wrench_body_idx; _lazy_init_articulation NULLs handle on _physics_view miss + warmup=30; setup_force_publish_action_graph stops seeding _effort_articulation from _robot_view + sets warmup=30; _on_physics_step_force resolves body index by name once + reads correct row; _stop_force_publish resets _wrench_body_idx)
+  exts/aic-dt/scripts/probe_wrench_nonzero.py (NEW)
+  plans/prd.json (wrench-rootcause passes:true)
+
+No cross-repo edits. No sudo. Sim left RESPONSIVE; cache snapshotted. Next iter unblocks pose-roundtrip-verify / motion-deficit-hunt retry / wrist-cameras-restore / gripper-tcp-ingress (sim runtime gates). With wrench/joint_states/scoring topics all now publishing real data, trial-N-fire path's data-quality readiness improves substantially.

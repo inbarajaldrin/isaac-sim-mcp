@@ -494,6 +494,9 @@ class DigitalTwin(omni.ext.IExt):
         self._force_graph_path = None
         self._force_pub_node = None
         self._force_warmup = 0
+        # PARITY-05 wrench-rootcause: cache of body_names.index("ati_tool_link")
+        # so we read the correct articulation row each tick (not [-1]).
+        self._wrench_body_idx = None
 
         # AIC parity publisher (rclpy-based /joint_states + /tf + /tf_static).
         # Replaces OGN-based publishers from Plan 06; the OGN nodes lacked
@@ -923,7 +926,17 @@ class DigitalTwin(omni.ext.IExt):
             setattr(self, warmup_attr, 0)
 
     def _lazy_init_articulation(self, artic_attr, prim_path, name_prefix, warmup_attr):
-        """Lazy-init an ArticulationView, returning it or None if not ready."""
+        """Lazy-init an ArticulationView, returning it or None if not ready.
+
+        Mirrors parity_publishers.py:382-398 wait-then-construct pattern.
+        Construction MUST happen AFTER the first ~30 physics ticks; an
+        Articulation initialized before any physics step gets a degenerate
+        handle whose `_physics_view` never populates, even on subsequent
+        ticks. Reusing a pre-existing _robot_view from load_robot triggers
+        the same trap. Discipline: caller starts warmup=30 + artic=None,
+        and on _physics_view miss we NULL the handle so the next attempt
+        constructs fresh against a stage that's now physics-active.
+        """
         warmup = getattr(self, warmup_attr)
         if warmup > 0:
             setattr(self, warmup_attr, warmup - 1)
@@ -939,6 +952,7 @@ class DigitalTwin(omni.ext.IExt):
                 setattr(self, artic_attr, artic)
             except Exception:
                 setattr(self, artic_attr, None)
+                setattr(self, warmup_attr, 30)
                 return None
 
         if not artic.is_physics_handle_valid():
@@ -946,13 +960,15 @@ class DigitalTwin(omni.ext.IExt):
             setattr(self, warmup_attr, 30)
             return None
 
-        # _physics_view is populated AFTER the first physics step, even when
-        # is_physics_handle_valid() returns True. Without this guard, the
-        # caller's get_measured_joint_forces() / set_joint_*() raises
-        # AttributeError("'Articulation' object has no attribute
-        # '_physics_view'") every tick — visible as [Force callback] error
-        # spam in the Kit log. Mirror parity_publishers.py:393 hasattr guard.
+        # _physics_view is populated when initialize() is called AFTER physics
+        # has been stepping. If we're holding a pre-physics-step handle
+        # (e.g. _robot_view created in load_robot before reset_async returned),
+        # it stays None forever — we can't fix it on this instance. NULL it
+        # so the next call reconstructs fresh against a stage that's now
+        # physics-active. Set warmup=30 so reconstruction happens after a
+        # margin of further physics ticks (matches parity_publishers.py).
         if not (hasattr(artic, "_physics_view") and artic._physics_view is not None):
+            setattr(self, artic_attr, None)
             setattr(self, warmup_attr, 30)
             return None
 
@@ -1574,12 +1590,16 @@ class DigitalTwin(omni.ext.IExt):
             print(f"Error: UR5e prim not found at {self._robot_prim_path}. Load UR5e first.")
             return
 
-        if self._robot_view is not None:
-            self._effort_articulation = self._robot_view
-            print(f"Using existing ArticulationView. Joints: {self._effort_articulation.joint_names}")
-        else:
-            self._effort_articulation = None
-            print("ArticulationView not cached (hot-reload?). Will lazy-init in physics callback.")
+        # Do NOT seed _effort_articulation from self._robot_view: that handle
+        # was constructed in load_robot before reset_async returned, so its
+        # _physics_view is None and never populates. The lazy-init path in
+        # _on_physics_step_force constructs a fresh handle post-physics-tick
+        # (warmup=30), which IS the working pattern (see parity_publishers.py
+        # /joint_states reading proves it). PARITY-05 wrench-rootcause fix.
+        self._effort_articulation = None
+        self._force_warmup = 30
+        self._wrench_body_idx = None
+        print("Force publisher will lazy-init Articulation post-physics-tick (warmup=30).")
 
         graph_path = "/Graph/ActionGraph_UR5e_ForcePublish"
         keys = og.Controller.Keys
@@ -1622,14 +1642,19 @@ class DigitalTwin(omni.ext.IExt):
         print("Publishing geometry_msgs/WrenchStamped to topic: /fts_broadcaster/wrench")
 
     def _on_physics_step_force(self, dt):
-        """Physics step callback - read joint forces and update OmniGraph WrenchStamped attributes."""
+        """Physics step callback - read joint forces and update OmniGraph WrenchStamped attributes.
+
+        PARITY-05 wrench-rootcause:
+          - Articulation root is at <robot>/aic_unified_robot/root_joint
+            (PhysicsFixedJoint), not at /World/UR5e (Xform).
+          - frame_id="ati/tool_link" → read forces row for body_names index of
+            "ati_tool_link" (USD slash→underscore convention). With cable
+            active or arm-only, body order varies; indexing by [-1] picks
+            whatever happens to be last (a cable rope link or finger pad)
+            and produces all-zero or wrong-frame readings. Resolve once
+            after construction; cache in self._wrench_body_idx.
+        """
         try:
-            # PARITY-05 fix: articulation root is at <robot>/aic_unified_robot/root_joint
-            # (PhysicsFixedJoint), not at /World/UR5e (Xform). Constructing
-            # Articulation against /World/UR5e returns a degenerate handle whose
-            # _physics_view never populates, and get_measured_joint_forces()
-            # raises AttributeError every tick. See parity_publishers.py:387 for
-            # the canonical articulation-root path.
             artic = self._lazy_init_articulation(
                 '_effort_articulation',
                 f"{self._articulation_root_prim_path}/root_joint",
@@ -1638,9 +1663,25 @@ class DigitalTwin(omni.ext.IExt):
                 return
             self._effort_articulation = artic
 
-            forces = self._effort_articulation.get_measured_joint_forces()
+            if self._wrench_body_idx is None:
+                body_names = list(getattr(artic, 'body_names', []) or [])
+                # ati_tool_link is the canonical FT-sensor mount (URDF
+                # ati/tool_link → USD ati_tool_link). Fallbacks ordered by
+                # proximity to the wrist for robustness across robot variants.
+                for cand in ("ati_tool_link", "tool0", "wrist_3_link", "flange"):
+                    if cand in body_names:
+                        self._wrench_body_idx = body_names.index(cand)
+                        print(f"[Force callback] wrench body resolved: {cand} -> idx {self._wrench_body_idx} (of {len(body_names)} bodies)")
+                        break
+                if self._wrench_body_idx is None:
+                    # No match — fall back to last body (legacy behavior) but
+                    # warn loudly. Should never happen on the AIC unified USD.
+                    self._wrench_body_idx = len(body_names) - 1
+                    print(f"[Force callback] WARNING: no wrist body match in {body_names!r}; falling back to [-1]")
+
+            forces = artic.get_measured_joint_forces()
             if forces is not None and len(forces) > 0:
-                wrist = forces[0][-1]
+                wrist = forces[0][self._wrench_body_idx]
                 node = self._force_pub_node
                 og.Controller.attribute("inputs:wrench:force:x", node).set(float(wrist[0]))
                 og.Controller.attribute("inputs:wrench:force:y", node).set(float(wrist[1]))
@@ -1655,6 +1696,9 @@ class DigitalTwin(omni.ext.IExt):
         """Stop the physics-rate force publisher and clean up resources."""
         self._stop_physics_callback('_force_physx_sub', '_effort_articulation',
                                     '_force_publish_active', '_force_warmup')
+        # Cached wrench body index belongs to the previous Articulation
+        # instance — reset so the next setup re-resolves against fresh bodies.
+        self._wrench_body_idx = None
 
     # ==================== TF Publisher (PARITY-04) ====================
 

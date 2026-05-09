@@ -379,7 +379,7 @@
       "title": "Diagnose & fix PARITY-05 wrench garbage zeros (Articulation lifecycle)",
       "category": "runtime-gate",
       "priority": "critical",
-      "passes": false,
+      "passes": true,
       "requires_sim": true,
       "files_likely": [
         "exts/aic-dt/aic_dt/extension.py",
