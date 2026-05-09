@@ -45,7 +45,7 @@
       "title": "Capture all 3 Gazebo trial baselines via AIC pipeline",
       "category": "dev-infrastructure",
       "priority": "tracer-bullet",
-      "passes": false,
+      "passes": true,
       "requires_sim": false,
       "files_likely": [
         "exts/aic-dt/scripts/run_aic_engine_against_gazebo.sh (NEW; or wrapper extension)",
