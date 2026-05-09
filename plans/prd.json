@@ -71,7 +71,7 @@
       "title": "Verify gripper/tcp ingress chain (Phase 2 Pitfall 2 Option A round-trip)",
       "category": "runtime-gate",
       "priority": "tracer-bullet",
-      "passes": false,
+      "passes": true,
       "requires_sim": true,
       "files_likely": [
         "exts/aic-dt/aic_dt/controller_loop.py (verify gripper/tcp branch only)",

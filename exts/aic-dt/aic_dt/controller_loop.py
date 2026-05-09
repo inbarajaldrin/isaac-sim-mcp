@@ -1247,32 +1247,52 @@ class AicControllerLoop:
             if stage is None:
                 raise RuntimeError("no USD stage open")
             tool0_path = f"{self._robot_xform_path}/tool0"
-            tcp_path = f"{self._robot_xform_path}/gripper/tcp"
+            # USD authors the prim with underscores (Sdf.Path treats `/` as separator,
+            # so `gripper/tcp` cannot be a valid USD prim name). The slash-form
+            # `gripper/tcp` is a ROS-only convention applied at publish time via
+            # parity_publishers.py's _PRIM_NAME_TO_FRAME_ID override map. Mirror the
+            # same flattening when reading the live stage.
+            tcp_path = f"{self._robot_xform_path}/gripper_tcp"
             tool0_prim = stage.GetPrimAtPath(tool0_path)
             tcp_prim = stage.GetPrimAtPath(tcp_path)
             if not tool0_prim or not tool0_prim.IsValid():
                 raise RuntimeError(f"tool0 prim not found at {tool0_path}")
             if not tcp_prim or not tcp_prim.IsValid():
-                raise RuntimeError(f"gripper/tcp prim not found at {tcp_path}")
-            # ComputeLocalToWorldTransform yields a Gf.Matrix4d in stage units (meters)
+                raise RuntimeError(f"gripper_tcp prim not found at {tcp_path}")
+            # ComputeLocalToWorldTransform yields a Gf.Matrix4d in stage units (meters).
+            # Pixar's Gf.Matrix4d uses ROW-VECTOR convention (translation in row 3,
+            # pt_world(row) = pt_local(row) * M). The rest of _apply_pose_cmd composes
+            # in standard COLUMN-VECTOR convention (translation in column 3,
+            # pt_world(col) = M @ pt_local(col)). Conversion: column-vec form is the
+            # transpose of Pixar's row-vec form.
             xf_cache = UsdGeom.XformCache()
-            tool0_world = xf_cache.GetLocalToWorldTransform(tool0_prim)   # Gf.Matrix4d (row-major)
-            tcp_world = xf_cache.GetLocalToWorldTransform(tcp_prim)       # Gf.Matrix4d
-            # tool0 -> tcp = inverse(tool0_world) * tcp_world
-            tool0_to_tcp_gf = tool0_world.GetInverse() * tcp_world
-            # Convert Gf.Matrix4d (row-major) -> numpy 4x4 column-major SE(3) we use in apply_pose
-            # Pixar's Matrix4d is row-major; SE(3) math below uses standard column-major (row-vec * mat).
-            # We store both directions as 4x4 numpy arrays in the row-major Pixar convention.
-            def _gf_to_np(m):
+            tool0_world_gf = xf_cache.GetLocalToWorldTransform(tool0_prim)
+            tcp_world_gf = xf_cache.GetLocalToWorldTransform(tcp_prim)
+
+            def _gf_to_colvec_np(m):
+                """Pixar Gf.Matrix4d (row-vec) -> numpy 4x4 column-vec SE(3)."""
                 return np.array(
                     [[m[i][j] for j in range(4)] for i in range(4)],
                     dtype=np.float64,
-                )
-            self._tool0_to_tcp_offset_xform = _gf_to_np(tool0_to_tcp_gf)
-            self._tcp_to_tool0_offset_xform = _gf_to_np(tool0_to_tcp_gf.GetInverse())
+                ).T
+
+            T_world_tool0 = _gf_to_colvec_np(tool0_world_gf)
+            T_world_tcp = _gf_to_colvec_np(tcp_world_gf)
+            # Rigid offsets (column-vec SE(3)):
+            #   T_tcp_from_tool0  : column-vec matrix s.t. pt_tcp = T_tcp_from_tool0 @ pt_tool0
+            #   T_tool0_from_tcp  : inverse direction (egress; FK tool0 -> tcp).
+            # Used by _apply_pose_cmd via T_world_tool0_target = T_world_tcp_target @ T_tcp_from_tool0.
+            self._tcp_to_tool0_offset_xform = np.linalg.inv(T_world_tcp) @ T_world_tool0
+            self._tool0_to_tcp_offset_xform = np.linalg.inv(T_world_tool0) @ T_world_tcp
+            offset_t = self._tool0_to_tcp_offset_xform[:3, 3]
             self._node.get_logger().info(
                 f"_setup_kinematics: Lula IK ready (UR5e bundled config, ee='tool0'); "
-                f"tool0 -> gripper/tcp offset cached (translation={tool0_to_tcp_gf.ExtractTranslation()})"
+                f"tool0 -> gripper/tcp offset cached "
+                f"(translation in tool0 frame ≈ ({offset_t[0]:+.4f}, {offset_t[1]:+.4f}, {offset_t[2]:+.4f}) m)"
+            )
+            print(
+                f"[AIC-DT][controller] _setup_kinematics: tool0 -> gripper/tcp offset cached "
+                f"({offset_t[0]:+.4f}, {offset_t[1]:+.4f}, {offset_t[2]:+.4f}) m"
             )
             return True
         except Exception as exc:
