@@ -793,3 +793,30 @@ Skill cited: nvidia-suite-docs for routing the model-zenoh service-RPC stall que
 
 NEXT-ITER: trial-3-fire (sfp_sc_cable_reversed cable type, tests cable-rotation edge case). Then parity-report-run captures the divergence (Gazebo passing vs Isaac Sim service-RPC-stalled = false). If user wants Isaac-Sim-side trials to actually pass, the model-zenoh blocker needs resolution before that — but per PRD's flat-kanban spirit, capture-the-current-state is the M1 verification protocol. Investigation belongs to divergence post-parity-report.
 VERIFIED trial-2-fire by verifier-agent at 2026-05-10T00:18:36Z — verify_command passes (file exists, JSON shape valid: trial_id=trial_2, sim=isaacsim, insertion_event_fired=false, offlimit_contact_count=0, completed_steps=-1); wrapper EXIT trap path confirmed (run_aic_engine_against_isaac_sim.sh:54-56,90,143); file committed in 856e095; sim up at 8768.
+
+[2026-05-10T00:21Z] trial-3-fire — Isaac Sim trial_3 outcome JSON captured via wrapper.
+TASK: trial-3-fire (tracer-bullet, critical) — first-fire trial_3 (sfp_sc_cable_reversed cable) under CheatCode against Isaac Sim.
+
+PRE-FLIGHT: git status clean (untracked dirs only). Sim UP on :8768. trial-2-fire shipped earlier this session (commit 856e095); trial-3 is the informal sequencing follow-on.
+
+SELECTION: 4 passes:false tasks remain after trial-2 close (trial-3-fire, parity-report-run, ship-paperwork, wrist-cameras-restore). All informal prerequisites for trial-3-fire (= trial-2-fire transitively) passes:true. Picked highest-priority unblocked critical task.
+
+EXECUTION: bash exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh trial_3 --output-json=exts/aic-dt/docs/trial_outcomes/trial_3__isaacsim.json
+RESULT: Wrapper EXIT trap wrote JSON. verify_command PASS:
+  {trial_id:"trial_3", sim:"isaacsim", insertion_event_fired:false, offlimit_contact_count:0, completed_steps:-1, ts:"2026-05-10T00:19:47Z"}
+ACCEPTANCE: 1) JSON exists with required keys ✓  2) Produced by wrapper not hand-authored ✓  3) Outcome match deferred to parity-report-run per task contract ✓.
+
+OUTCOME=false NOTE (same blocker as trial-1/2, no new diagnostic):
+  Engine `Service '/aic_model/get_state' is available. Participant model discovered.` then GetState→ChangeState→SwitchController RPC timeouts → trial never executed; insertion_event_fired stays false. Identical signature to trial-1/2-fire. Root cause = phase-4-03-model-zenoh blocker (humble engine ↔ kilted model service-RPC stall through zenoh; topic discovery works, service payloads stall). Resolution belongs to parity-report-run divergence-investigation OR a new task targeting the model-zenoh blocker.
+
+REGRESSION SWEEP: trial-3-fire's files_likely = single new JSON file. No code edits. No shared files with any passes:true task → no regressions possible.
+
+CACHE: still on snapshot 1778370990 (161.3MB) from earlier this session. No new quick_start triggered; wrapper exercised existing playing scene.
+
+Files: exts/aic-dt/docs/trial_outcomes/trial_3__isaacsim.json (NEW), plans/prd.json (trial-3-fire passes:true), plans/progress.txt (this entry).
+No cross-repo edits. No sudo. Sim left RESPONSIVE on port 8768 under zenoh transport.
+
+Skill cited: isaac-sim-extension-dev for wrapper preconditions verification (two-launcher reality, MCP socket protocol, cache discipline, ROS_DOMAIN_ID=7 isolation policy). Confirmed sim was up + cache warm before wrapper invocation.
+Skill cited: nvidia-suite-docs for routing the model-zenoh service-RPC stall question — confirmed already-tracked blocker per HANDOFF.json `phase-4-03-model-zenoh`, no fresh API question.
+
+NEXT-ITER: parity-report-run is now unblocked (all 6 trial outcome JSONs present: gazebo {1,2,3} + isaacsim {1,2,3}). Expected first-run signal: 3/3 trials show Gazebo=PASS / Isaac Sim=FAIL (insertion_event_fired divergence) — exactly the architectural surface for model-zenoh blocker investigation. parity-report-run's verify will FAIL by design until model-zenoh resolves; that's the M1 ship-gate honestly reflecting reality. Alternative iteration: pick wrist-cameras-restore (tracer-bullet, scene-authoring, default-off so non-blocking) or chase the model-zenoh blocker directly (no PRD task explicitly targets it; would need to interpret as a fix-as-encountered patch under autonomous mode).

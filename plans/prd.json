@@ -336,7 +336,7 @@
       "title": "trial_3 first-fire under CheatCode against Isaac Sim",
       "category": "tracer-bullet",
       "priority": "critical",
-      "passes": false,
+      "passes": true,
       "requires_sim": true,
       "files_likely": [
         "exts/aic-dt/docs/trial_outcomes/trial_3__isaacsim.json (NEW)"
