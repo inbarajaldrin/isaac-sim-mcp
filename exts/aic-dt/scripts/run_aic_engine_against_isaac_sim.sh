@@ -185,8 +185,21 @@ if echo "$SIM_STATUS" | grep -qE "aic-dt \(8768\): RESPONSIVE"; then
     echo "[wrapper] Isaac Sim aic-dt RESPONSIVE — reusing"
 else
     echo "[wrapper] Isaac Sim not running aic-dt — launching cold"
-    bash -c 'source ~/env_isaaclab/bin/activate && ROS_DOMAIN_ID=7 DISPLAY=${DISPLAY:-:0} \
-        bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch aic-dt' &
+    # Isaac Sim's rclpy bridge MUST find librmw_zenoh_cpp.so + libzenohc.so to
+    # publish on the zenoh router. The libzenohc.so vendor lives at a
+    # non-standard path that /opt/ros/humble/setup.bash leaves off LD_LIBRARY_PATH.
+    bash -c '
+        source ~/env_isaaclab/bin/activate
+        source /opt/ros/humble/setup.bash
+        export ROS_DOMAIN_ID=7
+        export RMW_IMPLEMENTATION=rmw_zenoh_cpp
+        export ZENOH_ROUTER_CHECK_ATTEMPTS=-1
+        export ZENOH_CONFIG_OVERRIDE="connect/endpoints=[\"tcp/localhost:7447\"];transport/shared_memory/enabled=false"
+        # Explicitly add zenoh_cpp_vendor lib dir — humble setup.bash misses it.
+        export LD_LIBRARY_PATH="/opt/ros/humble/opt/zenoh_cpp_vendor/lib:${LD_LIBRARY_PATH:-}"
+        export DISPLAY=${DISPLAY:-:0}
+        exec bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch aic-dt
+    ' &
     LAUNCH_PID=$!
     # Wait up to 90s for the MCP socket to open
     for i in $(seq 1 90); do

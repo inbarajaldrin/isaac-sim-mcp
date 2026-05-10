@@ -1138,3 +1138,89 @@ under autonomous mode), or promote to PRD task (engine-scoring-tf-rate-fix or si
   Sim still up :8768. zenohd still up :7447. Engine binaries built with b.1
   pivot baked in. Wrapper passes skip_ready_simulator:=true. All infrastructure
   state is fresh; next iter picks up immediately.
+
+[2026-05-10T19:55Z] DEFERRED-3 RESOLVED — /scoring/tf publish gate fixed.
+
+ROOT CAUSE: every entry in scoring_publishers._SCORING_TF_FRAMES pointed at
+stale prim paths that no longer exist in the live scene:
+  - `/World/UR5e/cable/Rope/Rope/link_20` — cable subtree is SetActive(False)
+    until Phase 3 SCENE-05 fully lands, so this path returns IsValid()=false.
+  - `/World/TaskBoard/sc_port_1` — legacy snake_case; live scene uses
+    CamelCase `/World/TaskBoard/SCPort_0`. Confirmed via live prim probe:
+    /World/TaskBoard/SCPort_0/sc_port_visual exists, /World/TaskBoard/sc_port_1
+    does not.
+With ALL entries pointing at invalid prims, _publish_frame_list skipped every
+frame, producing an empty TFMessage which was then gated off by the
+`if msg.transforms:` check at line 380 — net result: 5 publishers registered
+on /scoring/tf but ZERO messages on the bus. Engine's WaitForTfs timed out
+every cycle (10s × 5 retries = 50s wasted per trial).
+
+FIX (scoring_publishers.py):
+  Update _SCORING_TF_FRAMES to include:
+    (a) `/World/TaskBoard` always-valid fallback — guarantees ≥1 transform/tick
+        even when cable is inactive. WaitForTfs only needs the topic to have
+        any message; content doesn't gate the engine call (though it does end
+        up in the scoring rosbag).
+    (b) Live SCPort path `/World/TaskBoard/SCPort_0/sc_port_visual`
+        (replaces stale sc_port_1).
+    (c) Cable plug retained but pointing at sc_plug_visual; still silently
+        skipped while cable is inactive (Phase 3 SCENE-05 territory).
+
+WRAPPER BUG ALSO FIXED: run_aic_engine_against_isaac_sim.sh Isaac-Sim-launch
+branch was missing RMW=rmw_zenoh_cpp + ZENOH_CONFIG_OVERRIDE +
+LD_LIBRARY_PATH containing /opt/ros/humble/opt/zenoh_cpp_vendor/lib.
+Without those, rclpy fails to load librmw_zenoh_cpp.so on cold relaunch
+(libzenohc.so dlopen error). Previous runs survived because Isaac Sim was
+already up from a prior session that had the env set; cold-restart from this
+wrapper now self-contained.
+
+VERIFICATION:
+  - /scoring/tf publish rate post-fix: 80.59 Hz (was 0 Hz)
+  - /tf publish rate: 80.72 Hz (held)
+  - Engine log AFTER fix shows: "✓ Scoring Ready for trial 'trial_1'" — first
+    time ever reaching this stage.
+  - Engine progresses past scoring readiness to "Sending InsertCable goal for
+    task [task_1]" for BOTH trial_1 AND trial_2.
+  - All 5 lifecycle transitions clean; 0 service-RPC timeouts.
+
+NEW BLOCKER SURFACED — DEFERRED-4 (CheatCode policy can't find specific TF frames):
+  Now that the trial actually runs, CheatCode policy code is being invoked.
+  It looks up per-port-per-mount transforms like:
+    - task_board/nic_card_mount_1/sfp_port_0_link
+    - task_board/nic_card_mount_0/sfp_port_0_link
+  Model log shows:
+    [ERROR] Transform 'task_board/nic_card_mount_0/sfp_port_0_link' not
+            available after 10.0s
+    insert_cable() returned False
+  We publish /scoring/tf for generic taskboard frames but not these specific
+  named per-mount + per-port frames. CheatCode expects them in /tf or /tf_static
+  with these exact frame_ids.
+
+  Hypothesis ladder:
+    H1) Extend scoring_publishers._OBJECTS_POSES_FRAMES with the full set of
+        per-port frames CheatCode expects. Source-of-truth: CheatCode.py
+        reads the trial config to know which mount + port. Frame names follow
+        pattern `task_board/<mount_name>/<port_name>_link`. Live mount/port
+        prims exist post-load_trial.
+    H2) Alternative — engine's /scoring/tf already contains object poses;
+        CheatCode could be configured to use those. But CheatCode is
+        unmodified per architectural law. So must publish frames it expects.
+
+  Files: exts/aic-dt/aic_dt/scoring_publishers.py (frame list expansion);
+    extension.py::load_trial (compute live per-port frame_ids per trial config).
+
+  Effect: tier_2/tier_3 scoring stays "Task execution failed" because
+  insert_cable() can't proceed without target-port transform.
+
+  Estimated effort: 30-90min — depends on how many CheatCode-expected frame
+  names exist across all 3 trials in sample_config.yaml. Cheapest first probe:
+  enumerate live CheatCode TF-lookup calls (model log already has them when
+  run); cross-reference against live prim paths under /World/TaskBoard.
+
+PROGRESS METER: M1 ship-blockers post-zenoh fix (running list):
+  ✓ DEFERRED-1 (spawn_entity probe)           — RESOLVED b.1 pivot
+  ✓ DEFERRED-2 (SwitchController timeout)     — RESOLVED side-effect
+  ✓ DEFERRED-3 (/scoring/tf publish gate)     — RESOLVED frame-paths update
+  ◯ DEFERRED-4 (CheatCode TF frame lookups)   — NEW; medium-effort
+  After DEFERRED-4: tier_2/tier_3 scoring becomes meaningful; CheatCode can
+  actually attempt cable insertion; trial outcomes reach Gazebo parity.

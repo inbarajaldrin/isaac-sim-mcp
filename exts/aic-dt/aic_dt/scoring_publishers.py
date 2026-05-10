@@ -41,10 +41,34 @@ for _new_path in (_ISAAC_ROS_311, _RCLPY_311):
 # Frame-name constants (per scoring_tier2_contract.md).
 # child_frame_id MUST contain "task_board" substring to trigger ScoringTier2.cc:51-53
 # static-TF registration (setTransform with is_static=true).
+#
+# DEFERRED-3 (2026-05-10): legacy snake_case paths (`/World/TaskBoard/sc_port_1`,
+# `/World/UR5e/cable/Rope/Rope/link_20`) no longer match the live scene which
+# uses CamelCase namespace (`/World/TaskBoard/SCPort_0`, etc.) and keeps the
+# cable subtree SetActive(False) until Phase 3 SCENE-05 fully lands. With ALL
+# entries pointing at invalid prims, `_publish_frame_list` skipped every frame,
+# producing an empty TFMessage which was then gated off by `if msg.transforms:`
+# (line ~380) — net result: /scoring/tf had publisher count=5 but ZERO messages.
+# Engine's ready_scoring → WaitForTfs timed out after 10s, scoring setup failed
+# 5 retries, trial never reached task execution.
+#
+# Minimal fix: include /World/TaskBoard (always valid post-quick_start) as a
+# fallback so the message always carries at least one transform. The
+# cable plug + port entries are still listed (using live CamelCase paths) and
+# will populate the message when their prims become valid (cable activation
+# is gated on attach_cable_to_gripper=True + Phase 3 SCENE-05 fully landing).
 _SCORING_TF_FRAMES = [
     # (parent_frame, child_frame, usd_prim_path)
-    ("world", "cable/sc_plug_link", "/World/UR5e/cable/Rope/Rope/link_20"),  # plug-end (Plan 03-01 probe)
-    ("world", "cable/sc_port_link", "/World/TaskBoard/sc_port_1"),  # port (TBD verify path)
+    # Always-valid fallback — guarantees /scoring/tf publishes ≥1 transform/tick
+    # so engine's WaitForTfs() gate fires, even when cable subtree is inactive.
+    ("world", "task_board", "/World/TaskBoard"),
+    # Live SCPort path — replaces stale `/World/TaskBoard/sc_port_1`. Maps to
+    # trial_1's primary port (sfp_sc_cable plug target).
+    ("world", "task_board_sc_port_0", "/World/TaskBoard/SCPort_0/sc_port_visual"),
+    # Cable plug-end — silently skipped while cable subtree is inactive
+    # (Phase 3 SCENE-05 work to activate per trial). Path updated to match
+    # the live cable USD topology where it does become valid.
+    ("world", "cable/sc_plug_link", "/World/UR5e/cable/sc_plug_visual"),
 ]
 
 _OBJECTS_POSES_FRAMES = [
