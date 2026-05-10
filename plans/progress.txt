@@ -764,3 +764,4 @@ No cross-repo edits. No sudo. Sim left RESPONSIVE on port 8768 under zenoh trans
 
 Skill cited: isaac-sim-extension-dev for two-launcher reality, MCP socket protocol, cache discipline (postload launcher precedent + snapshot-and-restore policy + ROS_DOMAIN_ID=7 isolation). Validated wrapper preconditions before invocation.
 Skill cited: nvidia-suite-docs for routing model-RPC question to the correct sub-skill (isaac-ros covers RMW interop semantics; isaac-sim covers SimulationApp lifecycle); didn't WebFetch — confirmed the issue is a known-shape blocker tracked in HANDOFF.json `phase-4-03-model-zenoh` rather than a fresh API question.
+VERIFIED trial-1-fire by verifier-agent at 2026-05-10T00:10:16Z — JSON shape ok, wrapper --output-json flag present, sim+docker capture deterministic
