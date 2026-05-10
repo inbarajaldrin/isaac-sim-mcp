@@ -989,3 +989,74 @@ version mismatch question; ultimately rmw_zenoh-cpp is Apex.AI/eclipse-zenoh
 not NVIDIA-owned, so the deepest diagnostic was direct version inspection
 (.pixi/envs/default/share/rmw_zenoh_cpp/package.xml = 0.6.6 vs apt 0.1.8) +
 the 3-probe bisection ladder rather than NVIDIA docs.
+
+[2026-05-10T03:35Z] DEFERRED ISSUES (surfaced during zenoh-rpc-stall-fix verification; not yet PRD tasks).
+
+Two infrastructure issues observable in the engine log AFTER the RPC stall is gone.
+Neither was in scope for zenoh-rpc-stall-fix (PRD acceptance is GetState/ChangeState
+only). Operator/next-iter triage decides whether to promote each to a PRD task.
+
+DEFERRED-1: "Spawn entity service not available" — engine.check_endpoints
+  - Symptom: engine logs `Spawn entity service not available after waiting`
+    5 times (10s each = 50s wasted), then logs `EVALUATION ERROR: Endpoints
+    check failed after 5 attempts for trial 'trial_1'. This is an infrastructure
+    issue. Is eval environment started?`
+  - Source: aic_engine.cpp check_endpoints stage. Engine probes for a
+    `/world/<name>/create` (or similar Gazebo) service that exists in
+    aic_eval Docker bringup but has no equivalent on Isaac Sim.
+  - Effect: engine still proceeds to tier_1 scoring (Model validation
+    succeeded → score=1) but tier_2/tier_3 score=0 ("Task execution failed")
+    — so insertion_event_fired stays false even with the RPC pipeline healthy.
+  - Hypothesis: engine config_file_path (sample_config.yaml) declares a
+    `required_endpoints` list. We may need to either (a) author a stub
+    Spawn entity service in aic-dt that no-ops + acks, OR (b) adjust the
+    sample_config.yaml to skip endpoint check OR remove the offending entry
+    from required_endpoints. Path (a) preserves architectural fidelity;
+    Path (b) is a cross-repo edit that needs cross_repo_changes.json entry.
+  - Files: ~/Documents/aic/aic_engine/src/aic_engine.cpp (check_endpoints),
+    ~/Documents/aic/aic_engine/config/sample_config.yaml, OR a new MCP atom
+    in exts/aic-dt/aic_dt/ that publishes a stub spawn-entity service.
+  - Verify recipe: re-run trial_1 wrapper; assert engine reaches "Cable
+    insertion successful" or "Cable insertion failed" tier-3 message.
+
+DEFERRED-2: SwitchController service call timeout — engine→aic_controller
+  - Symptom: engine logs `SwitchController service call timed out` followed
+    by `Failed to deactivate aic_controller. Failed to home robot during
+    simulator reset.`
+  - Source: aic_engine calls /controller_manager/switch_controller (a
+    ros2_control service) to switch between aic_controller and the homing
+    forward_position_controller. The service exists in Gazebo's bringup
+    (controller_manager spawns) but is NOT present in the aic-dt Isaac Sim
+    extension — aic_dt_controller_loop is a custom rclpy subscriber, not
+    a controller_manager-managed plugin.
+  - Effect: engine cannot home the robot between trials. For single-trial
+    testing not catastrophic, but for trial_1→trial_2→trial_3 sequencing
+    the robot stays at the previous trial's final pose.
+  - Hypothesis: stub /controller_manager/switch_controller +
+    /controller_manager/list_controllers services in aic-dt that respond
+    "success" without actually switching anything (since aic_dt_controller_loop
+    is always-on). Pattern matches DEFERRED-1's stub approach. Topic-parity
+    spirit preserved: engine sees the same surface it expects from Gazebo.
+  - Files: exts/aic-dt/aic_dt/controller_loop.py (add /controller_manager
+    service stubs), or new exts/aic-dt/aic_dt/controller_manager_stub.py.
+  - Verify recipe: re-run trial_1 wrapper; assert engine log contains zero
+    "SwitchController service call timed out" lines AND
+    "Successfully homed robot" or equivalent.
+
+NOT BLOCKERS — neither prevents the loop from continuing. They DO prevent
+parity-report-run from showing insertion_event_fired=true on Isaac Sim until
+addressed. The loop's natural progression: trial-1-fire iter captures JSON
+(insertion_event_fired=false because of DEFERRED-1+2), trial-2/3-fire same,
+parity-report-run FAILs by design (3 trials diverge), next iter picks
+DEFERRED-1 or DEFERRED-2 as the highest-priority new blocker — at which point
+operator may want to promote one or both to PRD tasks for clearer iteration
+gates.
+
+PROMOTION GUIDANCE (if operator wants to add to PRD):
+  Both fit the existing task schema; both are critical-priority since they
+  block parity-report-run; both are sim-bound (verification_mode='sim+docker'
+  for E2E or 'sim' for narrow probe). DEFERRED-1 is likely cheaper (~30-60min
+  via stub atom in exts/aic-dt/aic_dt/extension.py with one MCP atom). DEFERRED-2
+  is a similar-shaped stub. Recommended order: DEFERRED-1 first (if not
+  resolved, every trial wastes 50s on the endpoint check before getting to
+  the controller-switching phase where DEFERRED-2 surfaces).
