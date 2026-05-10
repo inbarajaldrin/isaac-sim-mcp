@@ -63,6 +63,57 @@ if [ -d "$PATCHES_DIR" ]; then
     done
 fi
 
+# 2b. Apply targeted in-place edit: gate the spawn_entity probe in
+#     check_endpoints() on !skip_ready_simulator_. The engine's own
+#     ready_simulator() is the SOLE consumer of spawn_entity_client_ and is
+#     already gated on skip_ready_simulator_ (line ~1165). Probing a service
+#     whose only consumer is gated off is an upstream inconsistency. The
+#     aic-dt extension authors all per-trial scene state via load_trial USD
+#     atoms, so we run with skip_ready_simulator=true; this gate makes
+#     check_endpoints() respect that flag. See
+#     exts/aic-dt/docs/zenoh-rpc-stall-fix.md (DEFERRED-1 captured under that
+#     task's progress.txt note; this commit closes that note).
+#     Surgical Python edit (vs full-file source_pivot copy) to minimise
+#     drift if upstream changes other lines in aic_engine.cpp.
+python3 - <<'PY'
+import pathlib
+p = pathlib.Path.home() / "aic_humble_ws/src/aic_engine/src/aic_engine.cpp"
+src = p.read_text()
+old = (
+    "  // Check services\n"
+    "  if (!spawn_entity_client_->wait_for_service(\n"
+    "          timeout.to_chrono<std::chrono::nanoseconds>())) {\n"
+    "    RCLCPP_ERROR(node_->get_logger(),\n"
+    "                 \"Spawn entity service not available after waiting\");\n"
+    "    return false;\n"
+    "  }\n"
+)
+new = (
+    "  // Check services — only when ready_simulator() will actually USE\n"
+    "  // spawn_entity_client_. Gating on skip_ready_simulator_ eliminates a\n"
+    "  // false prerequisite for simulators that don't expose Gazebo's\n"
+    "  // /gz_server/spawn_entity (e.g. Isaac Sim, where load_trial USD atoms\n"
+    "  // own scene authoring). Patch applied by aic-dt build_aic_engine_host.sh.\n"
+    "  if (!skip_ready_simulator_) {\n"
+    "    if (!spawn_entity_client_->wait_for_service(\n"
+    "            timeout.to_chrono<std::chrono::nanoseconds>())) {\n"
+    "      RCLCPP_ERROR(node_->get_logger(),\n"
+    "                   \"Spawn entity service not available after waiting\");\n"
+    "      return false;\n"
+    "    }\n"
+    "  }\n"
+)
+if old in src:
+    src = src.replace(old, new)
+    p.write_text(src)
+    print("[build_aic_engine_host] applied check_endpoints spawn_entity gate")
+elif "if (!skip_ready_simulator_) {" in src and "spawn_entity_client_->wait_for_service" in src:
+    # Already pivoted on a prior re-run; no-op.
+    print("[build_aic_engine_host] check_endpoints gate already present — skipping")
+else:
+    raise SystemExit("[build_aic_engine_host] FAIL: could not locate check_endpoints spawn_entity probe block")
+PY
+
 # 3. Vendor simulation_interfaces apt package (no sudo)
 if [ ! -d "$APT_VENDOR/extracted/opt/ros/humble/share/simulation_interfaces" ]; then
     cd "$APT_VENDOR"

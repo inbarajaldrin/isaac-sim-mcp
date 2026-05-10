@@ -374,9 +374,18 @@ echo "[wrapper] launching host aic_engine (humble, ROS_DOMAIN_ID=7, RMW=zenoh)"
     export RMW_IMPLEMENTATION=rmw_zenoh_cpp
     export ZENOH_ROUTER_CHECK_ATTEMPTS=-1
     export ZENOH_CONFIG_OVERRIDE="$PEER_OVERRIDE"
+    # skip_ready_simulator=true: aic-dt's load_trial USD atom already authored the
+    #   per-trial scene state (board, ports, mount rails, cable, gripper attach).
+    #   The engine's ready_simulator() would only spawn duplicate entities via
+    #   the Gazebo /gz_server/spawn_entity service which Isaac Sim does not
+    #   expose. The build_aic_engine_host.sh pivot also gates check_endpoints'
+    #   spawn_entity probe on this flag, so passing it true is what unlocks
+    #   the trial advancing past endpoint readiness.
     exec "$ENGINE_BIN" --ros-args \
         -p config_file_path:="$AIC_REPO/aic_engine/config/sample_config.yaml" \
         -p use_sim_time:=true \
+        -p skip_ready_simulator:=true \
+        -p "ground_truth:=$GROUND_TRUTH_LOWER" \
         >>"$ENGINE_LOG" 2>&1
 ) &
 ENGINE_PID=$!

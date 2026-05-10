@@ -1060,3 +1060,81 @@ PROMOTION GUIDANCE (if operator wants to add to PRD):
   is a similar-shaped stub. Recommended order: DEFERRED-1 first (if not
   resolved, every trial wastes 50s on the endpoint check before getting to
   the controller-switching phase where DEFERRED-2 surfaces).
+
+[2026-05-10T15:30Z] DEFERRED-1 RESOLVED via path (b.1) — operator-approved after /grill-me + /ask-gpt round.
+  Independent GPT second opinion converged on (b): "(b) is correctly setting up the
+  Isaac Sim path, not artificially making trials pass... the verifier still has teeth."
+  Sub-option (b.1) chosen: in-script Python edit in build_aic_engine_host.sh applies
+  the gate to the vendored aic_engine.cpp on every rebuild. Upstream
+  ~/Documents/aic/aic_engine source untouched.
+
+  Change applied: aic_engine.cpp:1148-1154 wrapped in `if (!skip_ready_simulator_) { }`.
+  Engine's ready_simulator() is the SOLE consumer of spawn_entity_client_ and was
+  already gated on this flag — the probe in check_endpoints was a structural
+  inconsistency; aligning them.
+
+  Wrapper change: -p skip_ready_simulator:=true + -p ground_truth:=$GROUND_TRUTH_LOWER
+  added to the engine launch argv. Without these the gate doesn't fire and the
+  engine's actual scene-spawn code path still runs (would also fail).
+
+  Verification (post-fix trial_1 run):
+    - 0 "Spawn entity service not available" errors (was 5 retries × 10s = 50s wasted)
+    - 0 service-call timeouts of any kind
+    - "Skipping ready_simulator (skip_ready_simulator=true)" — gate respected
+    - "Skipping entity deletion (skip_ready_simulator=true)" — DEFERRED-2 also
+      collapsed: SwitchController-timeout was a side-effect of the homing path
+      that runs after entity deletion. With ready_simulator gated, that path
+      doesn't run, so the SwitchController call is never made. DEFERRED-2 is
+      RESOLVED automatically by this same fix.
+    - All 5 aic_model lifecycle transitions clean
+    - Engine reaches "Complete Scoring Results" output (was never reaching
+      this output before — endpoint check failed first)
+    - tier_1 score=1 (Model validation succeeded) — meaningful progress
+    - tier_2 score=0, tier_3 score=0 ("Task execution failed") — but for a
+      NEW reason (DEFERRED-3 below), not the spawn_entity probe
+
+[2026-05-10T15:32Z] DEFERRED-3 (new, surfaced post-DEFERRED-1 fix): Scoring setup
+fails — engine's ready_scoring() WaitForTfs() times out after 10s waiting for
+/scoring/tf message reception.
+  - Symptom: engine logs "Scoring setup failed after 5 attempts for trial
+    'trial_1'. This is an infrastructure issue. Is eval environment started?"
+  - Source: aic_scoring/src/ScoringTier2.cc:WaitForTfs (line ~140-160) — sets
+    cableTfReceived=true on /scoring/tf message, gripperTfReceived=true on
+    /tf message; spinlock-waits up to 10s for BOTH.
+  - Probe results live: /tf publishes at 57Hz, /scoring/tf is up but at very
+    low rate (~0.2 Hz observed via `ros2 topic echo --once /scoring/tf` taking
+    5s for one message). 5 publishers of /scoring/tf on the bus (probably
+    one per load_trial call accumulating across runs — needs cleanup).
+  - Hypothesis ladder:
+    H1) /scoring/tf publish rate too low + 10s timeout cuts it short. Bump
+        publish rate in scoring_publishers.py to ~30Hz to match /tf.
+    H2) Multiple stale publishers (count=5) confusing the subscriber's matching
+        logic — purge in load_trial reset path, ensure single publisher per topic.
+    H3) Engine's create_generic_subscription not actually receiving messages
+        across the host-aic_engine ↔ Isaac-Sim-rclpy boundary even though
+        ros2 topic echo from a 3rd-party humble peer works. Could be a
+        QoS-profile mismatch (engine subscribes RELIABLE+KeepLast(10) per
+        ScoringTier2.cc:104; if publisher is BEST_EFFORT or different KeepLast
+        depth, generic_subscription may silently drop).
+  - Files: exts/aic-dt/aic_dt/scoring_publishers.py (publish rate + QoS profile);
+    exts/aic-dt/aic_dt/extension.py (load_trial reset path — purge stale pubs).
+  - Effect: tier_2 + tier_3 scoring stays at 0 because trial never reaches
+    actual task execution (ready_scoring → tasks_started never fires).
+  - Verify recipe: re-run trial_1; assert engine log contains
+    "✓ Scoring Ready for trial 'trial_1'" AND tier_2 message != "Task execution failed".
+  - Estimated effort: 30-60min to root-cause + fix; cheapest probe is checking
+    /scoring/tf publish rate live via `ros2 topic hz /scoring/tf` and
+    inspecting scoring_publishers.py rate.
+
+PROGRESS METER: M1 ship-blockers post-zenoh fix:
+  ✓ DEFERRED-1 (spawn_entity probe) — RESOLVED b.1
+  ✓ DEFERRED-2 (SwitchController timeout) — RESOLVED automatic side-effect
+  ◯ DEFERRED-3 (/scoring/tf WaitForTfs timeout) — NEW; cheap fix expected
+  After DEFERRED-3: trials should reach actual task execution; CheatCode
+  policy attempts cable-into-port; tier_2/tier_3 scoring becomes meaningful.
+
+NEXT-ITER RECOMMENDATION: pick DEFERRED-3 directly (operator-approved fix-as-encountered
+under autonomous mode), or promote to PRD task (engine-scoring-tf-rate-fix or similar).
+  Sim still up :8768. zenohd still up :7447. Engine binaries built with b.1
+  pivot baked in. Wrapper passes skip_ready_simulator:=true. All infrastructure
+  state is fresh; next iter picks up immediately.
