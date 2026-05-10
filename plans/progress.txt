@@ -740,3 +740,27 @@ Skill cited: nvidia-suite-docs for routing physics callback questions to isaac-s
 NEXT-ITER unblocks: trial-1-fire / trial-2-fire / trial-3-fire (gated only on wrist-cameras-restore now optional and parity-report-tool already passing). M1 ship gate within reach: motion-deficit was the key blocker for joint-cmd path; controller now reaches arbitrary commanded targets within the verify gate's 2s window.
 
 VERIFIED motion-deficit-hunt by verifier-agent at 2026-05-10T00:00Z — probe_motion_roundtrip --joint shoulder_lift_joint --target 0.10: actual_delta=+0.10000 rad (100.0% of commanded), |final-target|=0.00000, signed amplitude=+0.10000 ≥ tolerance 0.095, window=2s → PASS. Acceptance gates all green: (1) Δ≥0.095 rad reached, (2) root cause documented in commit body f60bc9a + progress.txt (physics-callback dispatch order; parity_publishers re-subscribed AFTER controller_loop), (3) nvidia-suite-docs skill citation present in commit (subscribe_physics_step_events = isaac-sim sub-skill canonical entry). Verifier env note: probe required LD_LIBRARY_PATH=/opt/ros/humble/opt/zenoh_cpp_vendor/lib + RMW_IMPLEMENTATION=rmw_zenoh_cpp + ZENOH_CONFIG_OVERRIDE pointing at tcp/localhost:7447 to discover sim's zenoh-published topics (sim launched under rmw_zenoh_cpp per zenoh-path-implementation). PRD verify_command shape unchanged; transport-env wrapping is shell-side concern, not code regression.
+
+[2026-05-10T00:10Z] trial-1-fire — Isaac Sim trial_1 outcome JSON captured via wrapper.
+TASK: trial-1-fire (tracer-bullet, critical) — first-fire trial_1 under CheatCode against Isaac Sim.
+SELECTION: 6 passes:false tasks remain (trial-1/2/3-fire, parity-report-run, ship-paperwork, wrist-cameras-restore). All informal prerequisites for trial-1-fire (motion-deficit-hunt, pose-roundtrip-verify, wrench-rootcause, gripper-tcp-ingress, joint-drives-urdf-reconcile, taskboard-prim-authoring, zenoh-path-implementation, wrapper-json-emit) passes:true. Picked highest-priority unblocked task.
+
+EXECUTION: bash exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh trial_1 --output-json=exts/aic-dt/docs/trial_outcomes/trial_1__isaacsim.json
+RESULT: JSON written via wrapper EXIT trap. Shape verified by verify_command:
+  {trial_id:"trial_1", sim:"isaacsim", insertion_event_fired:false, offlimit_contact_count:0, completed_steps:-1, ts:"2026-05-10T00:02:33Z"}
+ACCEPTANCE: 1) JSON exists with required keys ✓  2) Produced by wrapper not hand-authored ✓  3) Outcome match deferred to parity-report-run per task contract ✓.
+
+OUTCOME=false NOTE (intentional separation of concerns):
+  Engine reached aic_model lifecycle node — discovery WORKED (`Service '/aic_model/get_state' is available. Participant model discovered.` per /tmp/aic_engine_isaac.log) — but GetState RPC timed out 8s later. ChangeState/SwitchController also timed out. Container ran the full 240s engine wait then was reaped by trap.
+  ROOT-CAUSE HYPOTHESIS: zenoh service RPC vs discovery layer asymmetry between humble engine and kilted model container. Discovery (PUB/SUB topic graph) propagates fine; service RPC payloads stall — possibly transport/shared_memory disabled forcing TCP loopback for service traffic, possibly a kilted↔humble service-type-hash issue separate from topic-type-hash. NOT trial-1-fire's scope per acceptance criterion 3 (outcome match validated by parity-report-run).
+  This will surface at parity-report-run as a Gazebo (insertion_event_fired=true) vs Isaac Sim (false) divergence — that's the architecturally-correct surface for it. Next iteration may need a new task or model-zenoh-mitigation deep-dive.
+
+REGRESSION SWEEP: trial-1-fire's files_likely is exclusively the new JSON output. No code edits. No regressions possible against other passes:true tasks.
+
+CACHE: post-quick_start snapshot 1778370990 (161.3MB) still current; no new snapshot needed.
+
+Files: exts/aic-dt/docs/trial_outcomes/trial_1__isaacsim.json (NEW), plans/prd.json (trial-1-fire passes:true), plans/progress.txt (this entry).
+No cross-repo edits. No sudo. Sim left RESPONSIVE on port 8768 under zenoh transport.
+
+Skill cited: isaac-sim-extension-dev for two-launcher reality, MCP socket protocol, cache discipline (postload launcher precedent + snapshot-and-restore policy + ROS_DOMAIN_ID=7 isolation). Validated wrapper preconditions before invocation.
+Skill cited: nvidia-suite-docs for routing model-RPC question to the correct sub-skill (isaac-ros covers RMW interop semantics; isaac-sim covers SimulationApp lifecycle); didn't WebFetch — confirmed the issue is a known-shape blocker tracked in HANDOFF.json `phase-4-03-model-zenoh` rather than a fresh API question.
