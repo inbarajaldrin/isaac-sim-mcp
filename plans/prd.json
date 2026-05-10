@@ -293,7 +293,7 @@
       "title": "trial_1 first-fire under CheatCode against Isaac Sim",
       "category": "tracer-bullet",
       "priority": "critical",
-      "passes": true,
+      "passes": false,
       "requires_sim": true,
       "files_likely": [
         "exts/aic-dt/docs/trial_outcomes/trial_1__isaacsim.json (NEW)"
@@ -316,7 +316,7 @@
       "title": "trial_2 first-fire under CheatCode against Isaac Sim",
       "category": "tracer-bullet",
       "priority": "critical",
-      "passes": true,
+      "passes": false,
       "requires_sim": true,
       "files_likely": [
         "exts/aic-dt/docs/trial_outcomes/trial_2__isaacsim.json (NEW)"
@@ -336,7 +336,7 @@
       "title": "trial_3 first-fire under CheatCode against Isaac Sim",
       "category": "tracer-bullet",
       "priority": "critical",
-      "passes": true,
+      "passes": false,
       "requires_sim": true,
       "files_likely": [
         "exts/aic-dt/docs/trial_outcomes/trial_3__isaacsim.json (NEW)"
@@ -476,6 +476,35 @@
       "verify_command": "test -f exts/aic-dt/docs/zenoh-decision.md && grep -q 'Why zenoh' exts/aic-dt/docs/zenoh-decision.md && grep -q 'Path verdict' exts/aic-dt/docs/zenoh-decision.md && grep -q 'Implementation plan' exts/aic-dt/docs/zenoh-decision.md",
       "notes": "Operator preference: rebuild humble-native is fine if not a multi-file rewrite; bridge is fine if it preserves architectural fidelity. Decision belongs to research, not preference.",
       "verification_mode": "doc-only"
+    },
+    {
+      "id": "zenoh-rpc-stall-fix",
+      "title": "Resolve service-RPC stall through zenoh router (humble engine ↔ kilted model)",
+      "category": "integration",
+      "priority": "critical",
+      "passes": true,
+      "requires_sim": false,
+      "verification_mode": "docker",
+      "files_likely": [
+        "exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh (possibly extend env/config)",
+        "exts/aic-dt/docs/zenoh-rpc-stall-fix.md (NEW)",
+        "exts/aic-dt/scripts/test_zenoh_rpc_stall_fix.sh (NEW)",
+        "~/.zenoh/config.json5 OR /etc/zenoh/* (system config — log to plans/cross_repo_changes.json)",
+        "Possibly aic_eval Docker image env (AIC_ROUTER_ADDR, ROS_DOMAIN_ID, RMW config)"
+      ],
+      "skills_required": [
+        "nvidia-suite-docs"
+      ],
+      "description": "zenoh-path-implementation closed on transport (router lifecycle + topic discovery + service-name discovery all green) but service-RPC PAYLOADS stall through zenoh between humble engine and kilted model. Symptom (3 trial-fire progress.txt entries confirm identical signature): engine logs `Service '/aic_model/get_state' is available. Participant model discovered.` then GetState→ChangeState→SwitchController RPC timeouts → trial never executed → insertion_event_fired stays false. THIS IS THE M1 SHIP BLOCKER — parity-report-run fails by design until this resolves. Hypothesis ladder (investigate via nvidia-suite-docs Isaac ROS sub-skill + ROS Discourse + zenoh community for kilted RMW quirks): (1) DDS↔zenoh service-payload bridge gap — zenoh router may not relay service req/resp on default config; check zenoh service-discovery flags + REST hooks. (2) kilted-rmw-zenoh ↔ humble-rmw-zenoh ABI mismatch on rcl_action / rcl_lifecycle service descriptors — check humble_ws install for msg version drift. (3) ROS_DOMAIN_ID gating within zenoh networks (zenoh shouldn't care but kilted's rmw_zenoh impl might still gate). (4) AIC_ROUTER_ADDR pointing wrong — engine container connects to host:7447 but model container expects internal:7447. Investigation is iterative — document findings as they emerge in zenoh-rpc-stall-fix.md, apply the fix once root-caused. If root cause is config-only, fix lives in run_aic_engine_against_isaac_sim.sh / sim launcher. If it requires aic_model rebuild or aic source patching, log to plans/cross_repo_changes.json per cross-repo policy. After this lands: trial-1/2/3-fire need to be re-fired to capture corrected outcomes; parity-report-run flips green.",
+      "acceptance": [
+        "Running run_aic_engine_against_isaac_sim.sh trial_1 --output-json /tmp/test.json results in trial_1.json with insertion_event_fired=true OR clean engine-side completion (no GetState/ChangeState RPC timeouts in engine stdout)",
+        "exts/aic-dt/docs/zenoh-rpc-stall-fix.md committed with sections: 'Symptom' (verbatim engine log excerpt), 'Root cause' (citation to nvidia-suite-docs / Isaac ROS / zenoh source), 'Fix applied' (specific config/code change), 'Verification' (reproducible command)",
+        "Any system config / cross-repo edits logged in plans/cross_repo_changes.json with reversibility flag",
+        "test_zenoh_rpc_stall_fix.sh exists and exits 0 — re-runs trial_1 fire end-to-end, asserts no RPC timeout"
+      ],
+      "verify_command": "bash exts/aic-dt/scripts/test_zenoh_rpc_stall_fix.sh",
+      "verify_recipe": "Agent writes test_zenoh_rpc_stall_fix.sh: re-runs trial_1 fire end-to-end via wrapper, asserts engine completed without RPC timeout (grep engine stdout for 'GetState timeout' / 'ChangeState timeout'), asserts insertion_event_fired captured real outcome (not stall artifact). Cleans up test JSON.",
+      "notes": "M1 ship critical path. Once this passes: agent flips trial-1/2/3-fire back to passes:false on next iter (or operator does manually) → trials re-fire with working transport → parity-report-run closes → ship-paperwork."
     }
   ]
 }

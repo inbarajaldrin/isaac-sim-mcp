@@ -63,11 +63,12 @@ if [[ -z "$TRIAL_KEY" ]]; then
     exit 2
 fi
 
-MODEL_CONTAINER="aic_model"
-MODEL_IMAGE="my-solution:v1"
+MODEL_CONTAINER="aic_model"           # legacy name retained for cleanup() best-effort docker rm
+MODEL_IMAGE="my-solution:v1"          # legacy reference; no longer used since zenoh-rpc-stall-fix
 POLICY="aic_example_policies.ros.CheatCode"
 ENGINE_LOG="/tmp/aic_engine_isaac.log"
 ADAPTER_LOG="/tmp/aic_adapter_isaac.log"
+MODEL_LOG="/tmp/aic_model_isaac.log"
 WRAPPER_TOP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # Env-overridable so test_wrapper_json_emit.sh can force precond failure
 # without touching the real workspace.
@@ -76,8 +77,10 @@ AIC_REPO="${AIC_REPO:-$HOME/Documents/aic}"
 APT_VENDOR="$AIC_WS/vendored_apt/extracted/opt/ros/humble"
 ENGINE_BIN="$AIC_WS/install/aic_engine/lib/aic_engine/aic_engine"
 ADAPTER_BIN="$AIC_WS/install/aic_adapter/lib/aic_adapter/aic_adapter"
+MODEL_BIN="$AIC_WS/install/aic_model/lib/aic_model/aic_model"
 ENGINE_PID=""
 ADAPTER_PID=""
+MODEL_PID=""
 
 # ---------- outcome accumulators (read by emit_outcome_json) ----------
 # Defaults are the CheatCode passing-trial baseline; cleanup() updates them
@@ -131,9 +134,12 @@ cleanup() {
     emit_outcome_json || true
     [ -n "$ENGINE_PID" ] && kill -TERM "$ENGINE_PID" 2>/dev/null || true
     [ -n "$ADAPTER_PID" ] && kill -TERM "$ADAPTER_PID" 2>/dev/null || true
+    [ -n "$MODEL_PID" ] && kill -TERM "$MODEL_PID" 2>/dev/null || true
     sleep 1
     [ -n "$ENGINE_PID" ] && kill -KILL "$ENGINE_PID" 2>/dev/null || true
     [ -n "$ADAPTER_PID" ] && kill -KILL "$ADAPTER_PID" 2>/dev/null || true
+    [ -n "$MODEL_PID" ] && kill -KILL "$MODEL_PID" 2>/dev/null || true
+    # Best-effort cleanup of legacy kilted-Docker model from prior wrapper revisions.
     docker stop "$MODEL_CONTAINER" 2>/dev/null || true
     docker rm   "$MODEL_CONTAINER" 2>/dev/null || true
     if [[ "$CLEAN" == "1" ]]; then
@@ -146,18 +152,18 @@ echo "============================================================"
 echo "[wrapper] start $WRAPPER_TOP  trial=$TRIAL_KEY  ground_truth=$GROUND_TRUTH"
 echo "============================================================"
 
-# ---------- pre-flight: host aic_engine + aic_adapter binaries ----------
+# ---------- pre-flight: host aic_engine + aic_adapter + aic_model binaries ----------
 if [ ! -x "$ENGINE_BIN" ] || [ ! -x "$ADAPTER_BIN" ]; then
     echo "[wrapper] ERROR: host aic_engine / aic_adapter binaries missing."
     echo "  Build them first:"
     echo "    bash $(dirname "$0")/build_aic_engine_host.sh"
     exit 1
 fi
-# ---------- pre-flight: docker images ----------
-if ! docker image inspect "$MODEL_IMAGE" &>/dev/null; then
-    echo "[wrapper] ERROR: $MODEL_IMAGE not found."
-    echo "  Build it first (per ~/Documents/aic/CLAUDE.md):"
-    echo "    cd ~/Documents/aic && docker build -f docker/aic_model/Dockerfile -t $MODEL_IMAGE ."
+if [ ! -x "$MODEL_BIN" ]; then
+    echo "[wrapper] ERROR: host aic_model binary missing."
+    echo "  Build it first (resolves humble↔kilted rmw_zenoh-cpp version mismatch — see"
+    echo "  exts/aic-dt/docs/zenoh-rpc-stall-fix.md):"
+    echo "    bash $(dirname "$0")/build_aic_model_host.sh"
     exit 1
 fi
 
@@ -238,6 +244,20 @@ if ! ss -tln 2>/dev/null | grep -qE ':7447\b'; then
     exit 1
 fi
 
+# ---------- purge any stale host aic_model / aic_engine / aic_adapter processes ----------
+# Prevents back-to-back wrapper runs from tripping over a stale liveliness token
+# left by a previous run's model that crashed mid-handler. zenoh's liveliness
+# TTL is generous; an explicit pkill is the deterministic fix.
+pkill -TERM -f "install/aic_model/lib/aic_model/aic_model" 2>/dev/null || true
+pkill -TERM -f "install/aic_engine/lib/aic_engine/aic_engine" 2>/dev/null || true
+pkill -TERM -f "install/aic_adapter/lib/aic_adapter/aic_adapter" 2>/dev/null || true
+sleep 1
+pkill -KILL -f "install/aic_model/lib/aic_model/aic_model" 2>/dev/null || true
+pkill -KILL -f "install/aic_engine/lib/aic_engine/aic_engine" 2>/dev/null || true
+pkill -KILL -f "install/aic_adapter/lib/aic_adapter/aic_adapter" 2>/dev/null || true
+# Brief settle so liveliness tokens age out before the next launch.
+sleep 2
+
 # Common zenoh peer override applied to every host process below.
 # transport/shared_memory disabled per AIC eval Dockerfile:63 (cross-distro safety).
 PEER_OVERRIDE='connect/endpoints=["tcp/localhost:7447"];transport/shared_memory/enabled=false'
@@ -259,7 +279,7 @@ if [ "$WAIT_OK" != "1" ]; then
     echo "[wrapper] WARNING: /joint_states never observed; continuing anyway (engine may still discover)"
 fi
 
-# ---------- launch host aic_adapter + aic_engine processes ----------
+# ---------- launch host aic_adapter ----------
 echo "[wrapper] launching host aic_adapter (humble, ROS_DOMAIN_ID=7, RMW=zenoh)"
 : > "$ADAPTER_LOG"
 (
@@ -278,6 +298,69 @@ echo "[wrapper] launching host aic_adapter (humble, ROS_DOMAIN_ID=7, RMW=zenoh)"
 ) &
 ADAPTER_PID=$!
 
+# ---------- launch host aic_model BEFORE engine ----------
+# Per exts/aic-dt/docs/zenoh-rpc-stall-fix.md: the original kilted-pixi Docker
+# model runs rmw_zenoh-cpp 0.6.6 while host humble runs 0.1.8. The wire format
+# for service queryable keys diverged across that gap, so engine RPCs would
+# discover but never deliver. Host humble aic_model (built via
+# build_aic_model_host.sh) speaks the SAME 0.1.8 wire format as the engine.
+#
+# IMPORTANT: model MUST launch BEFORE engine. The engine probes /aic_model
+# state on its FIRST trial-start tick — if the model isn't registered yet,
+# engine sees stale liveliness from a prior run (state=finalized) and tries
+# to deactivate a dead node, producing 3 ChangeState timeouts. Pre-flighting
+# the model avoids that race.
+docker rm -f "$MODEL_CONTAINER" 2>/dev/null || true
+echo "[wrapper] launching host aic_model (humble, ROS_DOMAIN_ID=7, RMW=zenoh) policy=$POLICY"
+: > "$MODEL_LOG"
+(
+    set +u
+    set -e
+    source /opt/ros/humble/setup.bash
+    source "$AIC_WS/install/setup.bash"
+    export AMENT_PREFIX_PATH="$APT_VENDOR:$AMENT_PREFIX_PATH"
+    export LD_LIBRARY_PATH="$APT_VENDOR/lib:${LD_LIBRARY_PATH:-}"
+    export ROS_DOMAIN_ID=7
+    export RMW_IMPLEMENTATION=rmw_zenoh_cpp
+    export ZENOH_ROUTER_CHECK_ATTEMPTS=-1
+    export ZENOH_CONFIG_OVERRIDE="$PEER_OVERRIDE"
+    exec ros2 run aic_model aic_model --ros-args \
+        -p "policy:=$POLICY" -p use_sim_time:=true \
+        >>"$MODEL_LOG" 2>&1
+) &
+MODEL_PID=$!
+
+# ---------- wait for aic_model to register on the bus before engine launches ----------
+# Without this, engine starts probing /aic_model lifecycle on its first trial-start
+# tick. If the model hasn't registered yet, engine may bind to a STALE liveliness
+# token from a prior run (state=finalized) and try to deactivate a dead node,
+# producing 3 ChangeState timeouts. We poll /aic_model/get_state visibility
+# from the bus until either the new model registers fresh OR a 30s budget elapses.
+echo "[wrapper] waiting for aic_model lifecycle service to register (max 30s)"
+MODEL_READY="0"
+for i in $(seq 1 30); do
+    if grep -qE "Loaded policy module|Using policy" "$MODEL_LOG" 2>/dev/null; then
+        # Belt-and-braces: also confirm the lifecycle service is actually visible
+        # to a humble peer on the bus before declaring ready.
+        if bash -c '
+            set +u
+            source /opt/ros/humble/setup.bash >/dev/null
+            export ROS_DOMAIN_ID=7 RMW_IMPLEMENTATION=rmw_zenoh_cpp
+            export ZENOH_CONFIG_OVERRIDE="connect/endpoints=[\"tcp/localhost:7447\"];transport/shared_memory/enabled=false"
+            timeout 3 ros2 service list 2>/dev/null | grep -qE "^/aic_model/get_state\$"
+        '; then
+            echo "[wrapper] aic_model READY (${i}s)"
+            MODEL_READY="1"
+            break
+        fi
+    fi
+    sleep 1
+done
+if [ "$MODEL_READY" != "1" ]; then
+    echo "[wrapper] WARNING: aic_model never registered on bus within 30s — engine may probe a stale liveliness token"
+fi
+
+# ---------- launch host aic_engine (after model is registered) ----------
 echo "[wrapper] launching host aic_engine (humble, ROS_DOMAIN_ID=7, RMW=zenoh)"
 : > "$ENGINE_LOG"
 (
@@ -297,24 +380,6 @@ echo "[wrapper] launching host aic_engine (humble, ROS_DOMAIN_ID=7, RMW=zenoh)"
         >>"$ENGINE_LOG" 2>&1
 ) &
 ENGINE_PID=$!
-
-# ---------- launch model (policy) container ----------
-# Container speaks zenoh internally (Dockerfile entrypoint exports rmw_zenoh_cpp
-# unconditionally — see zenoh-decision.md "latent bug" note). With --net=host the
-# container shares the host network namespace, so AIC_ROUTER_ADDR=localhost:7447
-# resolves to the host-side rmw_zenohd we just launched. ZENOH_ROUTER_CHECK_ATTEMPTS
-# must be >0 (or unset) so the model waits for the router instead of bailing.
-echo "[wrapper] launching $MODEL_CONTAINER ($MODEL_IMAGE) policy=$POLICY"
-docker rm -f "$MODEL_CONTAINER" 2>/dev/null || true
-docker run -d \
-    --name "$MODEL_CONTAINER" \
-    --gpus all \
-    --net=host \
-    -e ROS_DOMAIN_ID=7 \
-    -e AIC_ROUTER_ADDR=localhost:7447 \
-    -e ZENOH_CONFIG_OVERRIDE="$PEER_OVERRIDE" \
-    "$MODEL_IMAGE" \
-    --ros-args -p "policy:=$POLICY" -p use_sim_time:=true >/dev/null
 
 # ---------- wait for engine completion or exit (max 240s) ----------
 echo "[wrapper] waiting for aic_engine completion (PID=$ENGINE_PID, log=$ENGINE_LOG, max 240s)"
@@ -340,4 +405,6 @@ echo "[wrapper] --- aic_engine log (last 40 lines) ---"
 tail -40 "$ENGINE_LOG" || true
 echo "[wrapper] --- aic_adapter log (last 10 lines) ---"
 tail -10 "$ADAPTER_LOG" || true
+echo "[wrapper] --- aic_model log (last 10 lines) ---"
+tail -10 "$MODEL_LOG" || true
 echo "[wrapper] ============================================================"

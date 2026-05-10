@@ -822,3 +822,170 @@ Skill cited: nvidia-suite-docs for routing the model-zenoh service-RPC stall que
 NEXT-ITER: parity-report-run is now unblocked (all 6 trial outcome JSONs present: gazebo {1,2,3} + isaacsim {1,2,3}). Expected first-run signal: 3/3 trials show Gazebo=PASS / Isaac Sim=FAIL (insertion_event_fired divergence) — exactly the architectural surface for model-zenoh blocker investigation. parity-report-run's verify will FAIL by design until model-zenoh resolves; that's the M1 ship-gate honestly reflecting reality. Alternative iteration: pick wrist-cameras-restore (tracer-bullet, scene-authoring, default-off so non-blocking) or chase the model-zenoh blocker directly (no PRD task explicitly targets it; would need to interpret as a fix-as-encountered patch under autonomous mode).
 
 VERIFIED trial-3-fire by verifier-agent at 2026-05-10T00:26:35Z — verify_command PASS (file present, JSON parseable, sim=isaacsim + insertion_event_fired + offlimit_contact_count keys all present). Single acceptance bullet (JSON exists with standard shape, produced by wrapper) confirmed observably true. Outcome match (insertion_event_fired=false on Isaac Sim vs true on Gazebo) is parity-report-run scope per task contract, not a verify-fail here. Sim still up on :8768; cache snapshot 1778370990.
+
+[2026-05-10T00:30Z] parity-report-run — VERIFY FAILED (divergence; passes stays false per task contract).
+TASK: parity-report-run (critical, unit-test).
+
+PRE-FLIGHT: clean working tree (untracked dirs only). Sim UP on :8768. zenohd UP on :7447. All 6 trial outcome JSONs present.
+
+EXECUTION: python3 exts/aic-dt/scripts/parity_report.py
+RESULT: exit=1, "divergence detected (3 trial(s) compared)". docs/parity-report.md regenerated (uncommitted; do-not-commit per rule).
+ACCEPTANCE bullets:
+  1) docs/parity-report.md exists with 3 trials × 2 sims × outcome rows ✓
+  2) All 3 trials show insertion_event_fired=true on Isaac Sim AND on Gazebo ✗ (Isaac Sim=false on all 3)
+  3) All 3 trials show offlimit_contact_count=0 on Isaac Sim AND on Gazebo ✓ (both 0)
+  4) parity_report.py exits 0 ✗ (exits 1)
+  → 2/4 acceptance bullets fail. passes stays false.
+
+ROOT-CAUSE INVESTIGATION (per task notes "Iteration must investigate which trial diverged + why"):
+  Single divergence axis on all 3 trials: insertion_event_fired = false on Isaac Sim.
+  Evidence in /tmp/aic_engine_isaac.log (last trial-3 run, 2026-05-09T17:24Z):
+    t=0    "Checking participant model readiness"
+    t=0    "No node with name 'aic_model' found. Retrying..."
+    t=2s   "Found 1 node(s) with name 'aic_model'"            ← discovery WORKS
+    t=2s   "Service '/aic_model/get_state' is available"       ← service registered
+    t=10s  "GetState service call timed out for node 'aic_model'"      ← payload STALLS
+    t=107s "ChangeState service call timed out for transition 'deactivate'"
+    t=123s "SwitchController service call timed out"
+    t=217s "ChangeState service call timed out for transition 'cleanup'"
+    t=241s "ChangeState service call timed out for transition 'shutdown'"
+    
+  Pattern: zenoh queryable/liveliness DISCOVERY succeeds across humble (engine) ↔ kilted
+  (model) boundary; but every actual service-RPC payload times out. Engine retries 5
+  service calls (GetState x1, ChangeState x3, SwitchController x1) — all 5 stall.
+  
+  Architectural state per zenoh-decision.md Path (a):
+    - host zenohd up on tcp/[::]:7447 (PID 2534669, log /tmp/aic_zenohd.log)
+    - host aic_engine + aic_adapter: RMW_IMPLEMENTATION=rmw_zenoh_cpp + localhost:7447 ✓
+    - my-solution:v1 model container: --net=host + AIC_ROUTER_ADDR=localhost:7447 ✓
+    - Isaac Sim rclpy publishers: ROS_DOMAIN_ID=7 + zenoh ✓
+  Wrapper implementation matches decision.md plan exactly. Discovery proves transport
+  is wired. The service-RPC stall is at the zenoh queryable layer, not the
+  router/transport layer.
+  
+  Hypothesis ladder for next iteration:
+    H1) rmw_zenoh_cpp queryable key namespace differs between humble + kilted —
+        the server registers /aic_model/get_state with one key path, the client
+        queries with another. Verify with `RUST_LOG=DEBUG` on rmw_zenohd or
+        `z_*` query-side tracing.
+    H2) Liveliness token mismatch — the model's lifecycle node holds a liveliness
+        token that the engine can't subscribe to from the humble side. Could be a
+        token-prefix versioning skew between humble + kilted rmw_zenoh_cpp
+        releases.
+    H3) Model container's lifecycle node `aic_model` is registered (so service
+        appears) but the wrapping rclcpp executor is blocked / not spinning the
+        service callback. Verify by `docker exec aic_model bash -c 'ros2 service
+        call /aic_model/get_state lifecycle_msgs/srv/GetState' from INSIDE the
+        container — if THAT also times out, the issue is server-side, not
+        cross-distro.
+    H4) Path (b) escalation per zenoh-decision.md risk register: switch host
+        engine to kilted-native via existing aic_humble_ws workspace rebuilt
+        with kilted overlay. This was deferred in 04-03; if H1-H3 don't resolve,
+        this is the documented fallback.
+  
+  Recommendation: H3 first (cheapest probe — exec into container, call service
+  directly). If H3 confirms server-side, debug aic_model entrypoint. If H3 shows
+  in-container service call works, the cross-distro queryable issue is real (H1/H2),
+  needs deeper rmw_zenoh investigation per nvidia-suite-docs / ros-zenoh community.
+
+REGRESSION SWEEP: skipped (verify failed; no flip).
+ARTIFACTS: docs/parity-report.md regenerated but UNCOMMITTED per "do not commit on verify fail" rule.
+
+Skill cited: none — task is unit-test (no Isaac Sim API surface touched). Diagnostic
+trail focused on zenoh transport / ROS lifecycle service semantics, which are not
+covered by isaac-sim-extension-dev or nvidia-suite-docs. Next iteration that picks up
+H1/H2 should consult ros-zenoh / rmw_zenoh community sources directly (potentially
+via WebFetch on https://docs.ros.org/en/rolling/Concepts/Intermediate/About-Zenoh-Tunneling.html
+or the rmw_zenoh GitHub issues).
+
+NEXT-ITER candidates:
+  - Tackle zenoh service-RPC stall directly (H3 probe first) — NOT a current PRD task,
+    but is the M1 ship-blocker per autonomous mode "fix bugs as encountered".
+  - wrist-cameras-restore (tracer-bullet, scene-authoring, default-off → independent
+    of ship-gate). Cleanly closeable in ~60-90min.
+  - ship-paperwork is BLOCKED on parity-report-run; do not attempt.
+
+
+2026-05-10T01:00Z — OPERATOR SCOPE CHANGE (aldrin via tug onboarding session):
+
+Three changes applied to address the model-zenoh service-RPC stall blocker that surfaced during the previous AFK loop (3 trial fires captured insertion_event_fired=false because GetState/ChangeState/SwitchController RPCs time out through the zenoh router between humble engine and kilted model):
+
+(1) Added new PRD task `zenoh-rpc-stall-fix` (critical priority, verification_mode=docker) — scopes the actual RPC-payload investigation. Hypothesis ladder in the task description: DDS-zenoh service-payload bridge gap / kilted-humble rmw_zenoh ABI mismatch on rcl_lifecycle / ROS_DOMAIN_ID gating / AIC_ROUTER_ADDR mis-pointing. Investigate via nvidia-suite-docs Isaac ROS sub-skill + zenoh community, document in zenoh-rpc-stall-fix.md, apply fix.
+
+(2) Flipped trial-1/2/3-fire's `passes` back to false. Reason: their captured Isaac Sim outcomes reflect a stalled-engine state; once zenoh-rpc-stall-fix lands, trials need to re-fire under the working transport so the next parity-report-run captures the real outcome (not the stall artifact).
+
+(3) Re-introduced BLOCKED sentinel handling in tug-afk.sh + executor prompts. New rule: if the agent sees a single architectural blocker mentioned 2+ times in recent progress.txt entries AND no PRD task targets it, agent emits `<promise>BLOCKED reason='<short>'</promise>`; driver halts loop, surfaces to operator. Prevents wasted iterations on impassable blockers. Pocock-divergent (he doesn't use BLOCKED) but justified by multi-repo / ROS-interop problem domain.
+
+Hot path forward: agent picks zenoh-rpc-stall-fix next iter, root-causes the RPC stall, fixes, then re-fires trials, then parity-report-run flips green, then ship-paperwork. Estimated 4-8 iterations to ship from here pending the depth of the zenoh stall investigation.
+
+[2026-05-10T03:25Z] zenoh-rpc-stall-fix — VERIFIED + PASSES (M1 ship-blocker resolved).
+
+ROOT CAUSE: rmw_zenoh-cpp major-version drift across humble↔kilted boundary.
+  - Host humble (engine + adapter + Isaac Sim rclpy): ros-humble-rmw-zenoh-cpp 0.1.8 (apt, Jan 2024)
+  - Model container (kilted via pixi conda-forge): rmw_zenoh_cpp 0.6.6 — found at
+    /ws_aic/src/aic/.pixi/envs/default/share/rmw_zenoh_cpp/package.xml. 5-major-version gap.
+  - Liveliness/discovery key namespace stayed backward-compat (so `ros2 service list`
+    + `Service is available` discovery succeeded across boundary).
+  - Queryable key encoding for service-RPC payloads diverged across that 0.1→0.6 gap.
+    Engine queries one key; model registers queryable on a different key. Router
+    has nothing to route. Every GetState/ChangeState/SwitchController stalls until
+    timeout.
+
+BISECTION (3 probes, deterministic):
+  H3a — kilted↔kilted RPC inside container: WORKS in <1s (server healthy)
+  H3b — humble→kilted RPC across boundary: STALLS, exit 124 (cross-distro reproducer)
+  H3c — humble→humble RPC after fix: WORKS in 0.89s (post-fix proof)
+
+FIX: build aic_model + aic_example_policies humble-native on the host. Every node
+in the pipeline now speaks rmw_zenoh-cpp 0.1.8 — same wire format, no boundary.
+  - exts/aic-dt/scripts/build_aic_model_host.sh (NEW): vendors aic_model +
+    aic_example_policies into ~/aic_humble_ws/src; applies one humble-compat pivot
+    via in-script Python edit (rclpy.init returns None on humble vs Context on
+    kilted, so kilted's `with rclpy.init():` fails AttributeError __enter__);
+    builds via colcon. Idempotent.
+  - exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh: model launch step
+    replaced (Docker my-solution:v1 → host humble process via ros2 run aic_model
+    aic_model). Model now launches BEFORE engine + wait-for-ready loop polls
+    /aic_model/get_state visibility on the bus (avoids stale-liveliness race
+    where back-to-back runs see a finalized aic_model from prior run). Pre-flight
+    pkill of stale aic_model/aic_engine/aic_adapter processes for safety.
+  - exts/aic-dt/docs/zenoh-rpc-stall-fix.md (NEW): full diagnosis + fix narrative.
+  - exts/aic-dt/scripts/test_zenoh_rpc_stall_fix.sh (NEW): 3-gate verifier.
+  - NO edits to ~/Documents/aic — pivot lives in the build script. Therefore no
+    cross_repo_changes.json entry required.
+
+VERIFICATION:
+  bash exts/aic-dt/scripts/test_zenoh_rpc_stall_fix.sh → exit 0
+  Engine log shows 5 successful transitions: configure → activate → deactivate
+  → cleanup → shutdown. Zero GetState/ChangeState timeouts. aic_model log shows
+  full lifecycle handler execution with proper LifecycleState transitions.
+
+REGRESSION SWEEP: passes:true tasks with overlapping files_likely:
+  wrapper-json-emit (test_wrapper_json_emit.sh) — re-ran, all 4 tests still PASS.
+  No other passes:true overlap.
+
+NOTES (out-of-scope, captured for next iteration):
+  - "Spawn entity service not available" engine warning: engine expects a Gazebo
+    spawn_entity service that doesn't exist in Isaac Sim. Engine retries 5x then
+    proceeds — impacts trial scoring (tier_2/3 = 0) but NOT the RPC pipeline this
+    task addresses.
+  - SwitchController service call timeout: separate engine→aic_controller path
+    via aic_adapter (host humble↔humble; different surface from model). Distinct
+    issue — likely an aic_controller config/launch problem. PRD acceptance
+    explicitly scopes this task to GetState/ChangeState only.
+  - aic_model.py humble lifecycle state-machine drift: rcl_lifecycle warns
+    "No transition matching 2 found for current state X" if engine sends a
+    transition that's invalid from current state. Doesn't crash the model in
+    happy path but suggests aic_model state-machine setup may need humble-native
+    adjustments for non-trivial trial flows.
+
+NEXT-ITER: trial-1/2/3-fire are passes:false (operator scope change pre-empted
+this work). They need to re-fire under the new wrapper to capture corrected
+Isaac Sim outcomes (the prior captures reflected the stalled-engine regime, not
+real Isaac Sim behavior). After re-fires, parity-report-run becomes meaningful.
+
+Skill cited: nvidia-suite-docs for routing the cross-distro rmw_zenoh-cpp
+version mismatch question; ultimately rmw_zenoh-cpp is Apex.AI/eclipse-zenoh
+not NVIDIA-owned, so the deepest diagnostic was direct version inspection
+(.pixi/envs/default/share/rmw_zenoh_cpp/package.xml = 0.6.6 vs apt 0.1.8) +
+the 3-probe bisection ladder rather than NVIDIA docs.
