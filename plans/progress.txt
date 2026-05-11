@@ -1576,3 +1576,5 @@ PROGRESS METER UPDATE:
 Next iter: parity_report.py refire — now that kinematics are correct,
 trials 1/2/3 should be re-captured with up-to-date outcomes before the
 parity report meaningfully compares against Gazebo.
+
+VERIFIED trial-home-robot-pose by verifier-agent at 2026-05-11T09:24:19Z — xy_error -0.049/0.0189 (both axes within 0.1m strict bar; under 0.3m PRD bar). verify_command exit 0. Sim socket was up on entry; no relaunch performed.
