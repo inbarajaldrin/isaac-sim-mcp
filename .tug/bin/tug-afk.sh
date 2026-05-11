@@ -33,9 +33,12 @@ STUCK ESCAPE VALVE (the /ask-gpt rule):
 
 PER-ITERATION MANDATES (BEFORE writing any code):
 1. SKILL DISCIPLINE — if your selected task touches Isaac Sim 5.0, OpenUSD, OmniGraph, articulation, sensors, MCP socket, or any aic-dt extension internals, you MUST invoke the `isaac-sim-extension-dev` skill AND the `nvidia-suite-docs` skill BEFORE writing or editing code. NO EXCEPTIONS.
-2. SIM PRECONDITION — if your selected task's `verification_mode` includes "sim", check `nc -z localhost 8768`. If down, attempt:
-       bash -c 'source ~/env_isaaclab/bin/activate && DISPLAY=${DISPLAY:-:0} bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch aic-dt'
-   then poll up to 90s. If still down, append blocker note to plans/progress.txt and exit normally (no commit). SIM RESTART DISCIPLINE — sim stays running across iters; call quick_start() over MCP for clean scene; no kill+relaunch unless diagnosed corruption.
+2. SIM PRECONDITION — if your selected task's `verification_mode` includes "sim", check `nc -z localhost 8768`. If down, attempt the **zenoh-canonical** launch (this project uses unified zenoh transport per the closed zenoh-path-implementation task — without these env vars Isaac Sim's rclpy defaults to cyclonedds/fastrtps and the host engine pipeline can't discover /clock, breaking any trial-fire verify):
+       # First ensure host zenohd is up (idempotent; mirrors aic_eval Dockerfile):
+       bash exts/aic-dt/scripts/launch_host_zenohd.sh
+       # Then launch sim with zenoh RMW + ROS_DOMAIN_ID=7 + zenoh peer config:
+       bash -c 'source /opt/ros/humble/setup.bash && source ~/env_isaaclab/bin/activate && export ROS_DOMAIN_ID=7 RMW_IMPLEMENTATION=rmw_zenoh_cpp ZENOH_ROUTER_CHECK_ATTEMPTS=-1 ZENOH_CONFIG_OVERRIDE='\''connect/endpoints=["tcp/localhost:7447"];transport/shared_memory/enabled=false'\'' DISPLAY=${DISPLAY:-:0} && bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch aic-dt'
+   then poll up to 90s. If still down, append blocker note to plans/progress.txt and exit normally (no commit). SIM RESTART DISCIPLINE — sim stays running across iters; call quick_start() over MCP for clean scene; no kill+relaunch unless diagnosed corruption. If sim is up but on the WRONG RMW (cyclonedds/fastrtps when zenoh is needed for engine-pipeline verification), surface as a diagnostic in progress.txt — do NOT silently kill+relaunch the sim under another iter's verify, leave it to the orchestrator.
 3. CROSS-REPO POLICY — edits anywhere outside isaac-sim-mcp PERMITTED in service of correct Isaac Sim integration; PROHIBITED if they artificially make trials pass (no disabling assertions in CheatCode/aic_*, no relaxing tolerances, no mocking). Every edit outside isaac-sim-mcp appended to plans/cross_repo_changes.json.
 4. SCENE AUTHORING SOURCE OF TRUTH — AIC Gazebo configs in ~/Documents/aic/ are canonical for any default value. Mirror Gazebo, don't invent Isaac-Sim-idiomatic defaults.
 5. WEB-FIRST DISCIPLINE — debug / interop tasks (errors, RMW, zenoh, ABI, RPC stalls, kilted-humble compat, etc.): BEFORE >1 hypothesis-test commit, you MUST:
