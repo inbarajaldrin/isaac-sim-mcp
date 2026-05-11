@@ -557,12 +557,12 @@ class DigitalTwin(omni.ext.IExt):
         # Robot position and orientation (identity - no rotation)
         self._robot_position = (-0.18, -0.122, 0.0)
 
-        # AIC enclosure
+        # AIC enclosure — at world origin per aic.sdf (no <pose> on Enclosure <include>).
         self._enclosure_usd = "scene/aic.usd"
-        self._enclosure_position = (0.0, 0.0, -1.15)
+        self._enclosure_position = (0.0, 0.0, 0.0)
 
-        # Ground plane Z
-        self._ground_plane_z = -0.08
+        # Ground plane Z — Floor model at world origin in aic.sdf.
+        self._ground_plane_z = 0.0
 
         # Common physics material (applied to all objects)
         self._object_dynamic_friction = 0.6
@@ -3812,11 +3812,12 @@ class DigitalTwin(omni.ext.IExt):
             traceback.print_exc()
             return {"status": "error", "message": f"spawn failed at {prim_path}: {e}"}
 
-    def _cmd_spawn_task_board_base(self, x: float = 0.25, y: float = 0.0, z: float = 1.14,
-                                   roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0) -> Dict[str, Any]:
+    def _cmd_spawn_task_board_base(self, x: float = 0.15, y: float = -0.2, z: float = 1.14,
+                                   roll: float = 0.0, pitch: float = 0.0, yaw: float = 3.1415) -> Dict[str, Any]:
         """SCENE-01: Spawn task board base.
 
         Parameter names mirror spawn_task_board.launch.py task_board_x/y/z/roll/pitch/yaw.
+        Defaults match aic_gz_bringup.launch.py:629-668 DeclareLaunchArgument defaults.
         """
         prim_path = "/World/TaskBoard"
         usd_rel = AIC_OBJECTS["task_board_base"]["usd"]

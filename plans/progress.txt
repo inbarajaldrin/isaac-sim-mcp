@@ -1580,3 +1580,78 @@ parity report meaningfully compares against Gazebo.
 VERIFIED trial-home-robot-pose by verifier-agent at 2026-05-11T09:24:19Z — xy_error -0.049/0.0189 (both axes within 0.1m strict bar; under 0.3m PRD bar). verify_command exit 0. Sim socket was up on entry; no relaunch performed.
 
 [2026-05-11T09:35Z] NO-OP iter — TUG_PIN_TASK=trial-home-robot-pose, already passes:true (closed ce96b28, verified 2026-05-11T09:24Z). Per orchestrator rule, no substitute picked. Working tree clean (only untracked .claude/skills/, docs/, etc.; no tracked diffs). Next-up unblocked tasks per batch_context: wrist-cameras-restore, parity-report-run (gated on cable-physics-fidelity / DEFERRED-6), ship-paperwork. Orchestrator owns next pin.
+
+[2026-05-11T10:00Z] CLOSED: environment-world-frame-reconcile (TUG_PIN_TASK)
+
+Files changed:
+  - exts/aic-dt/aic_dt/extension.py
+      L562: self._enclosure_position = (0.0, 0.0, -1.15) → (0.0, 0.0, 0.0)
+            (aic.sdf <include name=enclosure> has no <pose> → world origin)
+      L565: self._ground_plane_z = -0.08 → 0.0
+            (aic.sdf <include name=floor> has no <pose> → world origin)
+      L3815-3816: _cmd_spawn_task_board_base defaults
+            x=0.25 → 0.15, y=0.0 → -0.2, yaw=0.0 → 3.1415
+            (aic_gz_bringup.launch.py:629-668 DeclareLaunchArgument defaults)
+  - exts/aic-dt/scripts/test_env_world_frame.sh  (NEW; verify_command)
+  - plans/prd.json (flip passes:true)
+
+Verify: bash exts/aic-dt/scripts/test_env_world_frame.sh
+  Gate 1 (static grep)     PASS: signature parsed (x=0.15, y=-0.2, z=1.14,
+                                 roll=0, pitch=0, yaw=3.1415)
+  Gate 2 (live MCP probe)  PASS: /World/AIC_Enclosure translate (0,0,0);
+                                 /World/defaultGroundPlane translate (0,0,0);
+                                 quick_start exit success
+  Gate 3 (regression)      PASS: trial-home-robot-pose xy_error -0.0101 0.020
+                                 (improved from -0.045 0.019 last iter — env
+                                 reconcile makes CheatCode plug-FK reference
+                                 more accurate)
+
+Acceptance bars:
+  [x] extension.py self._enclosure_position == (0.0, 0.0, 0.0)
+  [x] extension.py self._ground_plane_z == 0.0
+  [x] extension.py _cmd_spawn_task_board_base defaults match Gazebo
+      (x=0.15, y=-0.2, z=1.14, roll=0, pitch=0, yaw=3.1415)
+  [x] Live MCP probe: /World/AIC_Enclosure (0,0,0) AND /World/defaultGroundPlane Z=0
+  [x] Regression: trial-home-robot-pose xy_error well within tolerance
+
+REGRESSION SWEEP (passes:true tasks whose files_likely overlap extension.py):
+  - trial-home-robot-pose: PASS (inside gate 3 of verify; xy_error tighter)
+  - joint-drives-urdf-reconcile: PASS (probe shows all 6 arm joints at
+    stiffness=2000 damping=100 maxForce=87)
+  - wrench-rootcause: PASS (probe collected 108/108 nonzero samples,
+    max |fz|=40158.4)
+  - taskboard-prim-authoring: PASS (4 prims authored consistently AND
+    insertion event probe fires; count=1)
+  - motion-deficit-hunt: FAIL — but pre-existing env issue:
+      "UnsupportedTypeSupport: Could not import 'rosidl_typesupport_c'
+       for package 'aic_control_interfaces'"
+    aic_control_interfaces built against Python 3.10; Isaac Sim runs
+    Python 3.11. ABI mismatch in ROS msg type support, not caused by my
+    scene-constant edits (which do not touch any joint command or
+    controller_loop surface). Same Python-3.10/3.11 flake noted in last
+    iter's progress.txt for this task. NOT flipping passes:false — this
+    is the operator's pre-existing env build issue, not a regression
+    from this task.
+
+Cache discipline:
+  prime_usd_cache.py snapshot → DerivedDataCache.bak.1778492355 (161.3 MB)
+
+Skill cited: isaac-sim-extension-dev for USD UsdGeom.Xformable
+  GetOrderedXformOps() / TypeTranslate inspection pattern used in
+  test_env_world_frame.sh gate 2, and the MCP execute_python_code
+  result-shape convention (result.result.<key>) needed to parse the probe.
+Skill cited: nvidia-suite-docs — consulted in CLAUDE.md guidance form;
+  no live API surface change for this task (UsdGeom translation API is
+  USD-core stable, identical across Isaac Sim 4.x/5.x), so no fetch
+  required beyond confirming current convention.
+
+PROGRESS METER UPDATE:
+  ✓ trial-home-robot-pose
+  ✓ environment-world-frame-reconcile (this iter)
+  ◯ cable-physics-fidelity (DEFERRED-6 / SCENE-05) — next ship gate
+  ◯ parity-report-run    (gated on cable-physics-fidelity)
+  ◯ ship-paperwork       (gated on parity-report-run)
+
+Next iter: orchestrator will pin cable-physics-fidelity per batch_context
+guidance ("After this lands: the orchestrator will pin cable-physics-fidelity
+(DEFERRED-6) — that's the real ship gate.").
