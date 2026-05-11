@@ -2133,3 +2133,12 @@ RECOMMENDATION for orchestrator (next iter):
       - aic_model logs show "Received insert_cable cancel request" at +279s
         followed by lifecycle teardown — cancel = budget exhausted, not
         completion. Policy didn't reach insertion goal.
+
+[2026-05-11T11:28:46Z] VERIFIED cable-physics-descope-validate by verifier-agent at 2026-05-11T11:28:46Z — all 3 gates green on independent re-fire:
+  Gate 1: completed_steps=173 (≠ -1; scoring-stoprecording-tf-fix held)
+  Gate 2: '[rosbag2_storage]: Opened database ... for READ_ONLY' present once in /tmp/aic_engine_isaac.log
+  Gate 3: insertion_event_fired=false (populated; documented per acceptance #3)
+  Outcome JSON refreshed at exts/aic-dt/docs/trial_outcomes/trial_1_isaacsim.json with ts=2026-05-11T11:23:21Z.
+  Diagnostic: insertion=false reconfirms the R1 descope is sound — cable physics is NOT the ship-gate blocker. Orchestrator should pin a motion-fidelity / CheatCode-timing task next, NOT parity-report-run.
+  Skill cited: isaac-sim-extension-dev — re-confirmed cache-management discipline + cable SetActive(False) M1 contract before running the live trial fire.
+  Skill cited: none for nvidia-suite-docs — pure verification re-fire; no Isaac Sim API surface inspected.
