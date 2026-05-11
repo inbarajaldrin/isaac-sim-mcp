@@ -146,6 +146,8 @@ class AicScoringPublishers:
         # the module-level _PORT_LINK_PATHS list. Populated by load_trial after
         # spawn-atom dispatch. None = use module-level default.
         self._port_link_paths_override = None
+        self._trial_tf_frames = []
+        self._trial_tf_pub = None  # /tf publisher for CheatCode-expected per-trial frames
 
     def set_port_link_paths(self, paths) -> None:
         """D-13 fallback (Plan 04-03): override the hardcoded _PORT_LINK_PATHS
@@ -167,6 +169,37 @@ class AicScoringPublishers:
         if self._port_link_paths_override is not None:
             return self._port_link_paths_override
         return _PORT_LINK_PATHS
+
+    def set_trial_tf_frames(self, frames):
+        """DEFERRED-4 (2026-05-10): publish per-trial CheatCode-expected TF frames.
+
+        CheatCode.insert_cable() looks up two trial-specific frames from base_link:
+          - port:  `task_board/<target_module_name>/<port_name>_link`
+          - plug:  `<cable_name>/<plug_name>_link`
+        Without these on /tf or /tf_static, CheatCode bails after 10s with
+        "Transform not available" and insert_cable() returns False — tier_2/3
+        score stays 0 by infrastructure, not by physics.
+
+        `frames` is a list of dicts shaped:
+          {
+            'parent': str,           # parent frame (typically 'base_link' or 'world')
+            'child':  str,           # exact frame_id CheatCode will look up
+            'usd_anchor_path': str,  # USD prim whose live world pose anchors the frame
+            'offset_translation': (x, y, z),  # local offset from anchor (m)
+            'offset_quat_xyzw':   (x, y, z, w),  # local rotation from anchor
+          }
+        At each physics tick the live anchor world pose is computed and the
+        offset applied to yield the published transform. Frames are republished
+        on /tf at physics rate (RELIABLE, KeepLast(10)) — same QoS the existing
+        parity_publishers /tf uses, so a single TransformListener aggregates
+        across both publishers.
+
+        Pass an empty list to clear all trial frames (called from load_trial
+        reset path or quick_start re-entry).
+        """
+        self._trial_tf_frames = list(frames) if frames else []
+        print(f"[AIC-DT][scoring] set_trial_tf_frames: {len(self._trial_tf_frames)} frame(s) "
+              f"({[f['child'] for f in self._trial_tf_frames]})")
 
     def start(self) -> bool:
         """Construct rclpy node + 3 publishers + physx subscriptions. Idempotent."""
@@ -201,6 +234,10 @@ class AicScoringPublishers:
         self._scoring_tf_pub = self._node.create_publisher(TFMessage, "/scoring/tf", qos)
         self._objects_poses_pub = self._node.create_publisher(TFMessage, "/objects_poses_real", qos)
         self._scoring_event_pub = self._node.create_publisher(String, "/scoring/insertion_event", qos)
+        # DEFERRED-4: CheatCode-expected per-trial frames go on /tf (default
+        # TransformListener subscription). Separate publisher from parity's
+        # /tf — ROS happily aggregates multiple publishers on the same topic.
+        self._trial_tf_pub = self._node.create_publisher(TFMessage, "/tf", qos)
 
         import omni.usd
         self._stage = omni.usd.get_context().get_stage()
@@ -342,6 +379,7 @@ class AicScoringPublishers:
         try:
             self._publish_scoring_tf(now)
             self._publish_objects_poses(now)
+            self._publish_trial_tf_frames(now)
             self._maybe_publish_insertion_event(now)
         except Exception as exc:
             if not self._logged_publish_error:
@@ -353,6 +391,76 @@ class AicScoringPublishers:
     def _publish_scoring_tf(self, stamp):
         """Publish TFMessage of cable-related transforms on /scoring/tf."""
         self._publish_frame_list(stamp, _SCORING_TF_FRAMES, self._scoring_tf_pub)
+
+    def _publish_trial_tf_frames(self, stamp):
+        """DEFERRED-4: publish per-trial CheatCode-expected TF frames on /tf.
+
+        For each frame in self._trial_tf_frames, compute the published transform
+        as `anchor_world @ offset` where `anchor_world` is the live USD prim
+        pose and `offset` is the static SE(3) offset from the anchor to the
+        expected frame (typically read from tools/anchor_target_offsets.yaml).
+        Empty list → no-op.
+        """
+        if self._trial_tf_pub is None or self._stage is None or not self._trial_tf_frames:
+            return
+        from tf2_msgs.msg import TFMessage
+        from geometry_msgs.msg import TransformStamped
+        from pxr import UsdGeom, Gf
+        msg = TFMessage()
+        xf_cache = UsdGeom.XformCache()
+        for f in self._trial_tf_frames:
+            parent_frame = f.get('parent', 'world')
+            child_frame = f.get('child')
+            anchor_path = f.get('usd_anchor_path')  # may be None for pure-static frames
+            ox, oy, oz = f.get('offset_translation', (0.0, 0.0, 0.0))
+            qx, qy, qz, qw = f.get('offset_quat_xyzw', (0.0, 0.0, 0.0, 1.0))
+            if not child_frame:
+                continue
+            t = TransformStamped()
+            t.header.stamp = stamp
+            t.header.frame_id = parent_frame
+            t.child_frame_id = child_frame
+            if anchor_path:
+                # Mode 1: anchored to a USD prim's world pose. Published value
+                # is the prim's world transform composed with the local offset.
+                # `parent_frame` SHOULD be 'world' for this to be semantically
+                # consistent with the live USD root.
+                prim = self._stage.GetPrimAtPath(anchor_path)
+                if not prim or not prim.IsValid() or not prim.IsActive():
+                    continue
+                try:
+                    anchor_xf = xf_cache.GetLocalToWorldTransform(prim)
+                except Exception:
+                    continue
+                offset_xf = Gf.Matrix4d().SetIdentity()
+                offset_xf.SetTranslateOnly(Gf.Vec3d(float(ox), float(oy), float(oz)))
+                offset_xf.SetRotateOnly(Gf.Quatd(float(qw), Gf.Vec3d(float(qx), float(qy), float(qz))))
+                world_xf = offset_xf * anchor_xf
+                translation = world_xf.ExtractTranslation()
+                rot = world_xf.ExtractRotationQuat()
+                imag = rot.GetImaginary()
+                t.transform.translation.x = float(translation[0])
+                t.transform.translation.y = float(translation[1])
+                t.transform.translation.z = float(translation[2])
+                t.transform.rotation.x = float(imag[0])
+                t.transform.rotation.y = float(imag[1])
+                t.transform.rotation.z = float(imag[2])
+                t.transform.rotation.w = float(rot.GetReal())
+            else:
+                # Mode 2: pure-static transform relative to `parent_frame`.
+                # TransformListener chains through the existing /tf graph
+                # (e.g. base_link → ... → gripper/tcp → child) so no live
+                # USD anchor lookup is needed.
+                t.transform.translation.x = float(ox)
+                t.transform.translation.y = float(oy)
+                t.transform.translation.z = float(oz)
+                t.transform.rotation.x = float(qx)
+                t.transform.rotation.y = float(qy)
+                t.transform.rotation.z = float(qz)
+                t.transform.rotation.w = float(qw)
+            msg.transforms.append(t)
+        if msg.transforms:
+            self._trial_tf_pub.publish(msg)
 
     def _publish_objects_poses(self, stamp):
         """Publish TFMessage on /objects_poses_real (broader: includes task_board frames).

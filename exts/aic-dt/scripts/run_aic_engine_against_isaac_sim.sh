@@ -403,10 +403,12 @@ echo "[wrapper] launching host aic_engine (humble, ROS_DOMAIN_ID=7, RMW=zenoh)"
 ) &
 ENGINE_PID=$!
 
-# ---------- wait for engine completion or exit (max 240s) ----------
-echo "[wrapper] waiting for aic_engine completion (PID=$ENGINE_PID, log=$ENGINE_LOG, max 240s)"
+# ---------- wait for engine completion or exit (max 320s) ----------
+# Each trial in sample_config.yaml has time_limit=180s. Add headroom for
+# engine startup + lifecycle + scoring + teardown so one trial fits in budget.
+echo "[wrapper] waiting for aic_engine completion (PID=$ENGINE_PID, log=$ENGINE_LOG, max 320s)"
 ENGINE_DONE="0"
-for i in $(seq 1 240); do
+for i in $(seq 1 320); do
     if grep -qE "Engine Stopped|process has finished cleanly.*aic_engine|Finished scoring" "$ENGINE_LOG" 2>/dev/null; then
         ENGINE_DONE="1"
         echo "[wrapper] engine reached completion at t=${i}s"

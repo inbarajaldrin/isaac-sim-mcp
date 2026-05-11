@@ -3214,6 +3214,133 @@ class DigitalTwin(omni.ext.IExt):
             "attach_cable_to_gripper": bool(cable_cfg.get("attach_cable_to_gripper", False)),
         }
 
+    def _compute_trial_tf_frames(self, trial_cfg: dict, spawned: list) -> list:
+        """DEFERRED-4 (2026-05-10): build per-trial frame dicts for CheatCode's
+        `lookup_transform(base_link, …)` calls.
+
+        CheatCode.insert_cable() (~/Documents/aic/aic_example_policies/.../CheatCode.py:197-204)
+        constructs two frame_ids from the trial task config:
+          - port_frame  = f"task_board/{target_module_name}/{port_name}_link"
+          - plug_frame  = f"{cable_name}/{plug_name}_link"
+        and waits up to 10s for both to resolve from base_link.
+
+        Source-of-truth for the mount→port SE(3) offset:
+          ~/Documents/aic/tools/anchor_target_offsets.yaml
+        which contains cached translation_xyz + 4x4 rowmajor SE(3) matrices
+        per CAD pair (computed from real Gazebo recordings). We look up the
+        anchor matching the spawned anchor link, then compose:
+          T_world_port = T_world_anchor @ T_anchor_port
+
+        For the plug frame: cable is rigidly attached to gripper finger via
+        FixedJoint when attach_cable_to_gripper=True (the only case in the 3
+        sample_config trials). The plug tip is therefore approximately the
+        gripper/tcp pose itself. We publish the plug frame as a static child
+        of gripper/tcp with zero offset — CheatCode's relative-motion logic
+        (plug_tip_gripper_offset = gripper - plug) gracefully collapses to
+        moving the gripper directly to the port. This is the same approach
+        Gazebo's TouchPlugin uses for the trial: the plug sensor frame sits
+        at the contact point on the plug visual which is itself near the
+        gripper finger tip.
+
+        Returns a list of dicts in the shape expected by
+        AicScoringPublishers.set_trial_tf_frames:
+          [
+            {parent: 'world', child: 'task_board/.../...', usd_anchor_path: '...',
+             offset_translation: (x,y,z), offset_quat_xyzw: (x,y,z,w)},
+            {parent: 'gripper/tcp', child: 'cable_0/sfp_tip_link',
+             offset_translation: (0,0,0), offset_quat_xyzw: (0,0,0,1)},
+          ]
+        Empty list if the trial has no tasks or if anchor offsets are missing
+        (logged as a single line to stdout for operator triage).
+        """
+        import yaml as _yaml
+        tasks = (trial_cfg or {}).get("tasks", {}) or {}
+        if not tasks:
+            return []
+        # Single task per trial across the 3 sample_config trials. Take first.
+        _, task = next(iter(tasks.items()))
+        task = task or {}
+        target_module = task.get("target_module_name")
+        port_name = task.get("port_name")
+        cable_name = task.get("cable_name")
+        plug_name = task.get("plug_name")
+        if not all((target_module, port_name, cable_name, plug_name)):
+            print(f"[AIC-DT][trial-tf] task missing required fields: {task}")
+            return []
+
+        # Load anchor offsets (cheap; only on load_trial).
+        offsets_path = os.path.expanduser("~/Documents/aic/tools/anchor_target_offsets.yaml")
+        try:
+            with open(offsets_path, "r") as fh:
+                offsets_doc = _yaml.safe_load(fh) or {}
+        except Exception as exc:
+            print(f"[AIC-DT][trial-tf] cannot read {offsets_path}: {exc!r}")
+            return []
+        anchors = offsets_doc.get("anchors", {}) or {}
+
+        # Map the target_module to an anchors-yaml key + live USD mount path.
+        # Naming convention from sample_config.yaml:
+        #   target_module_name='nic_card_mount_<i>'   → anchor key 'nic_card_mount'
+        #                                               → live USD '/World/TaskBoard/NICCardMount_<i>'
+        #   target_module_name='sc_port_<i>'          → anchor key 'sc_port'
+        #                                               → live USD '/World/TaskBoard/SCPort_<i>'
+        if target_module.startswith("nic_card_mount_"):
+            idx = target_module.rsplit("_", 1)[-1]
+            anchor_key = "nic_card_mount"
+            usd_anchor_path = f"/World/TaskBoard/NICCardMount_{idx}"
+        elif target_module.startswith("sc_port_"):
+            idx = target_module.rsplit("_", 1)[-1]
+            anchor_key = "sc_port"
+            usd_anchor_path = f"/World/TaskBoard/SCPort_{idx}"
+        else:
+            print(f"[AIC-DT][trial-tf] unrecognised target_module_name pattern: {target_module}")
+            return []
+
+        anchor_info = anchors.get(anchor_key) or {}
+        translation = anchor_info.get("translation_xyz_m") or anchor_info.get("translation_xyz")
+        T44 = anchor_info.get("T_anchor_port_4x4_rowmajor")
+        if not (translation and T44):
+            print(f"[AIC-DT][trial-tf] no offsets for anchor_key={anchor_key} in {offsets_path}")
+            return []
+
+        # Extract rotation from the 4x4 rowmajor as a quaternion (xyzw).
+        # The yaml stores it as a flat 16-element list. Use numpy/pxr to convert.
+        try:
+            import numpy as np
+            from pxr import Gf
+            T = np.array(T44, dtype=float).reshape(4, 4)
+            rot33 = T[:3, :3]
+            # Build a Gf rotation matrix, then extract quaternion.
+            gfm = Gf.Matrix3d(*[float(rot33[i, j]) for i in range(3) for j in range(3)])
+            quat = gfm.ExtractRotation().GetQuaternion()
+            qw = float(quat.GetReal())
+            qi = quat.GetImaginary()
+            qx, qy, qz = float(qi[0]), float(qi[1]), float(qi[2])
+        except Exception as exc:
+            print(f"[AIC-DT][trial-tf] rotation extraction failed: {exc!r}; falling back to identity")
+            qx, qy, qz, qw = 0.0, 0.0, 0.0, 1.0
+        port_frame = {
+            "parent": "world",
+            "child": f"task_board/{target_module}/{port_name}_link",
+            "usd_anchor_path": usd_anchor_path,
+            "offset_translation": (float(translation[0]), float(translation[1]), float(translation[2])),
+            "offset_quat_xyzw": (qx, qy, qz, qw),
+        }
+
+        # Plug frame — pure-static child of gripper/tcp (no USD anchor lookup).
+        plug_frame = {
+            "parent": "gripper/tcp",
+            "child": f"{cable_name}/{plug_name}_link",
+            "usd_anchor_path": None,
+            "offset_translation": (0.0, 0.0, 0.0),
+            "offset_quat_xyzw": (0.0, 0.0, 0.0, 1.0),
+        }
+
+        print(f"[AIC-DT][trial-tf] frames: port={port_frame['child']} (anchor={usd_anchor_path}, "
+              f"translation={port_frame['offset_translation']}); plug={plug_frame['child']} "
+              f"(child of gripper/tcp, identity)")
+        return [port_frame, plug_frame]
+
     def _dispatch_rail_block(self, kind: str, index: int, block: dict, atom_fn) -> tuple:
         """Q5 adapter (04-RESEARCH.md): YAML's entity_present/entity_pose.{translation,roll,pitch,yaw}
         → atom kwargs. Returns (atom_name_with_index, kwargs) for the
@@ -3389,6 +3516,22 @@ class DigitalTwin(omni.ext.IExt):
                     )
                 except Exception as exc:
                     print(f"[AIC-DT][scoring] _start_aic_scoring_publishers failed: {exc!r}")
+
+                # DEFERRED-4 (2026-05-10): publish per-trial CheatCode-expected
+                # TF frames so insert_cable() can look up `task_board/<mount>/<port>_link`
+                # and `<cable>/<plug>_link` from base_link. Source-of-truth for the
+                # mount→port offset is ~/Documents/aic/tools/anchor_target_offsets.yaml
+                # (cached SE(3) constants per CAD pair, baked from Gazebo recordings).
+                try:
+                    trial_tf_frames = self._compute_trial_tf_frames(
+                        trial_cfg=trials[trial_key] or {},
+                        spawned=spawned,
+                    )
+                    if trial_tf_frames and hasattr(self, "_aic_scoring_publishers") and self._aic_scoring_publishers:
+                        self._aic_scoring_publishers.set_trial_tf_frames(trial_tf_frames)
+                except Exception as exc:
+                    print(f"[AIC-DT][scoring] _compute_trial_tf_frames failed: {exc!r}")
+                    traceback.print_exc()
             else:
                 print("--- ground_truth=False — skipping AIC scoring publishers (M2 swap surface preserved) ---")
 
