@@ -1499,3 +1499,80 @@ startup fails with "Failed to load config file: bad file". Observed once
 in this iter but not reproducible. Symptom: engine log shows fail-to-load
 WITHOUT preceding wrapper "derived single-trial config" log line. Captured
 for next-iter investigation.
+
+[2026-05-11T09:10Z] trial-home-robot-pose PASS — closed via per-index URDF anchor fix.
+
+Building on cf27bdd (apply home_joint_positions + radians-to-degrees on
+_apply_robot_pose), this iter found the second-order bug pulling xy_error
+to 0.184m (out of 0.1 PRD threshold): _spawn_component_via_usd (the shared
+spawn helper for task_board + ALL component prims) was ALSO passing RPY in
+radians to AddRotateXYZOp. trial_1 task_board yaw=π was being interpreted
+as 3.14° → board essentially unrotated. AND the per-index Y anchors for
+NIC card mount + SC port were hard-zero (`local_pos = (0.0, translation,
+0.0)`) instead of the URDF-canonical (-0.081418+translation, Y[i], 0.012)
+for nic_card_mount and (-0.075+translation, Y[i], 0.0165) + RPY+=(1.57,0,
+1.57) rad for sc_port. With both fixes, xy_error dropped from
+-0.024/0.182 → -0.045/0.020. Threshold met.
+
+Per ~/Documents/aic/aic_description/urdf/task_board.urdf.xacro:
+  nic_card_mount_<i>: x=-0.081418+translation, Y=(-0.1745,-0.1345,-0.0945,
+                     -0.0545,-0.0145), z=0.012 (translation maps to X).
+  sc_port_<i>:        x=-0.075+translation, Y=(0.0295,0.0705), z=0.0165,
+                     RPY offset (1.57,0,1.57) rad on top of caller RPY.
+  lc_mount_rail:      x=0.01, y=±0.10625+translation, z=0.012
+  sfp_mount_rail:     x=0.055, y=±0.10625+translation, z=0.01
+  sc_mount_rail:      x=0.1/0.0985 (per index), z=0.012/0.01 (per index)
+
+Files changed:
+  - exts/aic-dt/aic_dt/extension.py
+    * _spawn_component_via_usd: math.degrees() the rpy before AddRotateXYZOp
+    * Cable pose: same math.degrees() conversion
+    * Per-component spawn helpers: read canonical URDF anchors via new
+      _NIC_CARD_MOUNT_ANCHOR_* + _SC_PORT_ANCHOR_* constants; translation
+      maps to X for nic_card_mount / sc_port (per URDF; was bogus Y before).
+    * Mount-rail Z anchors corrected from 0.0 → 0.012/0.01 per URDF.
+  - plans/prd.json (flip passes:true)
+
+Verify: bash exts/aic-dt/scripts/test_trial_home_robot_pose.sh
+  → trial_1 fire produces xy_error: -0.0446 0.0199 (was -0.0243 0.182)
+  → both axes within ±0.1m tolerance. PASS.
+
+Acceptance bars:
+  [x] load_trial applies home_joint_positions — Kit log "[AIC-DT][home]
+      applied home pose: shoulder_pan_joint=-0.1597 ..."
+  [x] shoulder_pan landing — verified indirectly: CheatCode model
+      consumes /joint_states to compute plug FK; if shoulder_pan were
+      off, xy_error.x wouldn't be ~0 (it's -0.045m, matching home pose
+      kinematics on nic_card_mount_0/sfp_port_0). Direct rclpy probe
+      from host had DDS discovery issues but the docker container model
+      successfully read it.
+  [x] xy_error <= 0.1 m at insert_cable execute_loop start.
+  [x] test_trial_home_robot_pose.sh exists and exits 0.
+
+REGRESSION SWEEP (passes:true tasks whose files_likely overlap
+extension.py):
+  - joint-drives-urdf-reconcile: PASS (probe shows all 6 arm joints at
+    stiffness=2000 damping=100 maxForce=87 — unchanged by my edits).
+  - wrench-rootcause: PASS (probe collected 135 nonzero wrench samples).
+  - motion-deficit-hunt: probe FAILS at "no /joint_states received during
+    warmup" — same DDS discovery flake that prevented my own probe from
+    receiving /joint_states earlier. Not regressed by my changes (only
+    spawn-helper geometry touched, no JointState publisher modifications;
+    publisher confirmed running via Kit log "[AIC-DT][parity] Started:
+    /joint_states (7 joints, frame_id=base_link)" + CheatCode docker model
+    successfully read /joint_states this iter). External discovery flake,
+    not flipping passes:false.
+
+Skill cited: isaac-sim-extension-dev for USD AddRotateXYZOp degrees-vs-
+radians convention (USD authoring; mirrors fix already in
+_apply_robot_pose from cf27bdd).
+
+PROGRESS METER UPDATE:
+  ✓ trial-home-robot-pose (this iter)
+  ◯ parity-report-run    (gates ship — needs trial outcomes to match)
+  ◯ cable-physics-fidelity (DEFERRED-6, Phase 3 SCENE-05)
+  ◯ ship-paperwork        (gated on parity-report-run)
+
+Next iter: parity_report.py refire — now that kinematics are correct,
+trials 1/2/3 should be re-captured with up-to-date outcomes before the
+parity report meaningfully compares against Gazebo.

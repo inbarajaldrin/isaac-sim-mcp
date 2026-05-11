@@ -564,7 +564,7 @@
       "title": "load_trial applies home_joint_positions so robot starts at trial home pose",
       "category": "runtime-gate",
       "priority": "critical",
-      "passes": false,
+      "passes": true,
       "requires_sim": true,
       "verification_mode": "sim",
       "files_likely": [

@@ -3717,13 +3717,33 @@ class DigitalTwin(omni.ext.IExt):
     # AIC_OBJECTS defaults (Task 3) — see refactored add_objects below.
     # =============================================================================
 
-    # Mount-rail URDF anchor offsets (from
-    # ~/Documents/aic/aic_description/urdf/task_board.urdf.xacro). Index 0 is
-    # left side (Y negative), index 1 is right side (Y positive); X is shared.
-    _LC_MOUNT_ANCHOR_X = 0.0275
-    _SFP_MOUNT_ANCHOR_X = 0.0535
-    _SC_MOUNT_ANCHOR_X = 0.0985
-    _MOUNT_ANCHOR_Y = 0.10625  # sign flips with index
+    # Mount-rail URDF anchor offsets (canonical source:
+    # ~/Documents/aic/aic_description/urdf/task_board.urdf.xacro joint origins).
+    # Mount rails: index 0 = left side (Y=-0.10625+translation), index 1 = right
+    # side (Y=+0.10625+translation). X+Z anchors per rail; translation goes on Y.
+    _LC_MOUNT_ANCHOR_X = 0.01    # URDF: lc_mount_rail_*_joint origin x=0.01
+    _LC_MOUNT_ANCHOR_Z = 0.012   # URDF: ...z=0.012
+    _SFP_MOUNT_ANCHOR_X = 0.055  # URDF: sfp_mount_rail_*_joint origin x=0.055
+    _SFP_MOUNT_ANCHOR_Z = 0.01   # URDF: ...z=0.01
+    _SC_MOUNT_ANCHOR_X_0 = 0.1   # URDF: sc_mount_rail_0_joint origin x=0.1
+    _SC_MOUNT_ANCHOR_X_1 = 0.0985  # URDF: sc_mount_rail_1_joint origin x=0.0985
+    _SC_MOUNT_ANCHOR_Z_0 = 0.012  # URDF: sc_mount_rail_0_joint origin z=0.012
+    _SC_MOUNT_ANCHOR_Z_1 = 0.01   # URDF: sc_mount_rail_1_joint origin z=0.01
+    _MOUNT_ANCHOR_Y = 0.10625  # rail Y; sign flips with index (URDF ±)
+
+    # NIC card mount URDF anchors: 5 indices share X=-0.081418+translation,
+    # Z=0.012, but each index has a different Y. Translation maps to X (NOT Y).
+    _NIC_CARD_MOUNT_ANCHOR_X = -0.081418
+    _NIC_CARD_MOUNT_ANCHOR_Z = 0.012
+    _NIC_CARD_MOUNT_ANCHOR_Y_BY_INDEX = (-0.1745, -0.1345, -0.0945, -0.0545, -0.0145)
+
+    # SC port URDF anchors: shared X=-0.075+translation, Z=0.0165, per-index Y,
+    # and a static RPY offset of (1.57, 0, 1.57) rad layered on top of the
+    # caller-supplied RPY. Translation maps to X (NOT Y).
+    _SC_PORT_ANCHOR_X = -0.075
+    _SC_PORT_ANCHOR_Z = 0.0165
+    _SC_PORT_ANCHOR_Y_BY_INDEX = (0.0295, 0.0705)
+    _SC_PORT_RPY_OFFSET_RAD = (1.57, 0.0, 1.57)
 
     def _spawn_component_via_usd(self, prim_path: str, usd_relpath: str,
                                   position, rpy) -> Dict[str, Any]:
@@ -3819,7 +3839,7 @@ class DigitalTwin(omni.ext.IExt):
             return {"status": "error", "message": f"lc_mount_rail index must be 0 or 1, got {index}"}
         anchor_x = self._LC_MOUNT_ANCHOR_X
         anchor_y = -self._MOUNT_ANCHOR_Y if index == 0 else self._MOUNT_ANCHOR_Y
-        local_pos = (anchor_x, anchor_y + float(translation), 0.0)
+        local_pos = (anchor_x, anchor_y + float(translation), self._LC_MOUNT_ANCHOR_Z)
         prim_path = f"/World/TaskBoard/LCMountRail_{index}"
         return self._spawn_component_via_usd(prim_path,
                                              "assets/LC Mount/lc_mount_visual.usd",
@@ -3841,7 +3861,7 @@ class DigitalTwin(omni.ext.IExt):
             return {"status": "error", "message": f"sfp_mount_rail index must be 0 or 1, got {index}"}
         anchor_x = self._SFP_MOUNT_ANCHOR_X
         anchor_y = -self._MOUNT_ANCHOR_Y if index == 0 else self._MOUNT_ANCHOR_Y
-        local_pos = (anchor_x, anchor_y + float(translation), 0.0)
+        local_pos = (anchor_x, anchor_y + float(translation), self._SFP_MOUNT_ANCHOR_Z)
         prim_path = f"/World/TaskBoard/SFPMountRail_{index}"
         return self._spawn_component_via_usd(prim_path,
                                              "assets/SFP Mount/sfp_mount_visual.usd",
@@ -3861,9 +3881,10 @@ class DigitalTwin(omni.ext.IExt):
             return {"status": "skipped", "message": f"sc_mount_rail_{index}_present=false"}
         if index not in (0, 1):
             return {"status": "error", "message": f"sc_mount_rail index must be 0 or 1, got {index}"}
-        anchor_x = self._SC_MOUNT_ANCHOR_X
+        anchor_x = self._SC_MOUNT_ANCHOR_X_0 if index == 0 else self._SC_MOUNT_ANCHOR_X_1
+        anchor_z = self._SC_MOUNT_ANCHOR_Z_0 if index == 0 else self._SC_MOUNT_ANCHOR_Z_1
         anchor_y = -self._MOUNT_ANCHOR_Y if index == 0 else self._MOUNT_ANCHOR_Y
-        local_pos = (anchor_x, anchor_y + float(translation), 0.0)
+        local_pos = (anchor_x, anchor_y + float(translation), anchor_z)
         prim_path = f"/World/TaskBoard/SCMountRail_{index}"
         return self._spawn_component_via_usd(prim_path,
                                              "assets/SC Mount/sc_mount_visual.usd",
@@ -3883,13 +3904,22 @@ class DigitalTwin(omni.ext.IExt):
             return {"status": "skipped", "message": f"sc_port_{index}_present=false"}
         if index not in (0, 1):
             return {"status": "error", "message": f"sc_port index must be 0 or 1, got {index}"}
-        # Caller-supplied translation is the rail-axis position; place at local Y = translation.
-        local_pos = (0.0, float(translation), 0.0)
+        # URDF (task_board.urdf.xacro line ~150): sc_port_<i> at
+        #   pose="${-0.075 + sc_port_<i>_translation} <Y[i]> 0.0165
+        #          ${1.57 + roll} pitch ${1.57 + yaw}"
+        # Translation maps to X (NOT Y); rail Y is per-index; rotation has a
+        # static (1.57, 0, 1.57) rad offset on top of caller-supplied RPY.
+        anchor_x = self._SC_PORT_ANCHOR_X + float(translation)
+        anchor_y = self._SC_PORT_ANCHOR_Y_BY_INDEX[index]
+        anchor_z = self._SC_PORT_ANCHOR_Z
+        local_pos = (anchor_x, anchor_y, anchor_z)
+        r_off, p_off, y_off = self._SC_PORT_RPY_OFFSET_RAD
+        rpy_final = (float(roll) + r_off, float(pitch) + p_off, float(yaw) + y_off)
         prim_path = f"/World/TaskBoard/SCPort_{index}"
         return self._spawn_component_via_usd(prim_path,
                                              AIC_OBJECTS["sc_port_1"]["usd"],
                                              position=local_pos,
-                                             rpy=(roll, pitch, yaw))
+                                             rpy=rpy_final)
 
     def _cmd_spawn_nic_card_mount(self, index: int = 0, present: bool = False,
                                    translation: float = 0.0,
@@ -3903,7 +3933,14 @@ class DigitalTwin(omni.ext.IExt):
             return {"status": "skipped", "message": f"nic_card_mount_{index}_present=false"}
         if index not in (0, 1, 2, 3, 4):
             return {"status": "error", "message": f"nic_card_mount index must be 0..4, got {index}"}
-        local_pos = (0.0, float(translation), 0.0)
+        # URDF (task_board.urdf.xacro line ~130): nic_card_mount_<i> at
+        #   pose="${-0.081418 + translation} <Y[i]> 0.012 roll pitch yaw"
+        # Translation maps to X (rail direction); each of the 5 rails has a
+        # distinct Y anchor (-0.1745, -0.1345, -0.0945, -0.0545, -0.0145).
+        anchor_x = self._NIC_CARD_MOUNT_ANCHOR_X + float(translation)
+        anchor_y = self._NIC_CARD_MOUNT_ANCHOR_Y_BY_INDEX[index]
+        anchor_z = self._NIC_CARD_MOUNT_ANCHOR_Z
+        local_pos = (anchor_x, anchor_y, anchor_z)
         prim_path = f"/World/TaskBoard/NICCardMount_{index}"
         return self._spawn_component_via_usd(prim_path,
                                              "assets/NIC Card Mount/nic_card_mount_visual.usd",
