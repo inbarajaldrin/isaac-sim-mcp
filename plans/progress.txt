@@ -1578,3 +1578,5 @@ trials 1/2/3 should be re-captured with up-to-date outcomes before the
 parity report meaningfully compares against Gazebo.
 
 VERIFIED trial-home-robot-pose by verifier-agent at 2026-05-11T09:24:19Z — xy_error -0.049/0.0189 (both axes within 0.1m strict bar; under 0.3m PRD bar). verify_command exit 0. Sim socket was up on entry; no relaunch performed.
+
+[2026-05-11T09:35Z] NO-OP iter — TUG_PIN_TASK=trial-home-robot-pose, already passes:true (closed ce96b28, verified 2026-05-11T09:24Z). Per orchestrator rule, no substitute picked. Working tree clean (only untracked .claude/skills/, docs/, etc.; no tracked diffs). Next-up unblocked tasks per batch_context: wrist-cameras-restore, parity-report-run (gated on cable-physics-fidelity / DEFERRED-6), ship-paperwork. Orchestrator owns next pin.
