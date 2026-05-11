@@ -1655,3 +1655,24 @@ PROGRESS METER UPDATE:
 Next iter: orchestrator will pin cable-physics-fidelity per batch_context
 guidance ("After this lands: the orchestrator will pin cable-physics-fidelity
 (DEFERRED-6) — that's the real ship gate.").
+
+VERIFIED environment-world-frame-reconcile by verifier-agent at 2026-05-11T09:49:37Z
+  Verified executor commit e852684 against PRD acceptance.
+  Gate 1 (static grep)    PASS — _enclosure_position=(0.0,0.0,0.0),
+                                  _ground_plane_z=0.0,
+                                  _cmd_spawn_task_board_base defaults
+                                  {x=0.15, y=-0.2, z=1.14, r=0, p=0, yw=3.1415}
+  Gate 2 (live MCP probe) PASS — quick_start status=success,
+                                  /World/AIC_Enclosure translate=(0,0,0),
+                                  /World/defaultGroundPlane translate=(0,0,0).
+                                  task_board live=(0.2837, 0.229, 0.0) — per-trial
+                                  YAML override winning as documented.
+  Gate 3 (regression)     PASS — trial-home-robot-pose xy_error
+                                  (-0.0101, 0.02) within +/-0.1 m on both axes.
+
+Skill cited: isaac-sim-extension-dev for USD UsdGeom.Xformable
+  GetOrderedXformOps / TypeTranslate inspection pattern and the
+  execute_python_code result-shape convention used to parse the live probe.
+Skill cited: nvidia-suite-docs — not invoked live; UsdGeom translation API
+  is USD-core stable across Isaac Sim 4.x/5.x, fully covered by the
+  isaac-sim-extension-dev skill citation.
