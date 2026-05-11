@@ -1,44 +1,44 @@
 {
-  "milestone": "M1 — Platform Transfer",
+  "milestone": "M1 \u2014 Platform Transfer",
   "onboarded": "2026-05-09",
   "operator": "aldrin",
   "stop_condition": "All 3 trials in ~/Documents/aic/aic_engine/config/sample_config.yaml pass under unmodified CheatCode.py against Isaac Sim with the same per-trial outcome (insertion_event fires, no off_limit contacts) that Gazebo produces. parity_report.py regenerates a deterministic side-by-side table proving it. .planning/.m1_shipped touched after the report is green.",
-  "scope_note": "Hardware caveat acknowledged — running Isaac Sim + Gazebo concurrently may stress GPU/CPU and degrade physics realtime factor. M1 stop condition is correctness of trial outcomes (same insertion vs off_limit verdicts), not realtime parity. Spec-machine upgrade is the operator's path for any realtime delta.",
+  "scope_note": "Hardware caveat acknowledged \u2014 running Isaac Sim + Gazebo concurrently may stress GPU/CPU and degrade physics realtime factor. M1 stop condition is correctness of trial outcomes (same insertion vs off_limit verdicts), not realtime parity. Spec-machine upgrade is the operator's path for any realtime delta.",
   "out_of_scope_for_m1": [
-    "Cable physics decorative-only (audit finding #5) — defer to M2; cable is rigidly attached to gripper (attach_cable_to_gripper=True) so cable physics doesn't dynamically affect trials. Scoring is contact-based on plug-end geometry. Density is 7 orders of magnitude off realistic; revisit only if a future trial type requires cable to drag on environment.",
-    "Phase 1 gap-closure plans 01-G01 (mount-rail visual scale diagnosis) and 01-G02 (apply verdict-specific fix) — latent visual polish, not ship-blockers. Plan 01-G05's setup_wrist_cameras prim path correction is absorbed into wrist-cameras-restore below."
+    "Cable physics decorative-only (audit finding #5) \u2014 defer to M2; cable is rigidly attached to gripper (attach_cable_to_gripper=True) so cable physics doesn't dynamically affect trials. Scoring is contact-based on plug-end geometry. Density is 7 orders of magnitude off realistic; revisit only if a future trial type requires cable to drag on environment.",
+    "Phase 1 gap-closure plans 01-G01 (mount-rail visual scale diagnosis) and 01-G02 (apply verdict-specific fix) \u2014 latent visual polish, not ship-blockers. Plan 01-G05's setup_wrist_cameras prim path correction is absorbed into wrist-cameras-restore below."
   ],
   "feedback_loops": {
-    "audit_dx02": "python3 exts/aic-dt/scripts/audit_dx02.py — checks 4-surface contract on every MCP atom; must exit 0",
-    "verify_phase_1": "bash exts/aic-dt/scripts/verify_phase_1.sh — Phase 1 runtime gate (requires sim)",
-    "verify_phase_2": "bash exts/aic-dt/scripts/verify_phase_2.sh — Phase 2 runtime gate (requires sim)",
+    "audit_dx02": "python3 exts/aic-dt/scripts/audit_dx02.py \u2014 checks 4-surface contract on every MCP atom; must exit 0",
+    "verify_phase_1": "bash exts/aic-dt/scripts/verify_phase_1.sh \u2014 Phase 1 runtime gate (requires sim)",
+    "verify_phase_2": "bash exts/aic-dt/scripts/verify_phase_2.sh \u2014 Phase 2 runtime gate (requires sim)",
     "smoke_aic_controller": "python3 exts/aic-dt/scripts/smoke_test_aic_controller.py (requires sim)",
     "smoke_aic_parity": "python3 exts/aic-dt/scripts/smoke_test_aic_parity.py (requires sim)",
     "engine_e2e": "bash exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh <trial_id> (requires sim + engine container + zenoh fix)"
   },
   "skills_required_per_iteration": [
     "isaac-sim-extension-dev (mandatory before any code touching Isaac Sim 5.0 / OpenUSD / OmniGraph / articulation / sensors / MCP socket / aic-dt internals)",
-    "nvidia-suite-docs (mandatory for the same surface — fetches live docs; cached LLM knowledge of Isaac Sim 4.x APIs is routinely stale)"
+    "nvidia-suite-docs (mandatory for the same surface \u2014 fetches live docs; cached LLM knowledge of Isaac Sim 4.x APIs is routinely stale)"
   ],
   "cross_repo_policy": {
-    "scope": "Edits to files OUTSIDE /home/aaugus11/Documents/isaac-sim-mcp — especially ~/Documents/aic and ~/IsaacSim-ros_workspaces — are PERMITTED in service of correctly setting up the Isaac Sim path. No artificial restrictions on which files can be touched.",
+    "scope": "Edits to files OUTSIDE /home/aaugus11/Documents/isaac-sim-mcp \u2014 especially ~/Documents/aic and ~/IsaacSim-ros_workspaces \u2014 are PERMITTED in service of correctly setting up the Isaac Sim path. No artificial restrictions on which files can be touched.",
     "prohibited": [
       "Edits inside ~/Documents/aic that artificially make trials pass without legitimate Isaac Sim integration. Specifically: disabling assertions in CheatCode.py / aic_controller / aic_engine / aic_adapter; relaxing tolerances inside aic source to mask Isaac Sim deltas; mocking out aic_engine checks; bypassing scoring logic. The trials must pass because the Isaac Sim digital twin behaves correctly, not because the verifier was weakened."
     ],
-    "tracking": "Every edit to a file outside isaac-sim-mcp MUST be appended as one entry to plans/cross_repo_changes.json. Schema per entry: { ts (ISO 8601), task_id, repo_path (absolute), file_path (relative to repo_path), reason (one sentence), reversibility ('reversible' | 'irreversible'), commit_sha (string if committed in that repo, null if uncommitted/dirty), notes (optional) }. The file is created on first cross-repo edit if missing; never overwritten — append-only."
+    "tracking": "Every edit to a file outside isaac-sim-mcp MUST be appended as one entry to plans/cross_repo_changes.json. Schema per entry: { ts (ISO 8601), task_id, repo_path (absolute), file_path (relative to repo_path), reason (one sentence), reversibility ('reversible' | 'irreversible'), commit_sha (string if committed in that repo, null if uncommitted/dirty), notes (optional) }. The file is created on first cross-repo edit if missing; never overwritten \u2014 append-only."
   },
   "scene_authoring_source_of_truth": {
-    "principle": "AIC's Gazebo configs in ~/Documents/aic/ are the canonical source-of-truth for every scene spawn / launch shortcut we build in Isaac Sim. When authoring a new scene atom, robot init, sensor wiring, or spawn parameter, FIRST consult the AIC Gazebo equivalent and mirror its config — don't invent new defaults.",
+    "principle": "AIC's Gazebo configs in ~/Documents/aic/ are the canonical source-of-truth for every scene spawn / launch shortcut we build in Isaac Sim. When authoring a new scene atom, robot init, sensor wiring, or spawn parameter, FIRST consult the AIC Gazebo equivalent and mirror its config \u2014 don't invent new defaults.",
     "primary_sources": [
-      "~/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro — robot definition, joint drives, sensor frames (FT sensor, wrist cameras), gripper config (Robotiq Hand-E)",
-      "~/Documents/aic/aic_bringup/launch/spawn_task_board.launch.py — task-board spawn parameter surface (mount rails, port occupancy, per-entity translation/RPY)",
-      "~/Documents/aic/aic_bringup/launch/*.launch.py — all launch entry points (robot, board, cable, scoring) with their canonical defaults",
-      "~/Documents/aic/aic_engine/config/sample_config.yaml — per-trial scene state (board pose, rail occupancy, port poses, cable pose, attach state, gripper offset)",
-      "Live aic_eval Docker container topic surface — corroborates URDF + launch file config; captured via existing scripts under exts/aic-dt/scripts/snapshot_aic_eval_*.sh and run_aic_engine_against_isaac_sim.sh"
+      "~/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro \u2014 robot definition, joint drives, sensor frames (FT sensor, wrist cameras), gripper config (Robotiq Hand-E)",
+      "~/Documents/aic/aic_bringup/launch/spawn_task_board.launch.py \u2014 task-board spawn parameter surface (mount rails, port occupancy, per-entity translation/RPY)",
+      "~/Documents/aic/aic_bringup/launch/*.launch.py \u2014 all launch entry points (robot, board, cable, scoring) with their canonical defaults",
+      "~/Documents/aic/aic_engine/config/sample_config.yaml \u2014 per-trial scene state (board pose, rail occupancy, port poses, cable pose, attach state, gripper offset)",
+      "Live aic_eval Docker container topic surface \u2014 corroborates URDF + launch file config; captured via existing scripts under exts/aic-dt/scripts/snapshot_aic_eval_*.sh and run_aic_engine_against_isaac_sim.sh"
     ],
-    "rule": "Any time an aic-dt MCP atom or scene-authoring step has a default value (joint stiffness, camera intrinsic, drive damping, prim hierarchy, frame_id, topic name, RPY orientation, mass, density, etc.), the canonical default is whatever Gazebo uses — not Isaac Sim's idiomatic value. If divergence is intentional (e.g., Isaac Sim physics stability requires different damping), document the rationale inline at the code site AND in the commit message citing the live Gazebo source-of-truth value being diverged from."
+    "rule": "Any time an aic-dt MCP atom or scene-authoring step has a default value (joint stiffness, camera intrinsic, drive damping, prim hierarchy, frame_id, topic name, RPY orientation, mass, density, etc.), the canonical default is whatever Gazebo uses \u2014 not Isaac Sim's idiomatic value. If divergence is intentional (e.g., Isaac Sim physics stability requires different damping), document the rationale inline at the code site AND in the commit message citing the live Gazebo source-of-truth value being diverged from."
   },
-  "task_selection_principle": "All tasks below are independently grabbable. There are no inter-task gates in this JSON. Pick freely from any task with passes:false based on (1) task priority, (2) your assessment of which task you can complete cleanly in this iteration. Some tasks' descriptions reference other tasks informally (e.g., 'uses the wrapper extended in wrapper-json-emit'); use that as a HINT — if a referenced prerequisite hasn't been done, prefer a task whose path to success is clear. If you pick a task and verify_command fails because of a missing prerequisite, that's a fail-forward signal: do NOT commit, append the diagnostic note to progress.txt, exit; next iteration will pick something else.",
+  "task_selection_principle": "All tasks below are independently grabbable. There are no inter-task gates in this JSON. Pick freely from any task with passes:false based on (1) task priority, (2) your assessment of which task you can complete cleanly in this iteration. Some tasks' descriptions reference other tasks informally (e.g., 'uses the wrapper extended in wrapper-json-emit'); use that as a HINT \u2014 if a referenced prerequisite hasn't been done, prefer a task whose path to success is clear. If you pick a task and verify_command fails because of a missing prerequisite, that's a fail-forward signal: do NOT commit, append the diagnostic note to progress.txt, exit; next iteration will pick something else.",
   "tasks": [
     {
       "id": "gazebo-baselines-capture",
@@ -58,12 +58,12 @@
       "description": "Operator confirms aic_engine + CheatCode HAS been run against Gazebo on this machine via AIC's pipeline. Investigate how AIC's pipeline launches Gazebo + runs trials (read ~/Documents/aic/aic_bringup/launch/*.launch.py, ~/Documents/aic/aic_engine entrypoints, any docs/scripts/Makefile/pixi tasks under ~/Documents/aic/). Reproduce the bringup; run aic_engine + CheatCode for trial_1, trial_2, trial_3; capture each outcome to exts/aic-dt/docs/trial_outcomes/trial_<id>__gazebo.json with shape: {trial_id, sim:'gazebo', insertion_event_fired (bool), offlimit_contact_count (int), completed_steps (int), ts (ISO 8601)}. Document the capture mechanism in exts/aic-dt/docs/gazebo-baseline-capture.md so it's reproducible. Two implementation paths: (a) write run_aic_engine_against_gazebo.sh sibling to the Isaac Sim wrapper, sharing the same --output-json shape; (b) discover that AIC's pipeline already produces structured outcomes and adapt them. Pick whichever is cheaper after reading AIC source.",
       "acceptance": [
         "exts/aic-dt/docs/trial_outcomes/trial_1__gazebo.json + trial_2__gazebo.json + trial_3__gazebo.json all exist with the standard JSON shape",
-        "Each has insertion_event_fired=true (Gazebo trial baseline under CheatCode is expected to pass — these are the M1 reference outcomes)",
+        "Each has insertion_event_fired=true (Gazebo trial baseline under CheatCode is expected to pass \u2014 these are the M1 reference outcomes)",
         "exts/aic-dt/docs/gazebo-baseline-capture.md describes the bringup steps + capture command line, enough that a reader could regenerate the baselines",
         "Capture is reproducible: re-running the documented steps produces the same insertion_event/offlimit verdicts (run twice if uncertain)"
       ],
       "verify_command": "test -f exts/aic-dt/docs/trial_outcomes/trial_1__gazebo.json && test -f exts/aic-dt/docs/trial_outcomes/trial_2__gazebo.json && test -f exts/aic-dt/docs/trial_outcomes/trial_3__gazebo.json && python3 -c \"import json; [json.load(open(f'exts/aic-dt/docs/trial_outcomes/trial_{i}__gazebo.json')) for i in (1,2,3)]\" && test -f exts/aic-dt/docs/gazebo-baseline-capture.md",
-      "notes": "Independent — picks up early. Cross-repo touches into ~/Documents/aic likely (read-only or invocation; track any actual edits in plans/cross_repo_changes.json). Hardware reality: running Gazebo concurrently with Isaac Sim may stress the machine — operator may want to kill Isaac Sim before this task runs and relaunch after.",
+      "notes": "Independent \u2014 picks up early. Cross-repo touches into ~/Documents/aic likely (read-only or invocation; track any actual edits in plans/cross_repo_changes.json). Hardware reality: running Gazebo concurrently with Isaac Sim may stress the machine \u2014 operator may want to kill Isaac Sim before this task runs and relaunch after.",
       "verification_mode": "docker"
     },
     {
@@ -82,11 +82,11 @@
       ],
       "description": "Plan 02-04 cached the static SE(3) offset from USD prim hierarchy at _setup_kinematics. _apply_pose_cmd applies the inverse transform when frame_id='gripper/tcp'. Code shipped, never round-tripped under live sim. Same procedure as pose-roundtrip-verify but with header.frame_id='gripper/tcp'. Expect tool0 to move; gripper/tcp follows by the static offset. Informal hint: pose-roundtrip-verify's fix likely needs to be in place first for the underlying joint motion to behave correctly.",
       "acceptance": [
-        "TF lookup base_link→gripper/tcp post-command shows the commanded delta within 0.005m tolerance",
-        "Confirms Plan 02-04's deferred trial verdict — does the cached offset apply correctly?"
+        "TF lookup base_link\u2192gripper/tcp post-command shows the commanded delta within 0.005m tolerance",
+        "Confirms Plan 02-04's deferred trial verdict \u2014 does the cached offset apply correctly?"
       ],
       "verify_command": "python3 exts/aic-dt/scripts/probe_gripper_tcp_ingress.py --axis z --delta -0.03 --tolerance 0.005",
-      "notes": "Tracer-bullet — small standalone slice. Independent of transport / parity work.",
+      "notes": "Tracer-bullet \u2014 small standalone slice. Independent of transport / parity work.",
       "verification_mode": "sim"
     },
     {
@@ -102,7 +102,7 @@
       "skills_required": [
         "nvidia-suite-docs"
       ],
-      "description": "AIC ships an Isaac Lab environment somewhere under ~/Documents/aic/. The existing GSD work built on Isaac Sim 5.0 extension-based path (aic-dt) without leveraging AIC's Isaac Lab env at any point. Investigate whether this is a missed leverage point. Steps: (1) locate and read AIC's Isaac Lab env source (find / locate any aic_isaaclab / *_isaaclab / Isaac Lab task definitions under ~/Documents/aic/); (2) catalog reusable assets — USD paths, robot init logic, controller wiring patterns, scoring/contact pipelines, environment registration; (3) compare against what aic-dt currently re-implements; (4) verdict: leverage now (M1) / leverage in M2 / not-applicable (Isaac Lab env serves a different purpose). This is INFORMATIONAL — does not gate any other task; if the verdict is 'leverage now' and re-pointing aic-dt at AIC's Isaac Lab env saves significant work, raise as a blocker note in progress.txt and we re-scope.",
+      "description": "AIC ships an Isaac Lab environment somewhere under ~/Documents/aic/. The existing GSD work built on Isaac Sim 5.0 extension-based path (aic-dt) without leveraging AIC's Isaac Lab env at any point. Investigate whether this is a missed leverage point. Steps: (1) locate and read AIC's Isaac Lab env source (find / locate any aic_isaaclab / *_isaaclab / Isaac Lab task definitions under ~/Documents/aic/); (2) catalog reusable assets \u2014 USD paths, robot init logic, controller wiring patterns, scoring/contact pipelines, environment registration; (3) compare against what aic-dt currently re-implements; (4) verdict: leverage now (M1) / leverage in M2 / not-applicable (Isaac Lab env serves a different purpose). This is INFORMATIONAL \u2014 does not gate any other task; if the verdict is 'leverage now' and re-pointing aic-dt at AIC's Isaac Lab env saves significant work, raise as a blocker note in progress.txt and we re-scope.",
       "acceptance": [
         "exts/aic-dt/docs/aic-isaaclab-leverage.md committed with sections: 'Located at' (path or 'not found'), 'What it contains' (catalog), 'Overlap with aic-dt' (matrix of features), 'Verdict' (leverage now / leverage M2 / N/A), 'Rationale'",
         "If verdict is 'leverage now', a follow-up note appended to plans/progress.txt suggesting PRD restructure"
@@ -119,26 +119,26 @@
       "passes": true,
       "requires_sim": true,
       "files_likely": [
-        "exts/aic-dt/aic_dt/extension.py (load_robot — set drive params after articulation init)",
+        "exts/aic-dt/aic_dt/extension.py (load_robot \u2014 set drive params after articulation init)",
         "exts/aic-dt/scripts/probe_joint_drives.py (NEW; reads live drive params from articulation)"
       ],
       "skills_required": [
         "isaac-sim-extension-dev",
         "nvidia-suite-docs"
       ],
-      "description": "Live audit found arm joint drives are inherited from on-disk USD's OEM defaults (stiffness 95→1322 across joints, damping 0.038→0.529, maxForce 28 or 150) which differ from AIC URDF spec (stiffness=2000, damping=100, maxForce=87 per ~/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro). load_robot doesn't set drive params after articulation init. Two steps: (1) cross-check the URDF source-of-truth values (read ur_gz.urdf.xacro joint definitions); (2) call set_gains / drive API on each arm joint after articulation init in load_robot to match URDF. If URDF + live values are intentionally divergent (e.g., OEM defaults give better Isaac Sim physics behavior), document the rationale instead.",
+      "description": "Live audit found arm joint drives are inherited from on-disk USD's OEM defaults (stiffness 95\u21921322 across joints, damping 0.038\u21920.529, maxForce 28 or 150) which differ from AIC URDF spec (stiffness=2000, damping=100, maxForce=87 per ~/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro). load_robot doesn't set drive params after articulation init. Two steps: (1) cross-check the URDF source-of-truth values (read ur_gz.urdf.xacro joint definitions); (2) call set_gains / drive API on each arm joint after articulation init in load_robot to match URDF. If URDF + live values are intentionally divergent (e.g., OEM defaults give better Isaac Sim physics behavior), document the rationale instead.",
       "acceptance": [
-        "After quick_start, all 6 arm joint drives match URDF spec values (stiffness=2000 ±5%, damping=100 ±5%, maxForce=87 ±5%) — verified by probe_joint_drives.py",
+        "After quick_start, all 6 arm joint drives match URDF spec values (stiffness=2000 \u00b15%, damping=100 \u00b15%, maxForce=87 \u00b15%) \u2014 verified by probe_joint_drives.py",
         "Probe captures pre/post values; commit message includes the diff",
-        "If divergence is intentional, exts/aic-dt/docs/joint-drives-rationale.md documents WHY (e.g., simulation stability) with citations to live behavior — and this task closes with passes:true on grounds of intentional divergence (not ignored)"
+        "If divergence is intentional, exts/aic-dt/docs/joint-drives-rationale.md documents WHY (e.g., simulation stability) with citations to live behavior \u2014 and this task closes with passes:true on grounds of intentional divergence (not ignored)"
       ],
       "verify_command": "python3 exts/aic-dt/scripts/probe_joint_drives.py --expected-stiffness 2000 --expected-damping 100 --expected-max-force 87 --tolerance-pct 5",
-      "notes": "Audit finding #4. Could affect trial outcomes if PD response on the arm is off — hence runtime-gate category.",
+      "notes": "Audit finding #4. Could affect trial outcomes if PD response on the arm is off \u2014 hence runtime-gate category.",
       "verification_mode": "sim"
     },
     {
       "id": "motion-deficit-hunt",
-      "title": "Diagnose & fix PARITY-09 motion deficit (≥95% commanded amplitude)",
+      "title": "Diagnose & fix PARITY-09 motion deficit (\u226595% commanded amplitude)",
       "category": "runtime-gate",
       "priority": "critical",
       "passes": true,
@@ -152,9 +152,9 @@
         "isaac-sim-extension-dev",
         "nvidia-suite-docs"
       ],
-      "description": "Post-fix b682de1 (joint_indices=[[0..5]] on 4 call sites), shoulder_lift_joint round-trip on +0.10 rad command produces Δ≈0.016 rad — only 16% commanded amplitude reaches /joint_states. Writes reach DOFs but 84% dissipates. Hunt the root cause through this hypothesis ladder: (1) OGN articulation_controller PD residual still pulling toward stale /joint_states target — verify via og.Controller.attribute('inputs:enabled', node).get(); (2) Phase 3 cable activation expanded articulation 6→46 DOFs; cable mass-coupling on arm joints — temporarily SetActive(False) on /World/UR5e/cable, re-run, compare; (3) set_joint_positions vs apply_action(PD target) interaction — log _articulation._physics_view.get_dof_position_targets() post-write to compare commanded vs actual. Apply the fix from the winning hypothesis. If multiple contribute, fix all.",
+      "description": "Post-fix b682de1 (joint_indices=[[0..5]] on 4 call sites), shoulder_lift_joint round-trip on +0.10 rad command produces \u0394\u22480.016 rad \u2014 only 16% commanded amplitude reaches /joint_states. Writes reach DOFs but 84% dissipates. Hunt the root cause through this hypothesis ladder: (1) OGN articulation_controller PD residual still pulling toward stale /joint_states target \u2014 verify via og.Controller.attribute('inputs:enabled', node).get(); (2) Phase 3 cable activation expanded articulation 6\u219246 DOFs; cable mass-coupling on arm joints \u2014 temporarily SetActive(False) on /World/UR5e/cable, re-run, compare; (3) set_joint_positions vs apply_action(PD target) interaction \u2014 log _articulation._physics_view.get_dof_position_targets() post-write to compare commanded vs actual. Apply the fix from the winning hypothesis. If multiple contribute, fix all.",
       "acceptance": [
-        "Round-trip on +0.10 rad shoulder_lift_joint command produces Δ ≥ 0.095 rad in /joint_states within 2 seconds",
+        "Round-trip on +0.10 rad shoulder_lift_joint command produces \u0394 \u2265 0.095 rad in /joint_states within 2 seconds",
         "Root cause documented in commit message and progress.txt (which hypothesis won, why)",
         "Isaac Sim 5.0 Articulation / OmniGraph behavior cited from live docs (nvidia-suite-docs skill output) in commit message"
       ],
@@ -165,7 +165,7 @@
     },
     {
       "id": "parity-report-run",
-      "title": "Generate first parity report — assert 3/3 trials match Gazebo",
+      "title": "Generate first parity report \u2014 assert 3/3 trials match Gazebo",
       "category": "ship-gate",
       "priority": "critical",
       "passes": false,
@@ -176,13 +176,13 @@
       "skills_required": [],
       "description": "Run parity_report.py against the captured trial_outcomes JSONs. The result is the M1 ship gate. Informal prerequisites: parity-report-tool produces the script; gazebo-baselines-capture + trial-1-fire / trial-2-fire / trial-3-fire produce the input JSONs. If those aren't all in place, this task's verify will fail; pick a different task instead.",
       "acceptance": [
-        "docs/parity-report.md exists with 3 trials × 2 sims × outcome rows",
+        "docs/parity-report.md exists with 3 trials \u00d7 2 sims \u00d7 outcome rows",
         "All 3 trials show insertion_event_fired=true on Isaac Sim AND on Gazebo",
         "All 3 trials show offlimit_contact_count=0 on Isaac Sim AND on Gazebo",
         "parity_report.py exits 0 (all trials match across sims)"
       ],
       "verify_command": "python3 exts/aic-dt/scripts/parity_report.py && grep -q 'all trials match' docs/parity-report.md",
-      "notes": "If outcomes diverge, this task FAILS — agent does not flip passes:true. Iteration must investigate which trial diverged + why.",
+      "notes": "If outcomes diverge, this task FAILS \u2014 agent does not flip passes:true. Iteration must investigate which trial diverged + why.",
       "verification_mode": "unit-test"
     },
     {
@@ -203,7 +203,7 @@
         "exts/aic-dt/scripts/parity_report.py exists and is invokable",
         "Running it with empty trial_outcomes/ produces a graceful warning + exit 1 (no data)",
         "Running it with one mock trial_outcomes/trial_1__gazebo.json + one trial_1__isaacsim.json produces a 1-row markdown table",
-        "docs/parity-report.md is regenerable deterministically — running twice with same inputs produces byte-identical output",
+        "docs/parity-report.md is regenerable deterministically \u2014 running twice with same inputs produces byte-identical output",
         "Script has --help that explains the input file shape"
       ],
       "verify_command": "bash exts/aic-dt/scripts/test_parity_report.sh",
@@ -226,10 +226,10 @@
         "isaac-sim-extension-dev",
         "nvidia-suite-docs"
       ],
-      "description": "Pose-cmd round-trip is 100% broken pre-fix; fix 922a7d5 added joint_indices on 5th call site (Lula IK write) but TF tree desynced after hot-reload prevented mid-session re-test. Validate it now. Procedure: clean-restart Isaac Sim with venv activate + ROS_DOMAIN_ID=7; quick_start; subscribe TF base_link→tool0 to capture x0/y0/z0/q0; publish MotionUpdate with pose.position.z = z0 - 0.05, header.frame_id=base_link, mode=POSITION, stiffness=200, damping=20; hold publish at 30Hz for 3s; re-read TF; compute Δ. Informal hint: if motion-deficit-hunt's fix isn't in place, this task may close simultaneously with it — same surface (controller_loop.py).",
+      "description": "Pose-cmd round-trip is 100% broken pre-fix; fix 922a7d5 added joint_indices on 5th call site (Lula IK write) but TF tree desynced after hot-reload prevented mid-session re-test. Validate it now. Procedure: clean-restart Isaac Sim with venv activate + ROS_DOMAIN_ID=7; quick_start; subscribe TF base_link\u2192tool0 to capture x0/y0/z0/q0; publish MotionUpdate with pose.position.z = z0 - 0.05, header.frame_id=base_link, mode=POSITION, stiffness=200, damping=20; hold publish at 30Hz for 3s; re-read TF; compute \u0394. Informal hint: if motion-deficit-hunt's fix isn't in place, this task may close simultaneously with it \u2014 same surface (controller_loop.py).",
       "acceptance": [
-        "|Δz + 0.05| ≤ 0.005m (≥90% commanded amplitude — Cartesian uses Lula IK, looser tolerance than joint cmd)",
-        "Round-trip captured deterministically by probe_pose_roundtrip.py — must be re-runnable without manual steps"
+        "|\u0394z + 0.05| \u2264 0.005m (\u226590% commanded amplitude \u2014 Cartesian uses Lula IK, looser tolerance than joint cmd)",
+        "Round-trip captured deterministically by probe_pose_roundtrip.py \u2014 must be re-runnable without manual steps"
       ],
       "verify_command": "python3 exts/aic-dt/scripts/probe_pose_roundtrip.py --axis z --delta -0.05 --tolerance 0.005",
       "notes": "If motion-deficit-hunt closes the OGN articulation_controller fight, this task likely closes simultaneously.",
@@ -278,7 +278,7 @@
         "isaac-sim-extension-dev",
         "nvidia-suite-docs"
       ],
-      "description": "4 task-board prims (/World/TaskBoard/base_visual, /World/TaskBoard/SCPort_0/sc_port_visual, /World/TaskBoard/SCPort_1/sc_port_visual, /World/TaskBoard/NICCard/nic_card_visual) have RigidBodyAPI applied AND mass=0 AND density=0. PhysX silently treats them as kinematic. Functional outcome matches Gazebo's bolted-board state, BUT the contact pipeline depends on these being correctly authored as rigid bodies for PhysxContactReportAPI to fire /scoring/insertion_event. Plan 04-03's recursive contact-tag walk fix specifically had to descend into SCPort_0/sc_port_visual because root-only tagging missed rigid-body descendants — so the authoring matters for scoring correctness. Three options: (a) remove RigidBodyAPI entirely (truly static) — simplest, but PhysX may then skip these from contact reports altogether; (b) set kinematicEnabled=true on RigidBodyAPI explicitly — preserves contact reporting, makes intent explicit; (c) give them real mass + density — risks unintended dynamics if anchoring isn't already in place. Use isaac-sim-extension-dev + nvidia-suite-docs skills to check live PhysX 5.0 behavior for kinematic+RigidBodyAPI vs static-no-API contact-report semantics; pick the option that preserves contact firing reliably.",
+      "description": "4 task-board prims (/World/TaskBoard/base_visual, /World/TaskBoard/SCPort_0/sc_port_visual, /World/TaskBoard/SCPort_1/sc_port_visual, /World/TaskBoard/NICCard/nic_card_visual) have RigidBodyAPI applied AND mass=0 AND density=0. PhysX silently treats them as kinematic. Functional outcome matches Gazebo's bolted-board state, BUT the contact pipeline depends on these being correctly authored as rigid bodies for PhysxContactReportAPI to fire /scoring/insertion_event. Plan 04-03's recursive contact-tag walk fix specifically had to descend into SCPort_0/sc_port_visual because root-only tagging missed rigid-body descendants \u2014 so the authoring matters for scoring correctness. Three options: (a) remove RigidBodyAPI entirely (truly static) \u2014 simplest, but PhysX may then skip these from contact reports altogether; (b) set kinematicEnabled=true on RigidBodyAPI explicitly \u2014 preserves contact reporting, makes intent explicit; (c) give them real mass + density \u2014 risks unintended dynamics if anchoring isn't already in place. Use isaac-sim-extension-dev + nvidia-suite-docs skills to check live PhysX 5.0 behavior for kinematic+RigidBodyAPI vs static-no-API contact-report semantics; pick the option that preserves contact firing reliably.",
       "acceptance": [
         "All 4 prims authored consistently (one of the 3 options above), with rationale in commit message citing live PhysX 5.0 contact-report behavior from nvidia-suite-docs",
         "After quick_start, /scoring/insertion_event fires when a plug contacts its target port (verified by ros2 topic echo /scoring/insertion_event during a manual plug-port collision via MCP)",
@@ -304,8 +304,8 @@
       "description": "Run unmodified aic_engine + CheatCode policy against Isaac Sim for trial_1 of sample_config.yaml with quick_start(enable_cameras=False). Use the wrapper extended in wrapper-json-emit to capture per-trial outcome JSON. Gazebo baseline is captured separately by gazebo-baselines-capture. Informal prerequisites: motion-deficit-hunt + pose-roundtrip-verify + wrench-rootcause + gripper-tcp-ingress + joint-drives-urdf-reconcile + taskboard-prim-authoring + zenoh-path-implementation + wrapper-json-emit. If those aren't in place, this task's verify will fail; pick a different task instead.",
       "acceptance": [
         "exts/aic-dt/docs/trial_outcomes/trial_1__isaacsim.json exists with shape {trial_id, sim:'isaacsim', insertion_event_fired, offlimit_contact_count, completed_steps, ts}",
-        "JSON produced by run_aic_engine_against_isaac_sim.sh --output-json (the wrapper-extension from wrapper-json-emit) — not hand-authored",
-        "Outcome match vs Gazebo verified separately in parity-report-run — this task only captures the Isaac Sim side"
+        "JSON produced by run_aic_engine_against_isaac_sim.sh --output-json (the wrapper-extension from wrapper-json-emit) \u2014 not hand-authored",
+        "Outcome match vs Gazebo verified separately in parity-report-run \u2014 this task only captures the Isaac Sim side"
       ],
       "verify_command": "test -f exts/aic-dt/docs/trial_outcomes/trial_1__isaacsim.json && python3 -c \"import json; j=json.load(open('exts/aic-dt/docs/trial_outcomes/trial_1__isaacsim.json')); assert j['sim'] == 'isaacsim' and 'insertion_event_fired' in j and 'offlimit_contact_count' in j\"",
       "notes": "Capture is the unit; parity assertion is parity-report-run's job.",
@@ -344,7 +344,7 @@
       "skills_required": [
         "isaac-sim-extension-dev"
       ],
-      "description": "Same as trial-1-fire / trial-2-fire but for trial_3 — uses sfp_sc_cable_reversed cable type. Tests the cable-rotation edge case. Informal prerequisite: trial-2-fire (sequencing reuses sim + container state).",
+      "description": "Same as trial-1-fire / trial-2-fire but for trial_3 \u2014 uses sfp_sc_cable_reversed cable type. Tests the cable-rotation edge case. Informal prerequisite: trial-2-fire (sequencing reuses sim + container state).",
       "acceptance": [
         "exts/aic-dt/docs/trial_outcomes/trial_3__isaacsim.json exists with the standard shape, produced by the wrapper extension from wrapper-json-emit"
       ],
@@ -362,16 +362,16 @@
         "exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh (extend)"
       ],
       "skills_required": [],
-      "description": "Current wrapper exists from Plan 04-03 but doesn't emit a structured per-trial outcome JSON. Extend it to: (1) accept a --output-json <path> flag; (2) during the engine run, subscribe to /scoring/insertion_event AND /aic/gazebo/contacts/off_limit AND track engine-reported step count; (3) at engine container exit, emit a JSON file matching the parity-report-tool input shape: {trial_id, sim:'isaacsim', insertion_event_fired (bool — true if /scoring/insertion_event ever received during the run), offlimit_contact_count (int — total non-empty Contacts messages on /aic/gazebo/contacts/off_limit), completed_steps (int — final step count from engine stdout or a default sentinel like -1 if not parseable), ts (ISO 8601 of run start)}. Without this, trial-N-fire tasks each have to invent capture logic — bad DRY. Informal prerequisite: zenoh-path-implementation should be done first so the wrapper is exercising a real engine path; otherwise verify will fail because engine can't talk to model.",
+      "description": "Current wrapper exists from Plan 04-03 but doesn't emit a structured per-trial outcome JSON. Extend it to: (1) accept a --output-json <path> flag; (2) during the engine run, subscribe to /scoring/insertion_event AND /aic/gazebo/contacts/off_limit AND track engine-reported step count; (3) at engine container exit, emit a JSON file matching the parity-report-tool input shape: {trial_id, sim:'isaacsim', insertion_event_fired (bool \u2014 true if /scoring/insertion_event ever received during the run), offlimit_contact_count (int \u2014 total non-empty Contacts messages on /aic/gazebo/contacts/off_limit), completed_steps (int \u2014 final step count from engine stdout or a default sentinel like -1 if not parseable), ts (ISO 8601 of run start)}. Without this, trial-N-fire tasks each have to invent capture logic \u2014 bad DRY. Informal prerequisite: zenoh-path-implementation should be done first so the wrapper is exercising a real engine path; otherwise verify will fail because engine can't talk to model.",
       "acceptance": [
         "Running `bash exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh trial_1 --output-json /tmp/test.json` produces /tmp/test.json with all 5 keys present",
         "JSON shape matches parity-report-tool's expected input exactly",
-        "Exit code 0 if engine ran successfully; nonzero if engine container errored (capture stays valid even on engine failure — write JSON with whatever was observed before failure)",
+        "Exit code 0 if engine ran successfully; nonzero if engine container errored (capture stays valid even on engine failure \u2014 write JSON with whatever was observed before failure)",
         "Backwards-compatible: invoking the wrapper without --output-json behaves exactly as before (emits no JSON, otherwise unchanged)"
       ],
       "verify_command": "bash exts/aic-dt/scripts/test_wrapper_json_emit.sh",
       "verify_recipe": "Agent writes test_wrapper_json_emit.sh: invokes wrapper with --output-json on trial_1 (or a stub trial), asserts JSON file exists with required keys, asserts JSON is parseable, asserts the run without --output-json doesn't write the JSON. Cleans up test artifacts.",
-      "notes": "Sister script for Gazebo path may be needed in gazebo-baselines-capture — let that task decide whether to extend the same wrapper for --gazebo mode or create a sibling wrapper based on how AIC's pipeline already runs Gazebo trials.",
+      "notes": "Sister script for Gazebo path may be needed in gazebo-baselines-capture \u2014 let that task decide whether to extend the same wrapper for --gazebo mode or create a sibling wrapper based on how AIC's pipeline already runs Gazebo trials.",
       "verification_mode": "docker"
     },
     {
@@ -389,7 +389,7 @@
         "isaac-sim-extension-dev",
         "nvidia-suite-docs"
       ],
-      "description": "/fts_broadcaster/wrench publishes 13.6Hz with all-zero payload. '[Force callback] Articulation object has no attribute _physics_view' fires every tick despite path-correction commit 6fc6d26 + hasattr guard. Investigation: (1) use nvidia-suite-docs skill to fetch Isaac Sim 5.0 Articulation lifecycle — when does _physics_view populate post-initialize()? Does Articulation (multi-prim) differ from SingleArticulation for prim_paths_expr=root_joint? (2) Compare _lazy_init_articulation in extension.py vs parity_publishers.py:_on_physics_step lazy init — parity_publishers WORKS for /joint_states (positions read fine), find the divergence in init order or method-access pattern. (3) If a fundamental gap exists requiring a workaround pattern (manual physics-view reconstruction, alternate Articulation subclass), document the workaround clearly — don't claim full closure if fragile.",
+      "description": "/fts_broadcaster/wrench publishes 13.6Hz with all-zero payload. '[Force callback] Articulation object has no attribute _physics_view' fires every tick despite path-correction commit 6fc6d26 + hasattr guard. Investigation: (1) use nvidia-suite-docs skill to fetch Isaac Sim 5.0 Articulation lifecycle \u2014 when does _physics_view populate post-initialize()? Does Articulation (multi-prim) differ from SingleArticulation for prim_paths_expr=root_joint? (2) Compare _lazy_init_articulation in extension.py vs parity_publishers.py:_on_physics_step lazy init \u2014 parity_publishers WORKS for /joint_states (positions read fine), find the divergence in init order or method-access pattern. (3) If a fundamental gap exists requiring a workaround pattern (manual physics-view reconstruction, alternate Articulation subclass), document the workaround clearly \u2014 don't claim full closure if fragile.",
       "acceptance": [
         "/fts_broadcaster/wrench publishes nonzero force/torque on idle gravity-loaded robot (idle weight should produce nonzero z-axis)",
         "Zero `[Force callback] AttributeError` lines in ~/.nvidia-omniverse/logs/Kit/'Isaac-Sim Full'/5.0/kit_*.log over a 30-second window after quick_start",
@@ -397,7 +397,7 @@
         "If solution is a workaround (not root-cause fix), label it as such honestly; verdict tier = root-caused / workaround / diagnosed-but-unsolvable"
       ],
       "verify_command": "python3 exts/aic-dt/scripts/probe_wrench_nonzero.py --window-seconds 5 --min-z-magnitude 0.5",
-      "notes": "aic_adapter consumes via Observation.wrist_wrench → reaches model. Without this, every CheatCode trial gets garbage wrench and may behave unpredictably. Parity_publishers gives a known-good lazy-init reference.",
+      "notes": "aic_adapter consumes via Observation.wrist_wrench \u2192 reaches model. Without this, every CheatCode trial gets garbage wrench and may behave unpredictably. Parity_publishers gives a known-good lazy-init reference.",
       "verification_mode": "sim"
     },
     {
@@ -417,11 +417,11 @@
         "isaac-sim-extension-dev",
         "nvidia-suite-docs"
       ],
-      "description": "Currently zero camera topics publish. setup_wrist_cameras logs 'Setup 0/3' every quick_start because the WRIST_CAMERAS prim_suffix expects center_camera_optical/center_camera (Camera child of Xform) but the live unified-robot USD has center_camera_optical as Xform with only visuals/collisions children — NO Camera prims authored anywhere. Three steps: (1) author 3 Camera prims under existing wrist Xform parents (left_camera_optical/left_camera, center_camera_optical/center_camera, right_camera_optical/right_camera) with ROS-frame -Z-forward → +X-forward orientation correction (per nvidia-suite-docs Isaac Sim 5.0 Camera prim authoring + isaac-sim-extension-dev wrist-camera attachment pattern); (2) verify setup_wrist_cameras now logs 'Setup 3/3' and publishes /wrist_camera_left/image_raw, /wrist_camera_center/image_raw, /wrist_camera_right/image_raw (or whatever the Gazebo-faithful topic names are — capture from aic_eval Docker before authoring); (3) add enable_cameras: bool=False kwarg on quick_start, gate setup_wrist_cameras call on it, default False so parity-report-run ship-gate runs without camera bandwidth (Docker engine consumes ground_truth, not vision). Operator can flip to True for vision testing.",
+      "description": "Currently zero camera topics publish. setup_wrist_cameras logs 'Setup 0/3' every quick_start because the WRIST_CAMERAS prim_suffix expects center_camera_optical/center_camera (Camera child of Xform) but the live unified-robot USD has center_camera_optical as Xform with only visuals/collisions children \u2014 NO Camera prims authored anywhere. Three steps: (1) author 3 Camera prims under existing wrist Xform parents (left_camera_optical/left_camera, center_camera_optical/center_camera, right_camera_optical/right_camera) with ROS-frame -Z-forward \u2192 +X-forward orientation correction (per nvidia-suite-docs Isaac Sim 5.0 Camera prim authoring + isaac-sim-extension-dev wrist-camera attachment pattern); (2) verify setup_wrist_cameras now logs 'Setup 3/3' and publishes /wrist_camera_left/image_raw, /wrist_camera_center/image_raw, /wrist_camera_right/image_raw (or whatever the Gazebo-faithful topic names are \u2014 capture from aic_eval Docker before authoring); (3) add enable_cameras: bool=False kwarg on quick_start, gate setup_wrist_cameras call on it, default False so parity-report-run ship-gate runs without camera bandwidth (Docker engine consumes ground_truth, not vision). Operator can flip to True for vision testing.",
       "acceptance": [
         "Calling quick_start(enable_cameras=True) results in 3 camera topics publishing (verified by ros2 topic list | grep -c camera = 3)",
         "All 3 cameras stream at >5Hz with valid sensor_msgs/Image payloads (non-empty data field; width/height nonzero)",
-        "Calling quick_start(enable_cameras=False) — the default — results in zero camera topics publishing (verified by ros2 topic list | grep camera = empty)",
+        "Calling quick_start(enable_cameras=False) \u2014 the default \u2014 results in zero camera topics publishing (verified by ros2 topic list | grep camera = empty)",
         "setup_wrist_cameras atom 4-surface contract preserved (registry + handler + _cmd + UI button); audit_dx02.py exits 0",
         "exts/aic-dt/docs/wrist-cameras.md documents the 3 frame_ids, topic names, ROS-frame quaternion convention, and the rationale for default-off",
         "Topic names match Gazebo's wrist-camera topic surface (capture from aic_eval container before authoring; document in wrist-cameras.md as Gazebo-faithful evidence)"
@@ -439,10 +439,10 @@
       "passes": true,
       "requires_sim": false,
       "files_likely": [
-        "depends on path chosen — see exts/aic-dt/docs/zenoh-decision.md after zenoh-path-research"
+        "depends on path chosen \u2014 see exts/aic-dt/docs/zenoh-decision.md after zenoh-path-research"
       ],
       "skills_required": [],
-      "description": "Execute the implementation plan from zenoh-path-research's zenoh-decision.md. Whichever path was chosen — bridge / humble-rebuild / stub — implement it now. Cross-repo touches are permitted per the cross_repo_policy section above (track them in plans/cross_repo_changes.json). Informal prerequisite: zenoh-path-research must produce zenoh-decision.md first.",
+      "description": "Execute the implementation plan from zenoh-path-research's zenoh-decision.md. Whichever path was chosen \u2014 bridge / humble-rebuild / stub \u2014 implement it now. Cross-repo touches are permitted per the cross_repo_policy section above (track them in plans/cross_repo_changes.json). Informal prerequisite: zenoh-path-research must produce zenoh-decision.md first.",
       "acceptance": [
         "aic_engine container can subscribe to /clock + /joint_states + /tf published from Isaac Sim host (verified by ros2 topic echo --once from inside the container)",
         "my-solution:v1 model finds /aic_model/get_state lifecycle service (verified by ros2 service list from inside container)",
@@ -452,7 +452,7 @@
         "Any cross-repo edits logged in plans/cross_repo_changes.json"
       ],
       "verify_command": "bash exts/aic-dt/scripts/verify_zenoh_path.sh",
-      "verify_recipe": "If verify_zenoh_path.sh doesn't exist, the agent creates it as part of this task — script must validate the path-specific acceptance items above and exit 0 only if all pass.",
+      "verify_recipe": "If verify_zenoh_path.sh doesn't exist, the agent creates it as part of this task \u2014 script must validate the path-specific acceptance items above and exit 0 only if all pass.",
       "notes": "This is the gate that opens up wrapper-json-emit + trial-N-fire.",
       "verification_mode": "docker"
     },
@@ -467,10 +467,10 @@
         "exts/aic-dt/docs/zenoh-decision.md (NEW)"
       ],
       "skills_required": [],
-      "description": "my-solution:v1 (CheatCode policy container) requires zenoh transport (AIC_ROUTER_ADDR=localhost:7447 + RMW_IMPLEMENTATION=rmw_zenoh_cpp hard-required). Host humble fastrtps engine cannot discover /aic_model/get_state across this transport boundary. Three paths exist (a/b/c). BEFORE picking, INVESTIGATE WHY AIC's pixi setup chose zenoh in the first place: read ~/Documents/aic/aic_eval Dockerfile + entrypoint, ~/Documents/aic README/docs, any DDS/zenoh comments in pyproject.toml or pixi.toml. The team had a reason — probably (1) discovery scaling (DDS multicast doesn't play in cloud/k8s), (2) named-resource service matching, or (3) interop with kilted-only packages. Whichever it is matters for path-correctness: if zenoh was chosen for X reason, a fastdds bridge that handles X loses architectural fidelity. Output a markdown verdict with: (1) WHY zenoh was chosen (citations), (2) which of the 3 paths preserves that reason, (3) impl steps for the chosen path. Path candidates: (a) host zenohd + fastdds↔zenoh bridge ~30min; (b) host-build aic_model humble-native ~60-90min; (c) stub /aic_model/get_state lifecycle node ~20min — discriminator only.",
+      "description": "my-solution:v1 (CheatCode policy container) requires zenoh transport (AIC_ROUTER_ADDR=localhost:7447 + RMW_IMPLEMENTATION=rmw_zenoh_cpp hard-required). Host humble fastrtps engine cannot discover /aic_model/get_state across this transport boundary. Three paths exist (a/b/c). BEFORE picking, INVESTIGATE WHY AIC's pixi setup chose zenoh in the first place: read ~/Documents/aic/aic_eval Dockerfile + entrypoint, ~/Documents/aic README/docs, any DDS/zenoh comments in pyproject.toml or pixi.toml. The team had a reason \u2014 probably (1) discovery scaling (DDS multicast doesn't play in cloud/k8s), (2) named-resource service matching, or (3) interop with kilted-only packages. Whichever it is matters for path-correctness: if zenoh was chosen for X reason, a fastdds bridge that handles X loses architectural fidelity. Output a markdown verdict with: (1) WHY zenoh was chosen (citations), (2) which of the 3 paths preserves that reason, (3) impl steps for the chosen path. Path candidates: (a) host zenohd + fastdds\u2194zenoh bridge ~30min; (b) host-build aic_model humble-native ~60-90min; (c) stub /aic_model/get_state lifecycle node ~20min \u2014 discriminator only.",
       "acceptance": [
         "exts/aic-dt/docs/zenoh-decision.md committed with the 3 sections: 'Why zenoh' (with citations to AIC source/docs), 'Path verdict' (a/b/c with rationale), 'Implementation plan' (concrete steps for the next task zenoh-path-implementation)",
-        "Verdict is operator-reviewable — at least one paragraph of architectural reasoning, not just a one-line answer",
+        "Verdict is operator-reviewable \u2014 at least one paragraph of architectural reasoning, not just a one-line answer",
         "If neither (a) nor (b) is clearly cheaper, the doc says so and recommends (c) as a discriminator-only smoke test before committing to (b)"
       ],
       "verify_command": "test -f exts/aic-dt/docs/zenoh-decision.md && grep -q 'Why zenoh' exts/aic-dt/docs/zenoh-decision.md && grep -q 'Path verdict' exts/aic-dt/docs/zenoh-decision.md && grep -q 'Implementation plan' exts/aic-dt/docs/zenoh-decision.md",
@@ -479,7 +479,7 @@
     },
     {
       "id": "zenoh-rpc-stall-fix",
-      "title": "Resolve service-RPC stall through zenoh router (humble engine ↔ kilted model)",
+      "title": "Resolve service-RPC stall through zenoh router (humble engine \u2194 kilted model)",
       "category": "integration",
       "priority": "critical",
       "passes": true,
@@ -489,22 +489,22 @@
         "exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh (possibly extend env/config)",
         "exts/aic-dt/docs/zenoh-rpc-stall-fix.md (NEW)",
         "exts/aic-dt/scripts/test_zenoh_rpc_stall_fix.sh (NEW)",
-        "~/.zenoh/config.json5 OR /etc/zenoh/* (system config — log to plans/cross_repo_changes.json)",
+        "~/.zenoh/config.json5 OR /etc/zenoh/* (system config \u2014 log to plans/cross_repo_changes.json)",
         "Possibly aic_eval Docker image env (AIC_ROUTER_ADDR, ROS_DOMAIN_ID, RMW config)"
       ],
       "skills_required": [
         "nvidia-suite-docs"
       ],
-      "description": "zenoh-path-implementation closed on transport (router lifecycle + topic discovery + service-name discovery all green) but service-RPC PAYLOADS stall through zenoh between humble engine and kilted model. Symptom (3 trial-fire progress.txt entries confirm identical signature): engine logs `Service '/aic_model/get_state' is available. Participant model discovered.` then GetState→ChangeState→SwitchController RPC timeouts → trial never executed → insertion_event_fired stays false. THIS IS THE M1 SHIP BLOCKER — parity-report-run fails by design until this resolves. Hypothesis ladder (investigate via nvidia-suite-docs Isaac ROS sub-skill + ROS Discourse + zenoh community for kilted RMW quirks): (1) DDS↔zenoh service-payload bridge gap — zenoh router may not relay service req/resp on default config; check zenoh service-discovery flags + REST hooks. (2) kilted-rmw-zenoh ↔ humble-rmw-zenoh ABI mismatch on rcl_action / rcl_lifecycle service descriptors — check humble_ws install for msg version drift. (3) ROS_DOMAIN_ID gating within zenoh networks (zenoh shouldn't care but kilted's rmw_zenoh impl might still gate). (4) AIC_ROUTER_ADDR pointing wrong — engine container connects to host:7447 but model container expects internal:7447. Investigation is iterative — document findings as they emerge in zenoh-rpc-stall-fix.md, apply the fix once root-caused. If root cause is config-only, fix lives in run_aic_engine_against_isaac_sim.sh / sim launcher. If it requires aic_model rebuild or aic source patching, log to plans/cross_repo_changes.json per cross-repo policy. After this lands: trial-1/2/3-fire need to be re-fired to capture corrected outcomes; parity-report-run flips green.",
+      "description": "zenoh-path-implementation closed on transport (router lifecycle + topic discovery + service-name discovery all green) but service-RPC PAYLOADS stall through zenoh between humble engine and kilted model. Symptom (3 trial-fire progress.txt entries confirm identical signature): engine logs `Service '/aic_model/get_state' is available. Participant model discovered.` then GetState\u2192ChangeState\u2192SwitchController RPC timeouts \u2192 trial never executed \u2192 insertion_event_fired stays false. THIS IS THE M1 SHIP BLOCKER \u2014 parity-report-run fails by design until this resolves. Hypothesis ladder (investigate via nvidia-suite-docs Isaac ROS sub-skill + ROS Discourse + zenoh community for kilted RMW quirks): (1) DDS\u2194zenoh service-payload bridge gap \u2014 zenoh router may not relay service req/resp on default config; check zenoh service-discovery flags + REST hooks. (2) kilted-rmw-zenoh \u2194 humble-rmw-zenoh ABI mismatch on rcl_action / rcl_lifecycle service descriptors \u2014 check humble_ws install for msg version drift. (3) ROS_DOMAIN_ID gating within zenoh networks (zenoh shouldn't care but kilted's rmw_zenoh impl might still gate). (4) AIC_ROUTER_ADDR pointing wrong \u2014 engine container connects to host:7447 but model container expects internal:7447. Investigation is iterative \u2014 document findings as they emerge in zenoh-rpc-stall-fix.md, apply the fix once root-caused. If root cause is config-only, fix lives in run_aic_engine_against_isaac_sim.sh / sim launcher. If it requires aic_model rebuild or aic source patching, log to plans/cross_repo_changes.json per cross-repo policy. After this lands: trial-1/2/3-fire need to be re-fired to capture corrected outcomes; parity-report-run flips green.",
       "acceptance": [
         "Running run_aic_engine_against_isaac_sim.sh trial_1 --output-json /tmp/test.json results in trial_1.json with insertion_event_fired=true OR clean engine-side completion (no GetState/ChangeState RPC timeouts in engine stdout)",
         "exts/aic-dt/docs/zenoh-rpc-stall-fix.md committed with sections: 'Symptom' (verbatim engine log excerpt), 'Root cause' (citation to nvidia-suite-docs / Isaac ROS / zenoh source), 'Fix applied' (specific config/code change), 'Verification' (reproducible command)",
         "Any system config / cross-repo edits logged in plans/cross_repo_changes.json with reversibility flag",
-        "test_zenoh_rpc_stall_fix.sh exists and exits 0 — re-runs trial_1 fire end-to-end, asserts no RPC timeout"
+        "test_zenoh_rpc_stall_fix.sh exists and exits 0 \u2014 re-runs trial_1 fire end-to-end, asserts no RPC timeout"
       ],
       "verify_command": "bash exts/aic-dt/scripts/test_zenoh_rpc_stall_fix.sh",
       "verify_recipe": "Agent writes test_zenoh_rpc_stall_fix.sh: re-runs trial_1 fire end-to-end via wrapper, asserts engine completed without RPC timeout (grep engine stdout for 'GetState timeout' / 'ChangeState timeout'), asserts insertion_event_fired captured real outcome (not stall artifact). Cleans up test JSON.",
-      "notes": "M1 ship critical path. Once this passes: agent flips trial-1/2/3-fire back to passes:false on next iter (or operator does manually) → trials re-fire with working transport → parity-report-run closes → ship-paperwork."
+      "notes": "M1 ship critical path. Once this passes: agent flips trial-1/2/3-fire back to passes:false on next iter (or operator does manually) \u2192 trials re-fire with working transport \u2192 parity-report-run closes \u2192 ship-paperwork."
     },
     {
       "id": "scoring-stoprecording-tf-fix",
@@ -523,9 +523,9 @@
       "skills_required": [
         "isaac-sim-extension-dev"
       ],
-      "description": "Promoted from progress.txt DEFERRED-5 (surfaced post-DEFERRED-4). After CheatCode runs the trial for its full 180s task time_limit, the engine calls scoring_tier2_->StopRecording() which itself calls WaitForTfs() (aic_scoring/src/ScoringTier2.cc ~line 153). This second WaitForTfs times out, producing:\n  [ERROR] Timeout while waiting for transforms for scoring.\n  [ERROR] Failed to stop recording.\nWhich blocks tier_2/tier_3 scoring from finalizing (the bag isn't cleanly closed → scoring playback gets incomplete data → trial marked 'failed or was not completed' even when CheatCode ran for the full time_limit).\n\nHypothesis ladder:\n  H1) Clock-source mismatch — engine runs with use_sim_time=true; Isaac Sim's rclpy publishers (parity_publishers, scoring_publishers, controller_loop) use default ROS_TIME. WaitForTfs's spinlock uses node->get_clock()->now() which respects use_sim_time. If sim time pauses (e.g. trial-end timeline state), engine clock stalls indefinitely while rclpy publishers keep emitting messages — but the engine subscriber might be doing message-timestamp filtering that drops them. Fix: set use_sim_time=true on the Isaac Sim rclpy nodes so they publish with sim-clock timestamps matching engine expectation.\n  H2) /scoring/tf went silent during the trial (transient zenoh queryable drop or scoring publisher node death). Probe post-trial showed it publishing at 79Hz, but it could have stalled mid-trial. Fix: add a watchdog log line in _publish_scoring_tf to surface any tick-skip.\n  H3) Engine's WaitForTfs subscribes to /tf + /scoring/tf at StartRecording-time then resets flags and waits at StopRecording-time — but the subscriber QoS or RMW state may have decayed across the trial duration. Fix: investigate engine subscriber lifecycle.\n\nFix-applied verification (acceptance bullets below) is the gate: trial_1 must complete with engine logging 'Engine Stopped' without 'Timeout while waiting for transforms for scoring'. tier_2/tier_3 SCORE values may still be 0 (DEFERRED-6 physics) but the failure mode must move from 'infrastructure' to 'task execution failed' (legitimate scoring assessment of the policy's motion).",
+      "description": "Promoted from progress.txt DEFERRED-5 (surfaced post-DEFERRED-4). After CheatCode runs the trial for its full 180s task time_limit, the engine calls scoring_tier2_->StopRecording() which itself calls WaitForTfs() (aic_scoring/src/ScoringTier2.cc ~line 153). This second WaitForTfs times out, producing:\n  [ERROR] Timeout while waiting for transforms for scoring.\n  [ERROR] Failed to stop recording.\nWhich blocks tier_2/tier_3 scoring from finalizing (the bag isn't cleanly closed \u2192 scoring playback gets incomplete data \u2192 trial marked 'failed or was not completed' even when CheatCode ran for the full time_limit).\n\nHypothesis ladder:\n  H1) Clock-source mismatch \u2014 engine runs with use_sim_time=true; Isaac Sim's rclpy publishers (parity_publishers, scoring_publishers, controller_loop) use default ROS_TIME. WaitForTfs's spinlock uses node->get_clock()->now() which respects use_sim_time. If sim time pauses (e.g. trial-end timeline state), engine clock stalls indefinitely while rclpy publishers keep emitting messages \u2014 but the engine subscriber might be doing message-timestamp filtering that drops them. Fix: set use_sim_time=true on the Isaac Sim rclpy nodes so they publish with sim-clock timestamps matching engine expectation.\n  H2) /scoring/tf went silent during the trial (transient zenoh queryable drop or scoring publisher node death). Probe post-trial showed it publishing at 79Hz, but it could have stalled mid-trial. Fix: add a watchdog log line in _publish_scoring_tf to surface any tick-skip.\n  H3) Engine's WaitForTfs subscribes to /tf + /scoring/tf at StartRecording-time then resets flags and waits at StopRecording-time \u2014 but the subscriber QoS or RMW state may have decayed across the trial duration. Fix: investigate engine subscriber lifecycle.\n\nFix-applied verification (acceptance bullets below) is the gate: trial_1 must complete with engine logging 'Engine Stopped' without 'Timeout while waiting for transforms for scoring'. tier_2/tier_3 SCORE values may still be 0 (DEFERRED-6 physics) but the failure mode must move from 'infrastructure' to 'task execution failed' (legitimate scoring assessment of the policy's motion).",
       "acceptance": [
-        "Engine log shows 'Successfully stopped recording' OR equivalent — no 'Failed to stop recording.' line at trial_1 end",
+        "Engine log shows 'Successfully stopped recording' OR equivalent \u2014 no 'Failed to stop recording.' line at trial_1 end",
         "Zero 'Timeout while waiting for transforms for scoring' lines in engine stdout",
         "Trial outcome JSON captured by wrapper reflects actual task execution (insertion_event_fired may still be false due to DEFERRED-6, but completed_steps reflects real motion ticks)",
         "Test script test_scoring_stoprecording_fix.sh exists and exits 0"
@@ -574,16 +574,16 @@
       "skills_required": [
         "isaac-sim-extension-dev"
       ],
-      "description": "Surfaced post-trial-cycle-frames-loading: CheatCode model logs `xy_error: -0.663 -0.606` at trial_1 start — the gripper starts ~600mm from the port because the engine never homes the robot. aic_engine.cpp::home_robot is called only inside reset_simulator(), which is itself gated on skip_ready_simulator=false (our case is true since aic-dt owns scene authoring). So the robot stays at whatever load_robot left it at (zero/default joint poses).\n\nFix: load_trial reads `robot.home_joint_positions` from the trial config (top-level, same for all trials) and applies them to the articulation before scoring starts. Uses the same articulation handle + Isaac Sim 5.0 set_joint_positions + apply_action pattern that controller_loop._apply_joint_cmd uses (joint_indices=[[0..5]] to scope on the 6 arm joints after Phase-3 cable expanded articulation to 46 DOFs).\n\nAfter this lands: CheatCode starts with the gripper above the task board (per home pose). xy_error reduces to ~10-50mm. Combined with eventual cable physics fix (DEFERRED-6) trials can actually pass tier_3.",
+      "description": "Surfaced post-trial-cycle-frames-loading: CheatCode model logs `xy_error: -0.663 -0.606` at trial_1 start \u2014 the gripper starts ~600mm from the port because the engine never homes the robot. aic_engine.cpp::home_robot is called only inside reset_simulator(), which is itself gated on skip_ready_simulator=false (our case is true since aic-dt owns scene authoring). So the robot stays at whatever load_robot left it at (zero/default joint poses).\n\nFix: load_trial reads `robot.home_joint_positions` from the trial config (top-level, same for all trials) and applies them to the articulation before scoring starts. Uses the same articulation handle + Isaac Sim 5.0 set_joint_positions + apply_action pattern that controller_loop._apply_joint_cmd uses (joint_indices=[[0..5]] to scope on the 6 arm joints after Phase-3 cable expanded articulation to 46 DOFs).\n\nAfter this lands: CheatCode starts with the gripper above the task board (per home pose). xy_error reduces to ~10-50mm. Combined with eventual cable physics fix (DEFERRED-6) trials can actually pass tier_3.",
       "acceptance": [
-        "load_trial successfully applies home_joint_positions on a trial fire — joint values reach the articulation within 5s",
-        "Live probe of /joint_states after load_trial shows shoulder_pan_joint ≈ -0.1597 ± 0.05 rad (URDF spec home pose)",
-        "CheatCode model log shows xy_dist <= 0.3 m at insert_cable execute_loop start (was 0.898m before fix — sqrt(0.66^2+0.61^2)). 0.3m threshold reflects the AIC home-pose ready-position which intentionally hovers the gripper ABOVE the workspace, not directly over a single port",
+        "load_trial successfully applies home_joint_positions on a trial fire \u2014 joint values reach the articulation within 5s",
+        "Live probe of /joint_states after load_trial shows shoulder_pan_joint \u2248 -0.1597 \u00b1 0.05 rad (URDF spec home pose)",
+        "CheatCode model log shows xy_dist <= 0.3 m at insert_cable execute_loop start (was 0.898m before fix \u2014 sqrt(0.66^2+0.61^2)). 0.3m threshold reflects the AIC home-pose ready-position which intentionally hovers the gripper ABOVE the workspace, not directly over a single port",
         "test_trial_home_robot_pose.sh exists and exits 0"
       ],
       "verify_command": "bash exts/aic-dt/scripts/test_trial_home_robot_pose.sh",
       "verify_recipe": "test_trial_home_robot_pose.sh: fire trial_1 via wrapper; assert /tmp/aic_model_isaac.log contains 'xy_error' line with sqrt(x^2+y^2) <= 0.3 m. Cleans up test JSON.",
-      "notes": "After this + DEFERRED-6 (cable physics): trials can pass tier_3. Unblocks parity-report-run + ship-paperwork. NOT cable physics — this is the kinematics-side gap that pairs with the cable-side gap."
+      "notes": "After this + DEFERRED-6 (cable physics): trials can pass tier_3. Unblocks parity-report-run + ship-paperwork. NOT cable physics \u2014 this is the kinematics-side gap that pairs with the cable-side gap."
     },
     {
       "id": "environment-world-frame-reconcile",
@@ -601,7 +601,7 @@
         "isaac-sim-extension-dev",
         "nvidia-suite-docs"
       ],
-      "description": "When cf27bdd moved the robot from (0,0,0) to Gazebo's canonical (-0.2, 0.2, 1.14, yaw=-pi), it left the rest of the scene in the stale robot-at-origin reference frame: AIC Enclosure at (0,0,-1.15) and ground plane at z=-0.08. Result: robot floats 1.22m above ground; enclosure ceiling intersects robot reach. 98efaed fixed the per-part task_board anchors but NOT the environment constants. This task closes the multi-entity world-frame reconciliation per the rule baked into CLAUDE.md and detailed in .tug/findings/world-frame-reconcile.md.\n\nSurface: extension.py lines ~562 (_enclosure_position), ~565 (_ground_plane_z), ~3815 (_cmd_spawn_task_board_base defaults). Canonical values per ~/Documents/aic/aic_description/world/aic.sdf + aic_bringup/launch/aic_gz_bringup.launch.py:\n  - _enclosure_position: (0, 0, 0)  -- aic.sdf <include> has no <pose>, defaults to world origin\n  - _ground_plane_z: 0.0  -- Floor model at world origin in aic.sdf\n  - _cmd_spawn_task_board_base default: x=0.15, y=-0.2, z=1.14, roll=0, pitch=0, yaw=3.1415 (per aic_gz_bringup.launch.py:609-637). YAML still overrides per-trial at runtime; this just fixes the default-trust path.\n\nCable (DEFERRED-6) excluded — its pose authoring goes with the cable-physics-fidelity batch.",
+      "description": "When cf27bdd moved the robot from (0,0,0) to Gazebo's canonical (-0.2, 0.2, 1.14, yaw=-pi), it left the rest of the scene in the stale robot-at-origin reference frame: AIC Enclosure at (0,0,-1.15) and ground plane at z=-0.08. Result: robot floats 1.22m above ground; enclosure ceiling intersects robot reach. 98efaed fixed the per-part task_board anchors but NOT the environment constants. This task closes the multi-entity world-frame reconciliation per the rule baked into CLAUDE.md and detailed in .tug/findings/world-frame-reconcile.md.\n\nSurface: extension.py lines ~562 (_enclosure_position), ~565 (_ground_plane_z), ~3815 (_cmd_spawn_task_board_base defaults). Canonical values per ~/Documents/aic/aic_description/world/aic.sdf + aic_bringup/launch/aic_gz_bringup.launch.py:\n  - _enclosure_position: (0, 0, 0)  -- aic.sdf <include> has no <pose>, defaults to world origin\n  - _ground_plane_z: 0.0  -- Floor model at world origin in aic.sdf\n  - _cmd_spawn_task_board_base default: x=0.15, y=-0.2, z=1.14, roll=0, pitch=0, yaw=3.1415 (per aic_gz_bringup.launch.py:609-637). YAML still overrides per-trial at runtime; this just fixes the default-trust path.\n\nCable (DEFERRED-6) excluded \u2014 its pose authoring goes with the cable-physics-fidelity batch.",
       "acceptance": [
         "extension.py self._enclosure_position == (0.0, 0.0, 0.0)",
         "extension.py self._ground_plane_z == 0.0",
@@ -612,6 +612,36 @@
       "verify_command": "bash exts/aic-dt/scripts/test_env_world_frame.sh",
       "verify_recipe": "test_env_world_frame.sh: (1) grep extension.py for _enclosure_position=(0.0, 0.0, 0.0) and _ground_plane_z=0.0 literal definitions; (2) grep _cmd_spawn_task_board_base signature for canonical defaults; (3) call quick_start over MCP 8768, then probe USD prim translations via execute_python_code; (4) re-run trial-home-robot-pose verify_command for regression.",
       "notes": "Lesson encoded in CLAUDE.md (commit ee70de0): scene-frame parity is multi-entity. See .tug/findings/world-frame-reconcile.md for full divergence table + Phase-B plan."
+    },
+    {
+      "id": "cable-physics-fidelity",
+      "title": "Author non-zero mass/inertia on cable links + activate cable \u2192 insertion_event_fired=true",
+      "category": "scene-authoring",
+      "priority": "critical",
+      "passes": false,
+      "requires_sim": true,
+      "verification_mode": "sim",
+      "files_likely": [
+        "exts/aic-dt/aic_dt/extension.py",
+        "exts/aic-dt/scripts/test_cable_physics_fidelity.sh",
+        "exts/aic-dt/scripts/probe_cable_behavior.py",
+        "exts/aic-dt/scripts/probe_cable_wedge.py"
+      ],
+      "skills_required": [
+        "isaac-sim-extension-dev",
+        "nvidia-suite-docs"
+      ],
+      "description": "DEFERRED-6 \u2014 the real M1 ship gate. Cable subtree at /World/UR5e/cable currently has mass=0/inertia=0 per-link AND is SetActive(False) in load_robot (D-04 workaround for an obsolete wedge problem). Result: cable is decorative; CheatCode runs trials for the full 180s task time_limit but no physical cable exists to insert. insertion_event_fired=false on all 3 trials \u2192 tier_2/tier_3 never compute \u2192 parity-report-run fails ship-gate.\n\nPer CLAUDE.md cable note (2026-05-03 revision): the wedge problem no longer manifests under current launch conditions (warm cache + postload + venv-activate). SCENE-05 reduction is now an in-place USD edit per NVIDIA's RigidBodyRopeDemo.py template: author per-link MassAPI.CreateDensityAttr(~0.00005). Activate cable (remove the SetActive(False) call, or flip it to True). The 21-segment rope chain lives at /World/UR5e/cable/Rope/Rope/link_<N>. Plug end is link_20.\n\nReferences: ~/Documents/aic/aic_description/ for cable URDF/xacro mass values (Gazebo canonical for any default); existing probe_cable_wedge.py + probe_cable_behavior.py for runtime verification (don't reinvent).",
+      "acceptance": [
+        "extension.py load_robot does NOT call cable.SetActive(False), OR sets cable active=True",
+        "Cable rigid body links have non-zero mass authored via MassAPI (probe: at least 15 of the 21 segments have mass>0)",
+        "probe_cable_wedge.py reports NO wedge (play_scene returns within 2s after fresh quick_start with cable active)",
+        "probe_cable_behavior.py shows multi-link motion >= 0.005m over 2s of sim time on at least 3 sampled links (cable bends under gravity)",
+        "Fire trial_1 via wrapper: outcome JSON shows insertion_event_fired=true (or insertion_event topic fires during trial). This is the M1 ship gate. If insertion fails for non-physics reasons (CheatCode motion accuracy, port alignment), surface as a follow-up motion-fidelity task and document in progress.txt \u2014 do NOT relax this gate"
+      ],
+      "verify_command": "bash exts/aic-dt/scripts/test_cable_physics_fidelity.sh",
+      "verify_recipe": "test_cable_physics_fidelity.sh: (1) static grep extension.py for absence of cable.SetActive(False); (2) ~/env_isaaclab/bin/python probe_cable_wedge.py over MCP \u2014 play_scene < 2s; (3) probe_cable_behavior.py \u2014 at least 3 links show motion >= 5mm over 2s; (4) fire trial_1 via wrapper, parse outcome JSON for insertion_event_fired=true. If gate (4) fails after gates (1)-(3) pass, capture diagnostic and exit non-zero \u2014 next iter promotes a motion-fidelity task.",
+      "notes": "M1 SHIP GATE. After this lands, parity-report-run should re-verify automatically (rerun the comparison; 3/3 trials should now show insertion=true matching Gazebo). Then ship-paperwork \u2192 touch .planning/.m1_shipped \u2192 done. Skill citation discipline applies: BOTH isaac-sim-extension-dev (cable USD topology, Articulation lifecycle around cable activation) AND nvidia-suite-docs (Isaac Sim 5.0 MassAPI / RigidBodyAPI / RigidBodyRopeDemo.py reference) MUST be consulted before any code change \u2014 APIs change every release, cached knowledge is routinely stale."
     }
   ]
 }
