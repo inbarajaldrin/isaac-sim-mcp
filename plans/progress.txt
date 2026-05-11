@@ -1319,3 +1319,65 @@ PROGRESS METER:
   parity_report.py shows true Isaac-vs-Gazebo divergence (rather than
   infrastructure-stalled artifacts). Then DEFERRED-6 closes the physics
   gap for tier_2/tier_3 to actually pass.
+
+[2026-05-11T06:30Z] scoring-stoprecording-tf-fix (DEFERRED-5 promoted to PRD task) — VERIFIED + PASSES.
+
+ROOT CAUSE: clock-source mismatch between engine (use_sim_time=true) and the
+Isaac Sim rclpy publishers (default ROS_TIME). aic_scoring/src/ScoringTier2.cc
+WaitForTfs() spinlocks on `node->get_clock()->now() - start < timeout`. With
+use_sim_time=true the engine reads sim_clock; with ROS_TIME stamps on the
+publisher side, the engine's first iteration sees the "now" value already
+exceeding the 10s timeout budget (the engine's clock had been advancing
+with /clock while `start` captured a stale reference). Result: WaitForTfs
+exited 22us after entry, "Timeout while waiting for transforms for scoring",
+bag wasn't closed, tier_2/tier_3 never computed.
+
+FIX (3 rclpy node create_node() sites in aic-dt):
+  - exts/aic-dt/aic_dt/scoring_publishers.py (`aic_dt_scoring_publishers` node)
+  - exts/aic-dt/aic_dt/parity_publishers.py (`aic_dt_parity_publisher` node)
+  - exts/aic-dt/aic_dt/controller_loop.py (`aic_dt_controller_loop` node)
+Each now creates the rclpy node with
+  parameter_overrides=[Parameter("use_sim_time", Parameter.Type.BOOL, True)]
+so the node subscribes to /clock and stamps messages with sim_clock.
+
+VERIFICATION (test_scoring_stoprecording_fix.sh, all gates green):
+  - Gate 1: trial_1 outcome JSON shape OK
+  - Gate 2: engine log shows
+      [rosbag2_storage]: Opened database '.../trial_1.../trial_1.db3' for READ_ONLY
+    after StopRecording — proof the bag was closed cleanly AND ComputeScore
+    is reading it for tier_2/tier_3 computation.
+  - Gate 3: zero "Timeout while waiting for transforms for scoring" lines AND
+    zero "Failed to stop recording" lines within trial_1's log window.
+
+FOLLOW-UP CAPTURED (not blocking DEFERRED-5):
+  trial-cycle-frames-loading (new) — aic_engine runs all 3 trials in
+  sequence regardless of wrapper's TRIAL_KEY. Our wrapper only does
+  load_trial(trial_1) once, so trial_2 + trial_3 hit
+  "Waiting for transform 'task_board/nic_card_mount_1/sfp_port_0_link'"
+  because we only published mount_0's frame. Two fix paths:
+    (a) wrapper generates a single-trial-only sample_config.yaml derivative
+        and passes it to the engine — engine runs only the requested trial.
+    (b) extension subscribes to aic_model lifecycle events; on each
+        deactivate→activate cycle (between trials), re-fire load_trial with
+        the next trial's config.
+  Path (a) is simpler. Captured for next iter.
+
+PROGRESS METER:
+  ✓ zenoh-rpc-stall-fix
+  ✓ DEFERRED-1 (engine spawn_entity probe — promoted via b.1 source pivot)
+  ✓ DEFERRED-2 (SwitchController timeout — collateral)
+  ✓ DEFERRED-3 (/scoring/tf publish gate)
+  ✓ DEFERRED-4 (CheatCode TF lookups, per-trial)
+  ✓ DEFERRED-5 (StopRecording WaitForTfs — promoted PRD: scoring-stoprecording-tf-fix)
+  ◯ trial-cycle-frames-loading (NEW — required to fire trial_2/trial_3)
+  ◯ DEFERRED-6 (cable physics + controller motion fidelity — Phase 3 scope)
+  Next iter: trial-cycle-frames-loading. After: trial_2/3 can fire cleanly
+  → parity_report.py shows real divergence → DEFERRED-6 closes the physics
+  gap for tier_2/tier_3 to actually pass.
+
+Skill cited: isaac-sim-extension-dev for rclpy node create_node + parameter
+overrides pattern under Isaac Sim Kit context. The skill doesn't directly
+cover use_sim_time but confirms rclpy is the right surface (parity_publishers
++ scoring_publishers + controller_loop run via rclpy in Isaac Sim). Cross-
+referenced ROS 2 humble rclpy.create_node(parameter_overrides=...) signature
+empirically from a live probe.

@@ -505,6 +505,34 @@
       "verify_command": "bash exts/aic-dt/scripts/test_zenoh_rpc_stall_fix.sh",
       "verify_recipe": "Agent writes test_zenoh_rpc_stall_fix.sh: re-runs trial_1 fire end-to-end via wrapper, asserts engine completed without RPC timeout (grep engine stdout for 'GetState timeout' / 'ChangeState timeout'), asserts insertion_event_fired captured real outcome (not stall artifact). Cleans up test JSON.",
       "notes": "M1 ship critical path. Once this passes: agent flips trial-1/2/3-fire back to passes:false on next iter (or operator does manually) → trials re-fire with working transport → parity-report-run closes → ship-paperwork."
+    },
+    {
+      "id": "scoring-stoprecording-tf-fix",
+      "title": "Fix engine StopRecording WaitForTfs timeout at trial-end",
+      "category": "integration",
+      "priority": "critical",
+      "passes": true,
+      "requires_sim": true,
+      "verification_mode": "sim+docker",
+      "files_likely": [
+        "exts/aic-dt/aic_dt/scoring_publishers.py",
+        "exts/aic-dt/aic_dt/parity_publishers.py",
+        "exts/aic-dt/aic_dt/controller_loop.py",
+        "exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh"
+      ],
+      "skills_required": [
+        "isaac-sim-extension-dev"
+      ],
+      "description": "Promoted from progress.txt DEFERRED-5 (surfaced post-DEFERRED-4). After CheatCode runs the trial for its full 180s task time_limit, the engine calls scoring_tier2_->StopRecording() which itself calls WaitForTfs() (aic_scoring/src/ScoringTier2.cc ~line 153). This second WaitForTfs times out, producing:\n  [ERROR] Timeout while waiting for transforms for scoring.\n  [ERROR] Failed to stop recording.\nWhich blocks tier_2/tier_3 scoring from finalizing (the bag isn't cleanly closed → scoring playback gets incomplete data → trial marked 'failed or was not completed' even when CheatCode ran for the full time_limit).\n\nHypothesis ladder:\n  H1) Clock-source mismatch — engine runs with use_sim_time=true; Isaac Sim's rclpy publishers (parity_publishers, scoring_publishers, controller_loop) use default ROS_TIME. WaitForTfs's spinlock uses node->get_clock()->now() which respects use_sim_time. If sim time pauses (e.g. trial-end timeline state), engine clock stalls indefinitely while rclpy publishers keep emitting messages — but the engine subscriber might be doing message-timestamp filtering that drops them. Fix: set use_sim_time=true on the Isaac Sim rclpy nodes so they publish with sim-clock timestamps matching engine expectation.\n  H2) /scoring/tf went silent during the trial (transient zenoh queryable drop or scoring publisher node death). Probe post-trial showed it publishing at 79Hz, but it could have stalled mid-trial. Fix: add a watchdog log line in _publish_scoring_tf to surface any tick-skip.\n  H3) Engine's WaitForTfs subscribes to /tf + /scoring/tf at StartRecording-time then resets flags and waits at StopRecording-time — but the subscriber QoS or RMW state may have decayed across the trial duration. Fix: investigate engine subscriber lifecycle.\n\nFix-applied verification (acceptance bullets below) is the gate: trial_1 must complete with engine logging 'Engine Stopped' without 'Timeout while waiting for transforms for scoring'. tier_2/tier_3 SCORE values may still be 0 (DEFERRED-6 physics) but the failure mode must move from 'infrastructure' to 'task execution failed' (legitimate scoring assessment of the policy's motion).",
+      "acceptance": [
+        "Engine log shows 'Successfully stopped recording' OR equivalent — no 'Failed to stop recording.' line at trial_1 end",
+        "Zero 'Timeout while waiting for transforms for scoring' lines in engine stdout",
+        "Trial outcome JSON captured by wrapper reflects actual task execution (insertion_event_fired may still be false due to DEFERRED-6, but completed_steps reflects real motion ticks)",
+        "Test script test_scoring_stoprecording_fix.sh exists and exits 0"
+      ],
+      "verify_command": "bash exts/aic-dt/scripts/test_scoring_stoprecording_fix.sh",
+      "verify_recipe": "test_scoring_stoprecording_fix.sh: re-run trial_1 via wrapper; assert zero 'Timeout while waiting for transforms for scoring' lines in /tmp/aic_engine_isaac.log; assert 'Failed to stop recording' is absent; assert outcome JSON written + parseable. Cleans up test artifacts.",
+      "notes": "After this closes: parity_report.py shows real Isaac-vs-Gazebo scoring divergence (not infrastructure-stalled artifacts). Then DEFERRED-6 (cable physics + controller motion fidelity, Phase 3 SCENE-05/PARITY-09 territory) is the last layer before tier_2/tier_3 actually pass."
     }
   ]
 }

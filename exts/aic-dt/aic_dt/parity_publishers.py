@@ -277,7 +277,15 @@ class AicParityPublishers:
                 print(f"[AIC-DT][parity] rclpy.init() failed: {exc!r}")
                 return False
 
-        self._node = rclpy.create_node("aic_dt_parity_publisher")
+        # DEFERRED-5: use_sim_time=true so /joint_states + /tf + /tf_static carry
+        # sim_clock timestamps. Engine consumes with use_sim_time=true; matching
+        # the two avoids ScoringTier2::WaitForTfs spinlock timing out on its
+        # first iteration when sim_clock and ROS_TIME diverge.
+        from rclpy.parameter import Parameter
+        self._node = rclpy.create_node(
+            "aic_dt_parity_publisher",
+            parameter_overrides=[Parameter("use_sim_time", Parameter.Type.BOOL, True)],
+        )
 
         # /joint_states: RELIABLE / VOLATILE / KEEP_LAST(42) -- matches Gazebo
         # joint_state_broadcaster QoS per topic-parity-reference.md.

@@ -295,7 +295,13 @@ class AicControllerLoop:
                 return False
 
         try:
-            self._node = rclpy.create_node("aic_dt_controller_loop")
+            # DEFERRED-5: use_sim_time=true so controller-state + contact publishes
+            # carry sim_clock stamps matching the engine.
+            from rclpy.parameter import Parameter
+            self._node = rclpy.create_node(
+                "aic_dt_controller_loop",
+                parameter_overrides=[Parameter("use_sim_time", Parameter.Type.BOOL, True)],
+            )
         except Exception as exc:
             print(f"[AIC-DT][controller] create_node failed: {exc!r}")
             return False

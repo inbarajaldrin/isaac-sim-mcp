@@ -221,7 +221,18 @@ class AicScoringPublishers:
                 return False
 
         try:
-            self._node = rclpy.create_node("aic_dt_scoring_publishers")
+            # DEFERRED-5: use_sim_time=true so messages get stamped with sim_clock
+            # matching engine's clock (engine has use_sim_time=true). Without
+            # this, engine's StopRecording WaitForTfs uses sim_clock to time out
+            # but rclpy publishes ROS_TIME stamps — net effect is the engine's
+            # clock-source can diverge enough from publisher stamps that the
+            # 10s timeout fires on its first check (we observed 22us wall between
+            # task-end log and timeout log).
+            from rclpy.parameter import Parameter
+            self._node = rclpy.create_node(
+                "aic_dt_scoring_publishers",
+                parameter_overrides=[Parameter("use_sim_time", Parameter.Type.BOOL, True)],
+            )
         except Exception as exc:
             print(f"[AIC-DT][scoring] create_node failed: {exc!r}")
             return False
