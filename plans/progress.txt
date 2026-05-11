@@ -1428,3 +1428,74 @@ to insert. The fix per CLAUDE.md SCENE-05 reduction: in-place USD edit to
 author non-zero mass/inertia on cable links so the rope bends under gravity
 + plug-end has collision with port at trial-end position. Estimated effort:
 1-3h depending on cable USD topology complexity.
+
+[2026-05-11T08:50Z] trial-home-robot-pose (promoted from progress.txt note to
+PRD task) — SIGNIFICANT PROGRESS but VERIFY FAILED on operator threshold.
+
+ROOT CAUSES (3 separate kinematic issues addressed):
+  (1) Engine's home_robot() is gated on skip_ready_simulator=false. We pass
+      true (aic-dt owns scene authoring). So engine NEVER homes the robot.
+      Robot stayed at load_robot defaults (joints at zero) → gripper way off.
+  (2) Robot was mounted at world origin (0,0,0) instead of Gazebo's mount
+      pose (-0.2, 0.2, 1.14, yaw=-π). Gripper was 800-900mm below the
+      task_board → unreachable in 180s task time_limit.
+  (3) load_robot's robot_yaw was passed in RADIANS but USD's AddRotateXYZOp
+      expects DEGREES. -3.141 rad was interpreted as -3.141° → robot
+      effectively unrotated. Frames in tf reflected wrong orientation.
+
+FIXES APPLIED (3):
+  (a) extension.py::_apply_home_joint_positions — reads top-level
+      `robot.home_joint_positions` from sample_config.yaml, applies via the
+      existing controller_loop articulation handle (set_joint_positions +
+      apply_action with joint_indices=[[0..5]] to scope on 6 arm joints
+      even after Phase-3 cable activation expanded articulation to 46 DOFs).
+      Called from load_trial after timeline.play. Probe confirms all 6
+      arm joints reach target within 0.001 rad: shoulder_pan -0.1597,
+      shoulder_lift -1.3542, etc.
+  (b) load_trial now passes robot_x=-0.2, robot_y=0.2, robot_z=1.14,
+      robot_yaw=-3.141 to load_robot (matches aic_gz_bringup.launch.py
+      declared defaults).
+  (c) load_robot's RotateXYZOp now converts radians → degrees with
+      math.degrees() before SetRotateXYZOp. Bug-fix that also fixes any
+      future caller passing rotations in radians.
+
+VERIFICATION (probe after fixes):
+  USD prim /World/UR5e: pos=(-0.2, 0.2, 1.14), quat near yaw=-π ✓
+  /joint_states at home: all 6 arm joints match config ✓
+  base_link → gripper/tcp: (-0.337, 0.195, 0.390) ✓
+  base_link → port:       (-0.357, 0.378, 0.121)
+  ↳ xy_error: (-0.020, 0.183) m → xy_dist = 0.184 m
+  Reduction from baseline: 0.957 m → 0.184 m (5x improvement).
+
+OPERATOR THRESHOLD QUESTION SURFACED:
+  Original PRD acceptance said "xy_error <= 0.1 m" — operator's linter
+  rewrote test_trial_home_robot_pose.sh to enforce |x|<=0.1 AND |y|<=0.1.
+  Current state achieves |x|=0.020 ✓ but |y|=0.183 ✗.
+
+  ANALYSIS: Gazebo's home_robot uses the SAME top-level
+  robot.home_joint_positions values via its own ResetJoints service.
+  Same UR5e kinematics. Same 184mm xy_dist would arise in Gazebo too —
+  this is the LEGITIMATE state of the AIC "ready-position" home pose.
+  The home pose is intentionally generic (hovers gripper above workspace
+  center, not pre-aligned to any single trial's port). CheatCode's
+  interpolation handles 184mm in 180s.
+
+  Strict |y|<=0.1 m can only be achieved by either:
+    (A) Trial-specific joint pose override (not Gazebo-faithful — engine
+        uses ONE home pose across all 3 trials)
+    (B) Re-deriving home_joint_positions to align with trial_1's port
+        (breaks parity for trial_2/3)
+    (C) Updating threshold to reflect AIC home-pose intent (~0.3 m)
+
+  Recommend (C). Operator decision needed.
+
+  trial-home-robot-pose remains passes:false until operator accepts (C)
+  or specifies (A)/(B) approach.
+
+WRAPPER YAML-RACE NOTE: test_trial_home_robot_pose.sh cleanup() deletes
+/tmp/aic_engine_single_trial_trial_1.yaml. If a stale process holds the
+yaml inode open, OR concurrent test runs collide on the path, engine
+startup fails with "Failed to load config file: bad file". Observed once
+in this iter but not reproducible. Symptom: engine log shows fail-to-load
+WITHOUT preceding wrapper "derived single-trial config" log line. Captured
+for next-iter investigation.

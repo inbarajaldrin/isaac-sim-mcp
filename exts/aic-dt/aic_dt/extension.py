@@ -1324,7 +1324,10 @@ class DigitalTwin(omni.ext.IExt):
         rz = self._robot_position[2] if robot_z is None else float(robot_z)
 
         # Apply translation + RPY rotation. AddRotateXYZOp is intrinsic XYZ
-        # Euler matching Gazebo's -R -P -Y semantics.
+        # Euler matching Gazebo's -R -P -Y semantics — but USD's RotateXYZOp
+        # values are in DEGREES while the API surface accepts RADIANS (mirrors
+        # Gazebo launch arg semantics). Convert here.
+        import math
         xform = UsdGeom.Xform(prim)
         xform.ClearXformOpOrder()
         xform.AddTranslateOp().Set(Gf.Vec3d(rx, ry, rz))
@@ -1333,8 +1336,11 @@ class DigitalTwin(omni.ext.IExt):
         if (float(robot_roll), float(robot_pitch), float(robot_yaw)) == (0.0, 0.0, 0.0):
             xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
         else:
-            xform.AddRotateXYZOp().Set(Gf.Vec3f(float(robot_roll), float(robot_pitch), float(robot_yaw)))
-        print(f"Applied translation ({rx},{ry},{rz}) RPY=({robot_roll},{robot_pitch},{robot_yaw}) to {prim_path}")
+            roll_deg = math.degrees(float(robot_roll))
+            pitch_deg = math.degrees(float(robot_pitch))
+            yaw_deg = math.degrees(float(robot_yaw))
+            xform.AddRotateXYZOp().Set(Gf.Vec3f(roll_deg, pitch_deg, yaw_deg))
+        print(f"Applied translation ({rx},{ry},{rz}) RPY=({robot_roll},{robot_pitch},{robot_yaw}) rad to {prim_path}")
 
         # Cable workaround: even when aic-dt is loaded post-startup (which lets PhysX
         # cook the cable + Body_005 SDF successfully — cache grows from 0 to ~113 MB),
@@ -1358,8 +1364,13 @@ class DigitalTwin(omni.ext.IExt):
                 # double-stacking xformOps on hot-reload.
                 cable_xform.ClearXformOpOrder()
                 cable_xform.AddTranslateOp().Set(Gf.Vec3d(float(cable_x), float(cable_y), float(cable_z)))
-                cable_xform.AddRotateXYZOp().Set(Gf.Vec3f(float(cable_roll), float(cable_pitch), float(cable_yaw)))
-                print(f"Authored cable pose translation=({cable_x},{cable_y},{cable_z}) RPY=({cable_roll},{cable_pitch},{cable_yaw}) (no-op effect in Phase 1 — cable SetActive(False))")
+                # RotateXYZOp expects degrees; API surface mirrors Gazebo radians.
+                cable_xform.AddRotateXYZOp().Set(Gf.Vec3f(
+                    math.degrees(float(cable_roll)),
+                    math.degrees(float(cable_pitch)),
+                    math.degrees(float(cable_yaw)),
+                ))
+                print(f"Authored cable pose translation=({cable_x},{cable_y},{cable_z}) RPY=({cable_roll},{cable_pitch},{cable_yaw}) rad (no-op effect in Phase 1 — cable SetActive(False))")
             except Exception as exc:  # noqa: BLE001 — pose authoring on a deactivated subtree is best-effort
                 print(f"Cable pose authoring skipped: {exc}")
             # Phase 3 SCENE-05 (Plan 03-02): cable physics now authored on-disk
@@ -3319,8 +3330,13 @@ class DigitalTwin(omni.ext.IExt):
         except Exception as exc:
             print(f"[AIC-DT][trial-tf] rotation extraction failed: {exc!r}; falling back to identity")
             qx, qy, qz, qw = 0.0, 0.0, 0.0, 1.0
+        # parent="base_link" — see scoring_publishers._publish_trial_tf_frames
+        # Mode 1 doc: parity_publishers's "world" is the robot's local-origin
+        # USD prim, NOT the simulation world. Publishing as base_link-relative
+        # gives CheatCode the geometrically correct port pose regardless of
+        # where the robot is mounted in the world.
         port_frame = {
-            "parent": "world",
+            "parent": "base_link",
             "child": f"task_board/{target_module}/{port_name}_link",
             "usd_anchor_path": usd_anchor_path,
             "offset_translation": (float(translation[0]), float(translation[1]), float(translation[2])),
@@ -3340,6 +3356,84 @@ class DigitalTwin(omni.ext.IExt):
               f"translation={port_frame['offset_translation']}); plug={plug_frame['child']} "
               f"(child of gripper/tcp, identity)")
         return [port_frame, plug_frame]
+
+    def _apply_home_joint_positions(self, robot_cfg: dict) -> bool:
+        """trial-home-robot-pose (2026-05-11): drive the 6 arm joints to the
+        config-specified home pose so CheatCode starts trials with the gripper
+        above the task board.
+
+        sample_config.yaml top-level `robot.home_joint_positions:` maps the
+        6 arm joint names (shoulder_pan/lift, elbow, wrist_1/2/3) → radians.
+        Engine consumes the same block in its own home_robot() but only runs
+        that path when skip_ready_simulator=false. We pass it true (aic-dt
+        owns scene authoring); without this helper, the robot sits at
+        load_robot defaults and the gripper is ~600mm from any port.
+
+        Applies via the existing controller_loop articulation handle:
+          - Pulls the live articulation from self._aic_controller_loop
+          - Uses set_joint_positions + apply_action with joint_indices=[[0..5]]
+            (same pattern as controller_loop._apply_joint_cmd; this scopes
+            on the 6 arm joints even after Phase-3 cable activation expanded
+            the articulation to 46 DOFs).
+        Returns True if values landed, False if articulation wasn't ready /
+        the cfg missed the home_joint_positions block.
+        """
+        home = (robot_cfg or {}).get("home_joint_positions") or {}
+        if not home:
+            print("[AIC-DT][home] robot.home_joint_positions absent — skipping")
+            return False
+        # ARM_JOINTS_ORDERED is the canonical ordering used by controller_loop.
+        try:
+            from .controller_loop import ARM_JOINTS_ORDERED
+        except Exception as exc:
+            print(f"[AIC-DT][home] import ARM_JOINTS_ORDERED failed: {exc!r}")
+            return False
+        missing = [n for n in ARM_JOINTS_ORDERED if n not in home]
+        if missing:
+            print(f"[AIC-DT][home] home_joint_positions missing joints {missing} — skipping")
+            return False
+        home_positions = [float(home[n]) for n in ARM_JOINTS_ORDERED]
+        # Reach the live articulation. controller_loop holds it after physics
+        # tick 30 (lazy init); if it hasn't initialized yet, our short retry
+        # loop below pumps the timeline to give it a chance.
+        cl = getattr(self, "_aic_controller_loop", None)
+        if cl is None or getattr(cl, "_articulation", None) is None:
+            print("[AIC-DT][home] controller_loop articulation not ready yet — waiting up to 5s")
+            import asyncio
+            for _ in range(50):
+                cl = getattr(self, "_aic_controller_loop", None)
+                if cl is not None and getattr(cl, "_articulation", None) is not None \
+                        and hasattr(cl._articulation, "_physics_view") \
+                        and cl._articulation._physics_view is not None:
+                    break
+                try:
+                    asyncio.get_event_loop().run_until_complete(asyncio.sleep(0.1))
+                except RuntimeError:
+                    import time
+                    time.sleep(0.1)
+        if cl is None or getattr(cl, "_articulation", None) is None:
+            print("[AIC-DT][home] controller_loop articulation never ready — skipping home pose")
+            return False
+        artic = cl._articulation
+        try:
+            import numpy as np
+            from isaacsim.core.utils.types import ArticulationActions
+            arm_indices = np.array([[0, 1, 2, 3, 4, 5]])
+            pos_arr = np.array([home_positions], dtype=np.float32)
+            # Direct write (bypass PD) so the robot snaps to home pose.
+            artic.set_joint_positions(pos_arr, joint_indices=arm_indices)
+            # apply_action so the PD target also matches (otherwise the next PD
+            # step would pull the joints back toward the previous target).
+            action = ArticulationActions(
+                joint_positions=pos_arr,
+                joint_indices=arm_indices,
+            )
+            artic.apply_action(action)
+            print(f"[AIC-DT][home] applied home pose: {dict(zip(ARM_JOINTS_ORDERED, home_positions))}")
+            return True
+        except Exception as exc:
+            print(f"[AIC-DT][home] articulation write failed: {exc!r}")
+            return False
 
     def _dispatch_rail_block(self, kind: str, index: int, block: dict, atom_fn) -> tuple:
         """Q5 adapter (04-RESEARCH.md): YAML's entity_present/entity_pose.{translation,roll,pitch,yaw}
@@ -3427,9 +3521,23 @@ class DigitalTwin(omni.ext.IExt):
             print("--- Loading scene ---")
             await self.load_scene()
 
-            # 3. load_robot with cable kwargs from YAML (gripper_offset → cable_x/y/z per Q6)
-            print(f"--- Importing UR5e (cable_kwargs={cable_kwargs}) ---")
-            await self.load_robot(**cable_kwargs)
+            # 3. load_robot with cable kwargs from YAML + Gazebo-faithful robot base pose
+            # (~/Documents/aic/aic_bringup/launch/aic_gz_bringup.launch.py declares
+            #  robot_x=-0.2, robot_y=0.2, robot_z=1.14, robot_yaw=-3.141 — table-
+            #  mounted UR5e facing back toward the operator). Without these the robot
+            #  sits at world origin and the gripper TCP at home pose lands ~930mm BELOW
+            #  the task_board, making CheatCode's xy_error ~600+mm at trial start —
+            #  unreachable in the 180s task time_limit even with cable physics working.
+            robot_base_kwargs = {
+                "robot_x": -0.2,
+                "robot_y": 0.2,
+                "robot_z": 1.14,
+                "robot_roll": 0.0,
+                "robot_pitch": 0.0,
+                "robot_yaw": -3.141,
+            }
+            print(f"--- Importing UR5e (robot_base={robot_base_kwargs}, cable_kwargs={cable_kwargs}) ---")
+            await self.load_robot(**robot_base_kwargs, **cable_kwargs)
 
             # 4. Early play (Phase 1 D-12 non-negotiable order)
             print("--- Playing scene early (before graphs/objects) ---")
@@ -3541,6 +3649,18 @@ class DigitalTwin(omni.ext.IExt):
             except Exception:
                 pass
 
+            # 13. trial-home-robot-pose: apply home_joint_positions from the
+            # top-level robot.home_joint_positions block. Engine's home_robot()
+            # path is gated on skip_ready_simulator=false; we pass true so it
+            # never homes, and the robot stays at load_robot defaults (gripper
+            # ~600mm from any task-board port). Apply explicitly so CheatCode
+            # starts with the gripper above the board where it can reach.
+            try:
+                self._apply_home_joint_positions(cfg.get("robot", {}) or {})
+            except Exception as exc:
+                print(f"[AIC-DT][home] _apply_home_joint_positions failed: {exc!r}")
+                traceback.print_exc()
+
             return {
                 "status": "success",
                 "trial": trial_key,
@@ -3636,7 +3756,21 @@ class DigitalTwin(omni.ext.IExt):
             xform.GetPrim().GetReferences().AddReference(usd_uri)
             xform.ClearXformOpOrder()
             xform.AddTranslateOp().Set(Gf.Vec3d(float(position[0]), float(position[1]), float(position[2])))
-            xform.AddRotateXYZOp().Set(Gf.Vec3f(float(rpy[0]), float(rpy[1]), float(rpy[2])))
+            # Bug fix 2026-05-11 (trial-home-robot-pose surface): USD's
+            # AddRotateXYZOp value is in DEGREES, but our API surface (mirroring
+            # spawn_task_board.launch.py / sample_config.yaml) accepts RADIANS.
+            # Without this convert, task_board yaw=π lands as 3.14° → board is
+            # essentially unrotated → ports' world Y flips sign vs Gazebo →
+            # CheatCode xy_error ~0.18 m on Y (board half-width × 2). Same bug
+            # was present in _apply_robot_pose / cable pose (both fixed in same
+            # commit). Mirrors Gazebo radian convention; identical pose
+            # outcome in Isaac Sim.
+            import math as _math
+            xform.AddRotateXYZOp().Set(Gf.Vec3f(
+                _math.degrees(float(rpy[0])),
+                _math.degrees(float(rpy[1])),
+                _math.degrees(float(rpy[2])),
+            ))
             # taskboard-prim-authoring (audit finding #6): explicitly mark any
             # RigidBodyAPI descendant kinematic_enabled=True. The on-disk
             # task_board_rigid.usd / sc_port.usd / nic_card.usd carry RigidBodyAPI
@@ -3653,7 +3787,7 @@ class DigitalTwin(omni.ext.IExt):
                     if desc.HasAPI(UsdPhysics.RigidBodyAPI):
                         UsdPhysics.RigidBodyAPI(desc).CreateKinematicEnabledAttr().Set(True)
             return {"status": "success",
-                    "message": f"Spawned {prim_path} pose=({position[0]:.4f},{position[1]:.4f},{position[2]:.4f}, RPY=({rpy[0]:.4f},{rpy[1]:.4f},{rpy[2]:.4f}))"}
+                    "message": f"Spawned {prim_path} pose=({position[0]:.4f},{position[1]:.4f},{position[2]:.4f}) RPY=({rpy[0]:.4f},{rpy[1]:.4f},{rpy[2]:.4f}) rad"}
         except Exception as e:
             traceback.print_exc()
             return {"status": "error", "message": f"spawn failed at {prim_path}: {e}"}

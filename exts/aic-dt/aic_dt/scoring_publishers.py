@@ -432,10 +432,18 @@ class AicScoringPublishers:
             t.header.frame_id = parent_frame
             t.child_frame_id = child_frame
             if anchor_path:
-                # Mode 1: anchored to a USD prim's world pose. Published value
-                # is the prim's world transform composed with the local offset.
-                # `parent_frame` SHOULD be 'world' for this to be semantically
-                # consistent with the live USD root.
+                # Mode 1: anchored to a USD prim's world pose. Compose with the
+                # offset_local to get the published frame's WORLD pose, then
+                # express the transform in `parent_frame` coordinates by
+                # multiplying with the parent's inverse world transform.
+                #
+                # CRITICAL: parity_publishers's "world" frame is actually the
+                # robot's local-origin USD prim at robot_xform_path/world (NOT
+                # the simulation world). To make CheatCode's
+                # lookup_transform("base_link", child) return the geometrically
+                # correct pose, publish frames as base_link-relative — i.e.
+                # set `parent: "base_link"` in the frame dict and let this
+                # code compute the relative transform live.
                 prim = self._stage.GetPrimAtPath(anchor_path)
                 if not prim or not prim.IsValid() or not prim.IsActive():
                     continue
@@ -446,9 +454,30 @@ class AicScoringPublishers:
                 offset_xf = Gf.Matrix4d().SetIdentity()
                 offset_xf.SetTranslateOnly(Gf.Vec3d(float(ox), float(oy), float(oz)))
                 offset_xf.SetRotateOnly(Gf.Quatd(float(qw), Gf.Vec3d(float(qx), float(qy), float(qz))))
-                world_xf = offset_xf * anchor_xf
-                translation = world_xf.ExtractTranslation()
-                rot = world_xf.ExtractRotationQuat()
+                world_xf = offset_xf * anchor_xf  # frame's pose in true sim world
+                # Resolve parent prim's world pose via the same robot_xform
+                # convention parity_publishers uses (frame name → USD leaf
+                # under robot_xform_path). Default fall-through: if parent is
+                # "world" treat it as true sim world (identity), preserving
+                # legacy callers.
+                parent_world_xf = Gf.Matrix4d(1.0)
+                if parent_frame != "world":
+                    parent_leaf_map = {
+                        "base_link": "base_link",
+                        "tabletop": "tabletop",
+                    }
+                    parent_leaf = parent_leaf_map.get(parent_frame)
+                    if parent_leaf:
+                        parent_prim_path = f"/World/UR5e/aic_unified_robot/{parent_leaf}"
+                        parent_prim = self._stage.GetPrimAtPath(parent_prim_path)
+                        if parent_prim and parent_prim.IsValid():
+                            try:
+                                parent_world_xf = xf_cache.GetLocalToWorldTransform(parent_prim)
+                            except Exception:
+                                pass
+                relative_xf = world_xf * parent_world_xf.GetInverse()
+                translation = relative_xf.ExtractTranslation()
+                rot = relative_xf.ExtractRotationQuat()
                 imag = rot.GetImaginary()
                 t.transform.translation.x = float(translation[0])
                 t.transform.translation.y = float(translation[1])

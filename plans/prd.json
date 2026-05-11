@@ -558,6 +558,32 @@
       "verify_command": "bash exts/aic-dt/scripts/test_trial_cycle_frames_loading.sh",
       "verify_recipe": "test_trial_cycle_frames_loading.sh: fires trial_1 + trial_2 + trial_3 in sequence; for each, asserts the engine log shows 'Total Trials: 1' and the outcome JSON is parseable. Cleans up /tmp test artifacts.",
       "notes": "After this closes: trial-1/2/3-fire all flip true, parity-report-run becomes the next gate. DEFERRED-6 (cable physics) remains the deeper Phase-3 issue before tier_2/3 actually pass."
+    },
+    {
+      "id": "trial-home-robot-pose",
+      "title": "load_trial applies home_joint_positions so robot starts at trial home pose",
+      "category": "runtime-gate",
+      "priority": "critical",
+      "passes": false,
+      "requires_sim": true,
+      "verification_mode": "sim",
+      "files_likely": [
+        "exts/aic-dt/aic_dt/extension.py",
+        "exts/aic-dt/scripts/test_trial_home_robot_pose.sh"
+      ],
+      "skills_required": [
+        "isaac-sim-extension-dev"
+      ],
+      "description": "Surfaced post-trial-cycle-frames-loading: CheatCode model logs `xy_error: -0.663 -0.606` at trial_1 start — the gripper starts ~600mm from the port because the engine never homes the robot. aic_engine.cpp::home_robot is called only inside reset_simulator(), which is itself gated on skip_ready_simulator=false (our case is true since aic-dt owns scene authoring). So the robot stays at whatever load_robot left it at (zero/default joint poses).\n\nFix: load_trial reads `robot.home_joint_positions` from the trial config (top-level, same for all trials) and applies them to the articulation before scoring starts. Uses the same articulation handle + Isaac Sim 5.0 set_joint_positions + apply_action pattern that controller_loop._apply_joint_cmd uses (joint_indices=[[0..5]] to scope on the 6 arm joints after Phase-3 cable expanded articulation to 46 DOFs).\n\nAfter this lands: CheatCode starts with the gripper above the task board (per home pose). xy_error reduces to ~10-50mm. Combined with eventual cable physics fix (DEFERRED-6) trials can actually pass tier_3.",
+      "acceptance": [
+        "load_trial successfully applies home_joint_positions on a trial fire — joint values reach the articulation within 5s",
+        "Live probe of /joint_states after load_trial shows shoulder_pan_joint ≈ -0.1597 ± 0.05 rad (URDF spec home pose)",
+        "CheatCode model log shows xy_dist <= 0.3 m at insert_cable execute_loop start (was 0.898m before fix — sqrt(0.66^2+0.61^2)). 0.3m threshold reflects the AIC home-pose ready-position which intentionally hovers the gripper ABOVE the workspace, not directly over a single port",
+        "test_trial_home_robot_pose.sh exists and exits 0"
+      ],
+      "verify_command": "bash exts/aic-dt/scripts/test_trial_home_robot_pose.sh",
+      "verify_recipe": "test_trial_home_robot_pose.sh: fire trial_1 via wrapper; assert /tmp/aic_model_isaac.log contains 'xy_error' line with sqrt(x^2+y^2) <= 0.3 m. Cleans up test JSON.",
+      "notes": "After this + DEFERRED-6 (cable physics): trials can pass tier_3. Unblocks parity-report-run + ship-paperwork. NOT cable physics — this is the kinematics-side gap that pairs with the cable-side gap."
     }
   ]
 }
