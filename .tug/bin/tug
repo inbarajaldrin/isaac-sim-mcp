@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# tug — minimal Ralph-style loop driver.
+#
+# Subcommands:
+#   tug once                Run a single iteration (HITL — watch, intervene).
+#   tug afk <N>             Run up to N iterations (capped). Exits early on COMPLETE sentinel.
+#   tug status              Print the current PRD/progress state.
+#
+# Conventions (per the working dir of the project being driven):
+#   PRD.md                  The mutable spec. Tasks marked [ ] / [~] / [x].
+#   progress.txt            Per-iteration diary. Appended each loop. Committed.
+#   .tug/config.sh          Optional override of model/permission/sentinel/timeout.
+#
+# Sentinel: agent must echo  <promise>COMPLETE</promise>  on stdout when done.
+#           To signal a hard external block, agent echoes  <promise>BLOCKED reason="..."</promise>.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+case "${1:-}" in
+  once)
+    exec "$SCRIPT_DIR/tug-once.sh" "${@:2}"
+    ;;
+  afk)
+    if [ -z "${2:-}" ]; then
+      echo "usage: tug afk <iterations>"
+      exit 1
+    fi
+    exec "$SCRIPT_DIR/tug-afk.sh" "$2"
+    ;;
+  status)
+    [ -f PRD.md ]      && { echo "=== PRD.md ==="; head -40 PRD.md; echo; }
+    [ -f progress.txt ] && { echo "=== progress.txt (tail) ==="; tail -40 progress.txt; echo; }
+    [ -f PRD.md ] && {
+      echo "=== task counts ==="
+      printf "pending  [ ] : %s\n" "$(grep -c '^- \[ \]' PRD.md || echo 0)"
+      printf "partial  [~] : %s\n" "$(grep -c '^- \[~\]' PRD.md || echo 0)"
+      printf "done     [x] : %s\n" "$(grep -c '^- \[x\]' PRD.md || echo 0)"
+    }
+    ;;
+  ""|-h|--help|help)
+    awk 'NR>=2 && NR<=12 { sub(/^# ?/, ""); print }' "$0"
+    ;;
+  *)
+    echo "unknown subcommand: $1"
+    echo "try: tug help"
+    exit 1
+    ;;
+esac

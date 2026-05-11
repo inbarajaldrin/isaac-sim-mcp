@@ -79,3 +79,8 @@ resources/
 
 # Video recordings
 **/videos/
+
+# tug — transient orchestrator artifacts (logs + per-batch context briefing + config overrides)
+.tug/logs/
+.tug/batch_context.md
+.tug/config.sh
