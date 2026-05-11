@@ -290,6 +290,22 @@ This repo is **sim-side only**. The matching **ROS-side** repo lives at `~/Docum
 
 **Topic-parity is the architectural law.** Isaac Sim publishes the *exact* topic names the running Gazebo `aic_eval` container publishes — no `_sim`/`_real` discrimination beyond what Gazebo itself uses, no remap nodes, no bridge translators. The same `aic_controller` + `aic_engine` + `CheatCode.py` invocations that work against Gazebo must work against Isaac Sim with zero changes in `~/Documents/aic`.
 
+**Scene-frame parity is also architectural law — and is a multi-entity reconciliation, not a per-entity fix.** When changing the world-frame placement of ANY scene entity (robot mount, task board, enclosure, ground plane, cable), you MUST walk the full scene-authoring chain in `exts/aic-dt/aic_dt/extension.py` and reconcile **every** sibling entity + environment constant in the same change. The chain is:
+```
+load_scene → _setup_world_scene (ground_plane_z, physics)
+           → import_enclosure (_enclosure_position)
+load_robot (robot mount pose + RPY)
+load_trial / quick_start → spawn_task_board_base → spawn_{lc,sfp,sc}_mount_rail
+                        → spawn_sc_port → spawn_nic_card_mount → cable
+```
+For each entity, cross-reference the Isaac Sim constant against its Gazebo equivalent in:
+- `~/Documents/aic/aic_description/world/aic.sdf` (world layout, includes)
+- `~/Documents/aic/aic_bringup/launch/aic_gz_bringup.launch.py` (DeclareLaunchArgument defaults for robot/task_board/cable poses)
+- `~/Documents/aic/aic_description/urdf/task_board.urdf.xacro` (per-part anchor origins)
+- `~/Documents/aic/aic_engine/config/sample_config.yaml` (per-trial scene overrides)
+
+**Concrete failure that triggered this rule (2026-05-11):** cf27bdd moved the robot from `(0,0,0)` to Gazebo's canonical `(-0.2, 0.2, 1.14, yaw=-π)` but left `_enclosure_position=(0,0,-1.15)` and `_ground_plane_z=-0.08` and stale task-board-part anchors untouched. Robot ended up floating 1.22m above the ground plane with the enclosure ceiling intersecting its reach envelope. Working-tree diff that surfaced part-anchor errors did NOT include the enclosure/ground/task-board-default corrections — orchestrator (me) tunneled on the visible diff and missed the upstream constants. See `.tug/findings/world-frame-reconcile.md` for the full divergence table + Phase-B reconciliation plan.
+
 The aic-dt extension MAY use `rclpy` for non-control glue (config reads, scoring event listening). The `~/Documents/aic` repo MUST NOT import `omni.*`.
 
 ---
