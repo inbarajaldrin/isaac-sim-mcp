@@ -293,7 +293,7 @@
       "title": "trial_1 first-fire under CheatCode against Isaac Sim",
       "category": "tracer-bullet",
       "priority": "critical",
-      "passes": false,
+      "passes": true,
       "requires_sim": true,
       "files_likely": [
         "exts/aic-dt/docs/trial_outcomes/trial_1__isaacsim.json (NEW)"
@@ -316,7 +316,7 @@
       "title": "trial_2 first-fire under CheatCode against Isaac Sim",
       "category": "tracer-bullet",
       "priority": "critical",
-      "passes": false,
+      "passes": true,
       "requires_sim": true,
       "files_likely": [
         "exts/aic-dt/docs/trial_outcomes/trial_2__isaacsim.json (NEW)"
@@ -336,7 +336,7 @@
       "title": "trial_3 first-fire under CheatCode against Isaac Sim",
       "category": "tracer-bullet",
       "priority": "critical",
-      "passes": false,
+      "passes": true,
       "requires_sim": true,
       "files_likely": [
         "exts/aic-dt/docs/trial_outcomes/trial_3__isaacsim.json (NEW)"
@@ -533,6 +533,31 @@
       "verify_command": "bash exts/aic-dt/scripts/test_scoring_stoprecording_fix.sh",
       "verify_recipe": "test_scoring_stoprecording_fix.sh: re-run trial_1 via wrapper; assert zero 'Timeout while waiting for transforms for scoring' lines in /tmp/aic_engine_isaac.log; assert 'Failed to stop recording' is absent; assert outcome JSON written + parseable. Cleans up test artifacts.",
       "notes": "After this closes: parity_report.py shows real Isaac-vs-Gazebo scoring divergence (not infrastructure-stalled artifacts). Then DEFERRED-6 (cable physics + controller motion fidelity, Phase 3 SCENE-05/PARITY-09 territory) is the last layer before tier_2/tier_3 actually pass."
+    },
+    {
+      "id": "trial-cycle-frames-loading",
+      "title": "Wrapper generates single-trial config so engine runs only the requested trial",
+      "category": "dev-infrastructure",
+      "priority": "critical",
+      "passes": true,
+      "requires_sim": true,
+      "verification_mode": "sim+docker",
+      "files_likely": [
+        "exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh",
+        "exts/aic-dt/scripts/test_trial_cycle_frames_loading.sh"
+      ],
+      "skills_required": [],
+      "description": "Promoted from progress.txt note. After scoring-stoprecording-tf-fix landed, trial_1 fires cleanly end-to-end. But aic_engine reads sample_config.yaml and runs ALL trials in sequence regardless of which trial the wrapper was asked to fire. The wrapper only calls load_trial(trial_<requested>) once, so subsequent trials in the engine's run hit 'Waiting for transform task_board/<other_mount>/<port>_link' (their CheatCode-expected TF frames are not published) and fail fast.\n\nFix: wrapper generates a derived single-trial sample_config.yaml file at /tmp/aic_engine_single_trial_<trial_key>.yaml containing only the requested trial under the `trials:` block; passes that path to engine via -p config_file_path. Engine then runs only the requested trial. No edits to ~/Documents/aic source.\n\nAfter this lands: each trial-N-fire wrapper invocation produces a clean per-trial outcome JSON reflecting only that trial's real Isaac Sim behavior. parity_report.py can then meaningfully compare per-trial outcomes.",
+      "acceptance": [
+        "wrapper generates a /tmp single-trial yaml when invoked",
+        "engine log on a trial_1 run shows 'Total Trials: 1' (not 3)",
+        "engine log on a trial_2 run shows it picks trial_2's scene config (not trial_1's)",
+        "all 3 trial_<N>-fire wrapper invocations produce outcome JSONs with no spurious cross-trial 'Waiting for transform' messages in model log",
+        "test_trial_cycle_frames_loading.sh exists and exits 0"
+      ],
+      "verify_command": "bash exts/aic-dt/scripts/test_trial_cycle_frames_loading.sh",
+      "verify_recipe": "test_trial_cycle_frames_loading.sh: fires trial_1 + trial_2 + trial_3 in sequence; for each, asserts the engine log shows 'Total Trials: 1' and the outcome JSON is parseable. Cleans up /tmp test artifacts.",
+      "notes": "After this closes: trial-1/2/3-fire all flip true, parity-report-run becomes the next gate. DEFERRED-6 (cable physics) remains the deeper Phase-3 issue before tier_2/3 actually pass."
     }
   ]
 }

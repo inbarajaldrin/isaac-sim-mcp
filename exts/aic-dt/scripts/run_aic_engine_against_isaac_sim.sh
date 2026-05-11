@@ -215,6 +215,30 @@ else
     fi
 fi
 
+# ---------- generate single-trial config (trial-cycle-frames-loading fix) ----------
+# aic_engine reads the config's `trials:` block and runs ALL trials in
+# sequence. The wrapper is invoked per-trial; we want the engine to run
+# only the requested one so subsequent trials don't hit "Waiting for
+# transform" failures (their per-trial CheatCode TF frames aren't published
+# because we only load_trial(<requested>) once). Generate a derived yaml
+# preserving the entire config but filtering `trials:` to just $TRIAL_KEY.
+SOURCE_CFG="$AIC_REPO/aic_engine/config/sample_config.yaml"
+SINGLE_CFG="/tmp/aic_engine_single_trial_${TRIAL_KEY}.yaml"
+"$HOME/env_isaaclab/bin/python" - "$SOURCE_CFG" "$TRIAL_KEY" "$SINGLE_CFG" <<'PY'
+import sys, yaml
+src_path, trial_key, dst_path = sys.argv[1:4]
+with open(src_path) as f:
+    cfg = yaml.safe_load(f) or {}
+trials = (cfg.get("trials") or {})
+if trial_key not in trials:
+    raise SystemExit(f"trial_key {trial_key!r} not in {src_path}; available: {sorted(trials.keys())}")
+cfg["trials"] = {trial_key: trials[trial_key]}
+with open(dst_path, "w") as f:
+    yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False)
+print(f"[wrapper] derived single-trial config: {dst_path}")
+PY
+ENGINE_CFG_PATH="$SINGLE_CFG"
+
 # ---------- send load_trial via MCP ----------
 echo "[wrapper] sending load_trial(trial_key=$TRIAL_KEY, ground_truth=$GROUND_TRUTH) via MCP"
 "$HOME/env_isaaclab/bin/python" - "$TRIAL_KEY" "$GROUND_TRUTH_LOWER" <<'PY'
@@ -395,7 +419,7 @@ echo "[wrapper] launching host aic_engine (humble, ROS_DOMAIN_ID=7, RMW=zenoh)"
     #   spawn_entity probe on this flag, so passing it true is what unlocks
     #   the trial advancing past endpoint readiness.
     exec "$ENGINE_BIN" --ros-args \
-        -p config_file_path:="$AIC_REPO/aic_engine/config/sample_config.yaml" \
+        -p "config_file_path:=$ENGINE_CFG_PATH" \
         -p use_sim_time:=true \
         -p skip_ready_simulator:=true \
         -p "ground_truth:=$GROUND_TRUTH_LOWER" \

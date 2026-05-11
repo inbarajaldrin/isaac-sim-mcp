@@ -1381,3 +1381,50 @@ cover use_sim_time but confirms rclpy is the right surface (parity_publishers
 + scoring_publishers + controller_loop run via rclpy in Isaac Sim). Cross-
 referenced ROS 2 humble rclpy.create_node(parameter_overrides=...) signature
 empirically from a live probe.
+
+[2026-05-11T07:50Z] trial-cycle-frames-loading PASS + trial-1/2/3-fire refired to canonical paths.
+
+trial-cycle-frames-loading (new PRD task, promoted from progress.txt
+follow-up): wrapper now generates a /tmp/aic_engine_single_trial_<key>.yaml
+preserving the full sample_config.yaml structure but filtering `trials:` to
+only the requested trial. Engine sees "Total Trials: 1" + "Trial 1/1: <key>"
+and runs exactly the requested trial — no more spurious cross-trial
+"Waiting for transform" failures.
+
+Verification (test_trial_cycle_frames_loading.sh, all 3 trials PASS):
+  - trial_1: outcome JSON OK; engine 'Total Trials: 1' + 'Trial 1/1: trial_1'
+  - trial_2: outcome JSON OK; engine 'Total Trials: 1' + 'Trial 1/1: trial_2'
+  - trial_3: outcome JSON OK; engine 'Total Trials: 1' + 'Trial 1/1: trial_3'
+
+trial-1/2/3-fire refired to canonical exts/aic-dt/docs/trial_outcomes/
+paths. Each JSON has standard shape; insertion_event_fired=false reflects
+legitimate task-execution failure (DEFERRED-6 cable physics gap — cable is
+SetActive(False) so CheatCode can drive the robot but no physical cable to
+insert). NOT a stall artifact this time — engine completed full trial
+lifecycle with bag cleanly closed (scoring-stoprecording-tf-fix held).
+
+parity-report-run: still passes:false. parity_report.py output shows
+"divergence detected (3 trial(s) compared)" — Gazebo passes all 3 trials,
+Isaac Sim fails all 3 (insertion=false). This is the LEGITIMATE remaining
+gap (DEFERRED-6), not an infrastructure failure. ship-gate.
+
+PROGRESS METER:
+  ✓ zenoh-rpc-stall-fix
+  ✓ engine-spawn-probe-gate            (was DEFERRED-1; PRD: scoring-stoprecording-tf-fix sibling)
+  ✓ <SwitchController collateral>      (was DEFERRED-2)
+  ✓ scoring-tf-frame-paths             (was DEFERRED-3)
+  ✓ cheatcode-tf-frame-publish         (was DEFERRED-4)
+  ✓ scoring-stoprecording-tf-fix       (was DEFERRED-5)
+  ✓ trial-cycle-frames-loading         (NEW PRD task this iter)
+  ✓ trial-1-fire / trial-2-fire / trial-3-fire (refired to canonical paths)
+  ◯ parity-report-run                  (gates ship — needs trial outcomes to match)
+  ◯ cable-physics-fidelity             (DEFERRED-6, Phase 3 SCENE-05 — the deeper gap)
+  ◯ ship-paperwork                     (gated on parity-report-run)
+
+Next iter: address DEFERRED-6 (cable physics). The cable subtree is
+SetActive(False) in load_robot per CLAUDE.md cable note. CheatCode runs
+the trial for the full 180s task time_limit but there's no physical cable
+to insert. The fix per CLAUDE.md SCENE-05 reduction: in-place USD edit to
+author non-zero mass/inertia on cable links so the rope bends under gravity
++ plug-end has collision with port at trial-end position. Estimated effort:
+1-3h depending on cable USD topology complexity.
