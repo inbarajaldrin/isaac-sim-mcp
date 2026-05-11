@@ -87,7 +87,7 @@ MODEL_PID=""
 # from the engine log before the trap calls emit_outcome_json.
 INSERTION_EVENT_FIRED="false"
 OFFLIMIT_CONTACT_COUNT=0
-COMPLETED_STEPS=-1   # aic_engine has no step counter — sentinel per parity_report contract.
+COMPLETED_STEPS=-1   # Sentinel: aic_engine has no step counter. parse_engine_log_outcomes() promotes this to the model "execute loop" count when the engine reaches its scoring phase (proves WaitForTfs timeout didn't fire).
 
 emit_outcome_json() {
     # Idempotent JSON writer. Called from cleanup() trap when --output-json set.
@@ -125,6 +125,19 @@ parse_engine_log_outcomes() {
     fi
     if grep -q "No contact detected" "$ENGINE_LOG" 2>/dev/null; then
         OFFLIMIT_CONTACT_COUNT=0
+    fi
+    # completed_steps: aic_engine has no step counter, so derive a non-sentinel
+    # value from the model's "execute loop" cadence (one per policy tick). The
+    # cable-physics-descope-validate gate distinguishes "engine WaitForTfs
+    # timeout" (no model ticks at all → leave -1) from "trial actually ran"
+    # (≥1 tick → positive count). Model log path mirrors $MODEL_LOG.
+    if [ -f "$MODEL_LOG" ]; then
+        LOOPS=$(grep -c "execute loop" "$MODEL_LOG" 2>/dev/null || echo 0)
+        # Also require engine reached its scoring phase (means StopRecording
+        # succeeded, ie. scoring-stoprecording-tf-fix held). Otherwise keep -1.
+        if [ "$LOOPS" -gt 0 ] && grep -q "Finished scoring trial" "$ENGINE_LOG" 2>/dev/null; then
+            COMPLETED_STEPS="$LOOPS"
+        fi
     fi
 }
 

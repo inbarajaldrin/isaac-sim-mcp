@@ -20,9 +20,22 @@ import shutil
 import sys
 
 CABLE_USD = "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd"
-DENSITY = 0.00005
-DAMPING = 10.0
-STIFFNESS = 1.0
+# cable-physics-fidelity (M1 ship gate): density bumped from 5e-5 → 1000 kg/m³
+# (PVC plastic-realistic). Each link is a 6mm dia × 47mm cylinder ≈ 1.33e-6 m³,
+# so per-link mass ≈ 1.33 g (21 links → ~28 g cable). At 5e-5 kg/m³ each link
+# was ~6.6e-11 kg — gravity force dwarfed by joint damping by 10 orders of
+# magnitude; cable was kinematically frozen even when activated. The original
+# RigidBodyRopeDemo template uses density=0.00005 in a *cm-stage* (mPU=0.01)
+# regime where the same numeric value yields ~2 g per capsule. We're in mPU=1.0
+# so we have to scale density to recover the same effective mass regime.
+#
+# Damping 10.0 → 0.001 + Stiffness 1.0 → 0.0: at realistic mass, the original
+# damping completely overwhelms gravity (terminal angular velocity ~6e-5 rad/s).
+# Reducing damping lets gravity actually displace the cable. Stiffness=0
+# removes the spring-back to rest pose so gravity bends consistently downward.
+DENSITY = 1000.0
+DAMPING = 0.001
+STIFFNESS = 0.0
 
 
 def main():
@@ -49,6 +62,21 @@ def main():
         print(f"FAIL: could not open {args.usd}")
         return 1
 
+    # cable-physics-fidelity: scope authoring to the cable subtree only.
+    # The unified USD also contains UR5e robot links (~30 RigidBodies); a prior
+    # version of this script traversed the whole stage and accidentally bumped
+    # every UR5e link to density=1000 too, which destabilised the arm.
+    cable_root = stage.GetPrimAtPath("/World/cable")
+    if not cable_root or not cable_root.IsValid():
+        # Fall back to traversal in case the asset evolves
+        for p in stage.Traverse():
+            if p.GetName() == "cable":
+                cable_root = p
+                break
+    if not cable_root or not cable_root.IsValid():
+        print("FAIL: could not locate cable subtree under unified USD")
+        return 1
+
     links_seen = 0
     links_authored = 0
     links_already = 0
@@ -56,7 +84,7 @@ def main():
     joints_authored = 0
     joints_already = 0
 
-    for prim in stage.Traverse():
+    for prim in Usd.PrimRange(cable_root):
         # Per-link MassAPI
         if UsdPhysics.RigidBodyAPI(prim):
             links_seen += 1

@@ -1378,29 +1378,26 @@ class DigitalTwin(omni.ext.IExt):
             # + per-joint DriveAPI(force, damping=10.0, stiffness=1.0) per
             # NVIDIA's RigidBodyRopeDemo template. Activate the subtree.
             # Emergency rollback via SCENE_05_DISABLE=1 env var.
-            # H3 motion-deficit-hunt: gate cable activation on attach_cable_to_gripper.
-            # Per PRD scope_note: "cable is rigidly attached to gripper
-            # (attach_cable_to_gripper=True) so cable physics doesn't dynamically
-            # affect trials. Scoring is contact-based on plug-end geometry."
-            # When NOT attaching, the 40 cable D6 joints add 40 extra articulation
-            # DOFs that mass-couple back into the arm shoulder via constraint
-            # forces — even with mass=4e-13 kg per link and per-tick velocity
-            # zeroing, PhysX's per-step constraint integration drags the arm
-            # ~25% off commanded amplitude (probe_motion_roundtrip.py 2026-05-09).
-            # Activating cable only when attach_cable_to_gripper=True (load_trial
-            # path) keeps quick_start's articulation clean (6 DOFs) without
-            # affecting trial outcomes (cable is decorative-only per scope_note).
-            # SCENE_05_DISABLE=1 still forces deactivation as the global override.
+            # 2026-05-11 DESCOPE (R1 per progress.txt cable-physics-fidelity finding):
+            # Cable activation is OUT-OF-SCOPE FOR M1 per plans/prd.json
+            # `out_of_scope_for_m1`: "Cable physics decorative-only — defer to M2;
+            # cable is rigidly attached to gripper (attach_cable_to_gripper=True)
+            # so cable physics doesn't dynamically affect trials. Scoring is
+            # contact-based on plug-end geometry." Empirical finding 2026-05-11:
+            # activating cable adds 21 rigid bodies + 40 D6 joints, drops sim-
+            # realtime to 0.56×, makes the 180s task budget consume 318s wall-
+            # clock, regresses scoring-stoprecording-tf-fix (engine WaitForTfs
+            # timeout, completed_steps=-1). The USD per-link mass authoring is
+            # preserved (durable on disk, harmless when SetActive(False), M2-
+            # ready). M1 contract: cable always inactive at load_robot time.
+            # Set SCENE_05_ENABLE_FOR_M2=1 to re-enable when M2 work begins.
             import os as _os
-            if _os.environ.get("SCENE_05_DISABLE", "").lower() in ("1", "true"):
-                cable_prim.SetActive(False)
-                print(f"SCENE_05_DISABLE=1 → deactivated {prim_path}/cable (D-04 fallback)")
-            elif attach_cable_to_gripper:
+            if _os.environ.get("SCENE_05_ENABLE_FOR_M2", "").lower() in ("1", "true"):
                 cable_prim.SetActive(True)
-                print(f"SCENE-05: activated {prim_path}/cable (attach_cable_to_gripper=True; per-link mass authored)")
+                print(f"SCENE_05_ENABLE_FOR_M2=1 → activated {prim_path}/cable (M2 only; M1 expects inactive)")
             else:
                 cable_prim.SetActive(False)
-                print(f"SCENE-05: deactivated {prim_path}/cable (attach_cable_to_gripper=False — cable decorative-only per scope_note; activate via load_trial)")
+                print(f"SCENE-05: deactivated {prim_path}/cable (M1 descope per out_of_scope_for_m1; cable is decorative; USD mass authoring preserved on disk for M2)")
 
         # joint-drives-urdf-reconcile: author USD DriveAPI on the 6 arm joints
         # BEFORE articulation init so PhysX picks up the canonical AIC values

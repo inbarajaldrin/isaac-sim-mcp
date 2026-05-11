@@ -45,10 +45,13 @@ was_active = cable.IsActive()
 if not was_active:
     cable.SetActive(True)
 
-# NVIDIA RigidBodyRopeDemo defaults
-DENSITY = 0.00005
-DAMPING = 10.0
-STIFFNESS = 1.0
+# cable-physics-fidelity (M1 ship gate): density+damping+stiffness scaled to
+# our m-stage (mPU=1.0). Each cable link is a 6mm dia × 47mm cylinder; at
+# density=1000 (PVC) per-link mass is ~1.33 g — gravity actually moves cable.
+# See author_cable_physics_offline.py header for full rationale.
+DENSITY = 1000.0
+DAMPING = 0.001
+STIFFNESS = 0.0
 CONE_LIMIT_DEG = 110.0  # rotY/rotZ free range
 
 probe_only = ${PROBE_ONLY}
