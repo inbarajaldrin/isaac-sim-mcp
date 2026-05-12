@@ -168,7 +168,7 @@
       "title": "Generate first parity report \u2014 assert 3/3 trials match Gazebo",
       "category": "ship-gate",
       "priority": "critical",
-      "passes": false,
+      "passes": true,
       "requires_sim": false,
       "files_likely": [
         "docs/parity-report.md (regenerated)"
@@ -240,7 +240,7 @@
       "title": "M1 ship paperwork + .m1_shipped marker",
       "category": "polish",
       "priority": "polish",
-      "passes": false,
+      "passes": true,
       "requires_sim": false,
       "files_likely": [
         "README.md (root)",
@@ -670,7 +670,7 @@
       "title": "CheatCode policy ~1.6Hz vs ~10Hz baseline \u2014 diagnose + fix M1 ship-gate motion blocker",
       "category": "runtime-gate",
       "priority": "critical",
-      "passes": false,
+      "passes": true,
       "requires_sim": true,
       "verification_mode": "sim",
       "files_likely": [

@@ -1,6 +1,0 @@
-# Pause-work: explicit /gsd-pause-work invocation 2026-05-08T21:02:14Z
-
-After major audit + reconciliation + GSD discipline formalization session.
-12 commits since prior pause c7e4bf3.
-
-To resume: /gsd-resume-work

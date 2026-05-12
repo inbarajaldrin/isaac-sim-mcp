@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: blocked
+status: shipped
 stopped_at: "Plan 04-03 EXECUTED with HARD BLOCKER (~80 min wall, 4 dry-run iterations). All deliverables LANDED: my-eval-isaac:v1 Docker derived image (engine-only entrypoint atop ghcr.io/intrinsic-dev/aic/aic_eval:latest), run_aic_engine_against_isaac_sim.sh E2E wrapper, D-13 1-surface setter (AicScoringPublishers.set_port_link_paths + _effective_port_link_paths method, NOT a 4-surface MCP atom per Wave 1 SUMMARY clarification), recursive PhysxContactReportAPI tag-walk (Rule 1 fix: original code only tagged root prim missing rigid-body descendants under SCPort_0/sc_port_visual). 3 atomic commits (50792b8 Task 1 Docker, e3aa68a Task 2 wrapper+D-13 setter, final commit pending Task 3 dryrun+SUMMARY). 2 Rule 1 auto-fixes during dry-run: (1) entrypoint.sh model_discovery_timeout_seconds:=int not float; (2) recursive contact-tag walk vs root-only. trial_1 dry-run reaches: load_trial PASS, engine container starts + parses 3 trials, then BLOCKS on 'Failed to find a valid clock' (10s aic_engine.cpp:457 hardcoded timeout) — kilted-side container cannot subscribe to humble-side /clock or /joint_states despite same RMW_IMPLEMENTATION=rmw_fastrtps_cpp + ROS_DOMAIN_ID=7 + --net=host + topic visible in `ros2 topic info` (publisher count=1 RELIABLE). HARD BLOCKER: kilted ↔ humble fastrtps type-hash incompatibility for stock ROS messages. A2's 'PASS' verdict was insufficient — only verified custom-built aic_control_interfaces (matched ABI by same-workspace build) and humble-side host subscriber. .planning/HANDOFF.json blocker entry populated with 4 mitigation options. .planning/.user_pause touched. PARITY-07 stays [~] — plumbing verified intact (D-13 fallback active, contact subscription wired with 2 prims tagged) but engine never starts so policy never drives contact. Plans 04-04 + 04-05 remain blocked behind this until user picks mitigation path."
-last_updated: "2026-05-05T13:00:00.000Z"
-last_activity: 2026-05-05 -- Plan 04-03 LANDED w/ HARD BLOCKER on kilted↔humble RMW interop; PARITY-07 plumbing verified intact but live-fire blocked
+last_updated: "2026-05-12T19:00:00.000Z"
+last_activity: 2026-05-12 -- M1 SHIPPED. All 3 sample_config trials pass insertion_event_fired=true under unmodified CheatCode. Path (a') USD-hierarchy plug proxy + Path Y port colliders bypassed PhysX articulation-cook closed-loop crashes.
 progress:
   total_phases: 4
   completed_phases: 1

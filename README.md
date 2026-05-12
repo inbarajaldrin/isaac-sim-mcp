@@ -1,5 +1,15 @@
 # Isaac Sim MCP Server
 
+## Status
+
+**Milestone 1 (M1) — Platform Transfer**: ✓ **SHIPPED 2026-05-12**
+
+Every trial in `~/Documents/aic/aic_engine/config/sample_config.yaml` passes
+against this Isaac Sim digital twin under unmodified `aic_example_policies/CheatCode.py`,
+matching Gazebo baselines. See [`docs/parity-report.md`](docs/parity-report.md) for the
+side-by-side comparison.
+
+
 MCP Server for NVIDIA Isaac Sim integration, enabling AI assistants to control robotic simulations through the Model Context Protocol.
 
 ## Architecture

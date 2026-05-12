@@ -3,6 +3,41 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 
+## [v1.0 — Milestone 1: Platform Transfer] — 2026-05-12
+
+**M1 SHIPPED.** Every trial in `~/Documents/aic/aic_engine/config/sample_config.yaml`
+(trial_1, trial_2, trial_3) passes against Isaac Sim under unmodified
+`aic_example_policies/ros/CheatCode.py`. Side-by-side Gazebo↔Isaac trial outcome
+comparison is in `docs/parity-report.md` (regenerable).
+
+Requirement IDs delivered (M1 cumulative): all PARITY-*, all TEX-*, all SCENE-*,
+TRIAL-01..05, all DX-*.
+
+### Architectural notes
+
+- **Kinematic plug proxy via USD hierarchy** (`extension.py::_attach_cable_to_gripper_impl`)
+  bypasses PhysX articulation cook crashes on cross-articulation closed-loop joints.
+  sc_plug_visual remains decorative in the cable subtree; a sphere collider as a child
+  of `gripper_hande_finger_link_l` extends the finger's collision shape and tracks the
+  gripper pose via USD transform composition. No joint, no callback, no articulation
+  entanglement.
+- **Path Y port colliders** authored under each NIC card mount (sfp_port_0/1) at the
+  exact `anchor_target_offsets.yaml` translations so published port TF and physical
+  port collider coincide — closes the 13cm residual gap that pfrac=1.0 frame-only
+  alignment was hiding.
+- **change_target_mode service stub** in `controller_loop.py` unwedges aic_model's
+  worker thread (was the root cause of the apparent ~1.6Hz CheatCode policy tick rate).
+- **Frame namespace mirror**: `/scoring/insertion_event` payload formatted as
+  `<target_module>/<port_name>` per `ScoringTier2.cc:825-855` tokenizer (was emitting
+  bare USD basename).
+
+### Out of scope (deferred to M2)
+
+- Real cable physics (rope bend dynamics during motion) — M1 contract per
+  `out_of_scope_for_m1`. USD per-link MassAPI authoring is preserved on disk
+  (`SCENE_05_ENABLE_FOR_M2=1` env unlocks).
+- wrist-cameras-restore — 3 wrist Camera prims under unified robot Xforms.
+
 ## [Phase 1: Foundation Parity] — 2026-05-02
 
 Milestone 1 (M1) toward platform-transfer parity with the AIC competition Gazebo
