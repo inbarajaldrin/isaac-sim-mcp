@@ -4015,13 +4015,53 @@ class DigitalTwin(omni.ext.IExt):
     _SC_PORT_ANCHOR_Y_BY_INDEX = (0.0295, 0.0705)
     _SC_PORT_RPY_OFFSET_RAD = (1.57, 0.0, 1.57)
 
+    def _apply_meters_per_unit_scale(self, xform, usd_uri: str, stage) -> float:
+        """Author a TypeScale op on xform that compensates for unit-mismatch
+        between the referenced asset and the parent stage.
+
+        OPT-IN per asset — not auto-called from _spawn_component_via_usd.
+        Reason: some AIC-shipped USDs declare metersPerUnit=0.01 BUT also bake
+        an internal Xform scale=0.001 (or similar) into their asset hierarchy
+        as compensation. Adding an external scale on top of that internal
+        compensation double-applies and shrinks geometry 100x. The cases that
+        DO need this helper are assets where the asset USD has no internal
+        unit compensation — e.g. nic_card_visual.usd whose meshes' raw vertex
+        coordinates are CAD-millimeter-scale (12.1 etc.) and need to be
+        treated as cm before entering a m-stage.
+
+        How to determine if an asset needs this:
+          1. Reference the asset with no scale op
+          2. Run `scene_divergence.py` — section 2 will compare live AABB to
+             Gazebo GLB raw AABB. If they're 100x apart (or 1000x), this
+             helper is the fix. If they match within ~10%, the asset has
+             internal compensation and this helper would BREAK it.
+
+        Returns the scale ratio applied (1.0 = no scale added)."""
+        stage_mpu = UsdGeom.GetStageMetersPerUnit(stage) or 1.0
+        # Strip file:// prefix if present (omni.client URI form)
+        asset_fs_path = usd_uri.replace("file://", "")
+        asset_mpu = 1.0
+        try:
+            asset_stage = Usd.Stage.Open(asset_fs_path)
+            if asset_stage:
+                asset_mpu = UsdGeom.GetStageMetersPerUnit(asset_stage) or 1.0
+        except Exception:
+            pass  # If we can't open the asset, assume no scale needed
+        scale_ratio = asset_mpu / stage_mpu
+        if abs(scale_ratio - 1.0) > 1e-9:
+            xform.AddScaleOp().Set(Gf.Vec3f(scale_ratio, scale_ratio, scale_ratio))
+            print(f"[AIC-DT][mpu] auto-scale {scale_ratio:.6f} applied to {xform.GetPath()} "
+                  f"(asset_mpu={asset_mpu}, stage_mpu={stage_mpu}, source={asset_fs_path})")
+        return scale_ratio
+
     def _spawn_component_via_usd(self, prim_path: str, usd_relpath: str,
                                   position, rpy) -> Dict[str, Any]:
         """Helper: idempotently spawn a USD-referenced prim at prim_path.
 
         Returns a Dict suitable for an MCP atom result. The pose application
         uses UsdGeom.Xformable.AddTranslateOp + AddRotateXYZOp (intrinsic
-        XYZ Euler matching Gazebo's -R -P -Y semantics).
+        XYZ Euler matching Gazebo's -R -P -Y semantics). After translate+rotate
+        a metersPerUnit auto-scale is applied (see _apply_meters_per_unit_scale).
         """
         try:
             stage = omni.usd.get_context().get_stage()
@@ -4061,6 +4101,15 @@ class DigitalTwin(omni.ext.IExt):
                 _math.degrees(float(rpy[1])),
                 _math.degrees(float(rpy[2])),
             ))
+            # metersPerUnit auto-scale REMOVED 2026-05-12: see _apply_meters_per_unit_scale
+            # comment. Some AIC-shipped USDs declare mpu=0.01 BUT also bake a
+            # compensating internal Xform scale (e.g. LCMountRail with internal
+            # scale=0.001), so auto-applying an external scale double-applies
+            # and shrinks the asset 100x. The helper remains available for
+            # explicit per-asset use in spawn handlers when the asset is known
+            # to NOT have internal compensation (e.g. nic_card_visual.usd in
+            # _cmd_spawn_nic_card_mount). Use scene_divergence.py to flag
+            # remaining mpu-related divergences for per-asset review.
             # taskboard-prim-authoring (audit finding #6): explicitly mark any
             # RigidBodyAPI descendant kinematic_enabled=True. The on-disk
             # task_board_rigid.usd / sc_port.usd / nic_card.usd carry RigidBodyAPI
@@ -4303,21 +4352,16 @@ class DigitalTwin(omni.ext.IExt):
             card_xform = UsdGeom.Xform.Define(stage, Sdf.Path(card_path))
             card_xform.AddTranslateOp().Set(Gf.Vec3d(-0.002, -0.01785, 0.0899))
             card_xform.AddRotateXYZOp().Set(Gf.Vec3f(_m.degrees(-1.57), 0.0, 0.0))
-            # nic-card-visual-scale 2026-05-12: the AIC-shipped nic_card_visual.usd
-            # has mesh vertex coordinates 100x too big — extent reports 12.1m x
-            # 15.9m x 2.1m for a NIC card that should be ~12cm x 14.5cm x 5.8cm
-            # (verified by parsing the corresponding aic_assets nic_card_visual.glb
-            # which has correct meter-unit vertices). Without this scale fix the
-            # PCB renders as a 16-meter billboard around the workspace, which RTX
-            # face-culls invisible because the camera sits inside the mesh —
-            # producing the "I can't see the NIC card" symptom even though the
-            # asset is composed at the right pose. Scale=0.01 brings vertex
-            # coordinates down by the empirically-measured 100x factor.
-            card_xform.AddScaleOp().Set(Gf.Vec3f(0.01, 0.01, 0.01))
             try:
                 card_uri = _local_asset("assets/NIC Card Mount/nic_card_visual.usd")
                 card_xform.GetPrim().GetReferences().AddReference(card_uri)
-                print(f"[AIC-DT] NIC card PCB composed at {card_path} (Gazebo SDF pose) with 0.01x scale fix")
+                # Apply metersPerUnit auto-scale (same architectural fix as
+                # _spawn_component_via_usd). The asset declares mpu=0.01
+                # (centimeters) — the helper reads that and authors the right
+                # scale so the PCB renders at its true ~12cm size instead of
+                # being 100x too big from the m-stage's raw-vertex interpretation.
+                self._apply_meters_per_unit_scale(card_xform, card_uri, stage)
+                print(f"[AIC-DT] NIC card PCB composed at {card_path} (Gazebo SDF pose)")
             except FileNotFoundError as e:
                 print(f"[AIC-DT] NIC PCB asset not vendored: {e}")
         except Exception as exc:
