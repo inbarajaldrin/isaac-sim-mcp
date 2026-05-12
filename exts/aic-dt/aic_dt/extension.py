@@ -1602,6 +1602,28 @@ class DigitalTwin(omni.ext.IExt):
         except Exception as exc:
             print(f"[AIC-DT] plug_proxy authoring failed: {exc!r}")
 
+        # orphan-finger_r-fixedjoint-cleanup 2026-05-12: the upstream
+        # aic_unified_robot_cable_sdf.usd ships with a pre-authored FixedJoint at
+        # /World/UR5e/aic_unified_robot/gripper_hande_finger_link_r/FixedJoint
+        # whose body0 rel targets /World/UR5e/cable/sfp_module_visual. At asset
+        # cook time the cable subtree isn't fully resolved yet (load order), so
+        # PhysX emits:
+        #   [Error] [omni.physicsschema.plugin] Joint (.../finger_link_r/FixedJoint)
+        #     body relationship /World/UR5e/cable/sfp_module_visual points to a
+        #     non existent prim, joint will not be created.
+        # The USD prim survives as a phantom (PhysX never bound it), generating
+        # log noise on every load. Cleanup is safe: PhysX already dropped the
+        # constraint at cook; removing the USD prim just stops the duplicate
+        # error spam on each subsequent load_trial.
+        try:
+            r_finger_joint = f"/World/UR5e/aic_unified_robot/gripper_hande_finger_link_r/FixedJoint"
+            orphan = stage.GetPrimAtPath(r_finger_joint)
+            if orphan and orphan.IsValid():
+                stage.RemovePrim(r_finger_joint)
+                print(f"[AIC-DT] orphan-finger_r-fixedjoint-cleanup: removed phantom {r_finger_joint}")
+        except Exception as exc:
+            print(f"[AIC-DT] orphan-finger_r-fixedjoint-cleanup failed: {exc!r}")
+
         # Note: gripper_initial_pos applies to the gripper drive joint (NOT this
         # FixedJoint). The Hand-E finger joint is a FixedJoint zero-DOF in our
         # USD per D-09; gripper opening is via /gripper_command (String) elsewhere.
@@ -4262,6 +4284,44 @@ class DigitalTwin(omni.ext.IExt):
                 print(f"[AIC-DT] Path Y: authored {port_path} at NIC-relative ({px:.4f},{py:.4f},{pz:.4f}) with 12mm sphere collider")
         except Exception as exc:
             print(f"[AIC-DT] Path Y port-collider authoring failed: {exc!r}")
+
+        # nic-card-visual-compose 2026-05-12: the upstream nic_card_mount_visual.usd
+        # ships from the AIC organizers as ONLY a single ISO 4762 M2x8 screw mesh —
+        # no mount body, no PCB. The actual NIC card PCB is a separate Gazebo SDF
+        # link (`nic_card_link`) at local pose (-0.002, -0.01785, 0.0899, RPY=-1.57,0,0)
+        # under nic_card_mount_link, referencing nic_card_visual.glb (21MB; converted
+        # to nic_card_visual.usd 1.5MB / 45 meshes / 33K vertices — works fine).
+        # Without composing this child here, load_trial spawns only the M2 screw
+        # and the user sees no NIC card on the mount rail. Gazebo SDF reference:
+        # ~/Documents/aic/aic_assets/models/NIC Card Mount/model.sdf
+        try:
+            import math as _m
+            card_path = f"{prim_path}/nic_card_link"
+            existing_card = stage.GetPrimAtPath(card_path)
+            if existing_card and existing_card.IsValid():
+                stage.RemovePrim(card_path)
+            card_xform = UsdGeom.Xform.Define(stage, Sdf.Path(card_path))
+            card_xform.AddTranslateOp().Set(Gf.Vec3d(-0.002, -0.01785, 0.0899))
+            card_xform.AddRotateXYZOp().Set(Gf.Vec3f(_m.degrees(-1.57), 0.0, 0.0))
+            # nic-card-visual-scale 2026-05-12: the AIC-shipped nic_card_visual.usd
+            # has mesh vertex coordinates 100x too big — extent reports 12.1m x
+            # 15.9m x 2.1m for a NIC card that should be ~12cm x 14.5cm x 5.8cm
+            # (verified by parsing the corresponding aic_assets nic_card_visual.glb
+            # which has correct meter-unit vertices). Without this scale fix the
+            # PCB renders as a 16-meter billboard around the workspace, which RTX
+            # face-culls invisible because the camera sits inside the mesh —
+            # producing the "I can't see the NIC card" symptom even though the
+            # asset is composed at the right pose. Scale=0.01 brings vertex
+            # coordinates down by the empirically-measured 100x factor.
+            card_xform.AddScaleOp().Set(Gf.Vec3f(0.01, 0.01, 0.01))
+            try:
+                card_uri = _local_asset("assets/NIC Card Mount/nic_card_visual.usd")
+                card_xform.GetPrim().GetReferences().AddReference(card_uri)
+                print(f"[AIC-DT] NIC card PCB composed at {card_path} (Gazebo SDF pose) with 0.01x scale fix")
+            except FileNotFoundError as e:
+                print(f"[AIC-DT] NIC PCB asset not vendored: {e}")
+        except Exception as exc:
+            print(f"[AIC-DT] NIC card PCB compose failed: {exc!r}")
 
         return result
 
