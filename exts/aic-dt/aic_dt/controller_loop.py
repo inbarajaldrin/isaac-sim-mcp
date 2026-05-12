@@ -232,6 +232,9 @@ class AicControllerLoop:
         # Publishers (Plans 02-05/02-06 wire publication)
         self._ctrl_state_pub = None
         self._contacts_pub = None
+        # Services (motion-fidelity-cheatcode-timing fix: serve the
+        # /aic_controller/change_target_mode RPC that aic_model wedges on)
+        self._change_target_mode_srv = None
         # Physics
         self._physx_sub = None
         self._articulation = None
@@ -264,6 +267,24 @@ class AicControllerLoop:
         """Allow per-call atom override of the off-limit prim filter (Plan 02-06)."""
         self._off_limit_prims = set(prim_paths or [])
 
+    def _on_change_target_mode_request(self, request, response):
+        """Handle /aic_controller/change_target_mode RPC.
+
+        aic_model.handle_motion_update calls this synchronously before every
+        motion_update publish; without a server the action thread wedges on
+        client.call() and CheatCode never advances past its first pose
+        target. Accepting any valid mode is correct here because
+        _apply_joint_cmd / _apply_pose_cmd already dispatch on message type
+        rather than a runtime mode switch.
+        """
+        mode = int(request.target_mode.mode)
+        if mode in (TARGET_MODE_CARTESIAN, TARGET_MODE_JOINT, TARGET_MODE_UNSPECIFIED):
+            self._last_target_mode = mode
+            response.success = True
+        else:
+            response.success = False
+        return response
+
     # ------------------------------------------------------------------ #
     # Lifecycle
     # ------------------------------------------------------------------ #
@@ -281,6 +302,7 @@ class AicControllerLoop:
             from aic_control_interfaces.msg import (
                 JointMotionUpdate, MotionUpdate, ControllerState,
             )
+            from aic_control_interfaces.srv import ChangeTargetMode
             from ros_gz_interfaces.msg import Contacts
         except ImportError as exc:
             print(f"[AIC-DT][controller] rclpy/aic_control_interfaces import failed: {exc!r}")
@@ -331,6 +353,22 @@ class AicControllerLoop:
             Contacts, "/aic/gazebo/contacts/off_limit", cmd_qos,
         )
 
+        # /aic_controller/change_target_mode service stub. aic_model.handle_motion_update
+        # synchronously calls this service before every motion_update publish (see
+        # ~/Documents/aic/aic_model/aic_model/aic_model.py:230). The real
+        # aic_controller (~/Documents/aic/aic_controller/src/aic_controller.cpp:327)
+        # exposes "~/change_target_mode" which resolves to /aic_controller/change_target_mode
+        # under its lifecycle namespace. Without this stub the client.call() blocks
+        # forever and the CheatCode action thread wedges at the first set_pose_target.
+        # We accept any request, update _last_target_mode so /aic_controller/controller_state
+        # reflects truth, and respond success=True. No PD-mode switching is required —
+        # aic_dt_controller_loop applies whichever message type (pose / joint) arrives.
+        self._change_target_mode_srv = self._node.create_service(
+            ChangeTargetMode,
+            "/aic_controller/change_target_mode",
+            self._on_change_target_mode_request,
+        )
+
         # Articulation handle (Pitfall 9: append /root_joint to the Xform path).
         # Do NOT call .initialize() here — it must run AFTER the first physics
         # tick or _physics_view never gets populated and every set_*/get_*/
@@ -379,7 +417,8 @@ class AicControllerLoop:
 
         print("[AIC-DT][controller] AicControllerLoop started "
               "(subs: /aic_controller/joint_commands + /aic_controller/pose_commands; "
-              "pubs: /aic_controller/controller_state + /aic/gazebo/contacts/off_limit)")
+              "pubs: /aic_controller/controller_state + /aic/gazebo/contacts/off_limit; "
+              "srvs: /aic_controller/change_target_mode)")
         return True
 
     def stop(self):
@@ -404,6 +443,8 @@ class AicControllerLoop:
                     self._node.destroy_publisher(self._ctrl_state_pub)
                 if self._contacts_pub is not None:
                     self._node.destroy_publisher(self._contacts_pub)
+                if getattr(self, "_change_target_mode_srv", None) is not None:
+                    self._node.destroy_service(self._change_target_mode_srv)
                 self._node.destroy_node()
             except Exception as exc:
                 print(f"[AIC-DT][controller] stop() teardown error: {exc!r}")
@@ -413,6 +454,7 @@ class AicControllerLoop:
         self._pose_cmd_sub = None
         self._ctrl_state_pub = None
         self._contacts_pub = None
+        self._change_target_mode_srv = None
         self._articulation = None
         self._kinematics = None
         self._tool0_to_tcp_offset_xform = None

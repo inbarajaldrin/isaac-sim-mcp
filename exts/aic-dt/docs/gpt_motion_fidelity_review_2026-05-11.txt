@@ -1,0 +1,56 @@
+**Diagnostic**
+
+`ISSUE A` is real, but your current framing undersells a more serious Isaac-side geometry lie.
+
+Gazebo does **not** publish a bare port basename. In [CablePlugin.cc](/home/aaugus11/Documents/aic/aic_gazebo/src/CablePlugin.cc:268), it captures the touch topic prefix with `this->touchEventCallbackNamespace = _info.Topic().substr(0, pos);`, and in [CablePlugin.cc](/home/aaugus11/Documents/aic/aic_gazebo/src/CablePlugin.cc:323) it publishes that exact string. For the NIC macro, the touch namespace is authored as `${prefix}/sfp_port_0` in [nic_card_mount_macro.xacro](/home/aaugus11/Documents/aic/aic_assets/models/NIC%20Card%20Mount/nic_card_mount_macro.xacro:15). So for `trial_1`, the scorer expects `nic_card_mount_0/sfp_port_0`, not `SCPort_0`, and not `..._link`.
+
+Your current Isaac publisher in [scoring_publishers.py](/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/scoring_publishers.py:618) strips the USD path down to a single basename and publishes that in [scoring_publishers.py](/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/scoring_publishers.py:579). That is wrong.
+
+But the bigger problem is `ISSUE B` is probably not “rope physics maybe swings a little.” You are feeding CheatCode an approximated plug frame and likely an approximated target frame. In [_compute_trial_tf_frames](/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py:3254), you explicitly publish the plug as a zero-offset child of `gripper/tcp`; in [_attach_cable_to_gripper_impl](/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py:1438), you actually fixed-joint `link_20`, not the scored contact body, and your own comments say `sc_plug_visual` is still about 33 mm away. That is enough to fail a ship gate. “CheatCode completed” only proves the synthetic TF contract was satisfied, not that the physical plug tip reached the physical port.
+
+Also, the tier-2 distance log is **not** a red herring. The scorer will use insertion-event data if present, but it still separately computes/report distance-based outcomes. The fact you saw both means:
+- the engine **did** read an insertion event, and it was malformed, and
+- the physical plug still was not within the target radius.
+
+So A is not sufficient, and B is not speculative.
+
+**Direct answers**
+
+1. `ISSUE A` fix direction is correct, but your proposed payload example needs to mirror Gazebo exactly: `"<target_module_name>/<port_name>"`, e.g. `nic_card_mount_0/sfp_port_0` for `trial_1`. Evidence: [CablePlugin.cc](/home/aaugus11/Documents/aic/aic_gazebo/src/CablePlugin.cc:268), [CablePlugin.cc](/home/aaugus11/Documents/aic/aic_gazebo/src/CablePlugin.cc:323), [ScoringTier2.cc](/home/aaugus11/Documents/aic/aic_scoring/src/ScoringTier2.cc:825), and the authored touch namespace in [nic_card_mount_macro.xacro](/home/aaugus11/Documents/aic/aic_assets/models/NIC%20Card%20Mount/nic_card_mount_macro.xacro:15).
+
+2. “Cable physics makes the plug swing away from the gripper” is plausible, but that is not the sharpest formulation. The sharper failure mode is: you attached the gripper to `link_20`, while CheatCode is commanded against a fake plug frame at `gripper/tcp`, and scoring/contact often involves `sc_plug_visual`. That is a deterministic frame/attachment mismatch first, physics second.
+
+3. Path C is premature if you still have two batches. Relaxing M1 to “CheatCode completes” is the wrong success criterion because M1’s ship gate is explicitly `"Cable insertion successful"` in the engine log. If you take Path C now, you are declaring victory on the one thing the gate does not reward.
+
+4. The **one** diagnostic to run next is: a single end-of-trial pose delta capture for `trial_1` that samples, during the final descent and 5 s settle, the world poses of:
+- the published target frame `task_board/nic_card_mount_0/sfp_port_0_link`
+- the physical port body/collider
+- `gripper/tcp`
+- `link_20`
+- `sc_plug_visual`
+
+Then compute these distances over time:
+- `gripper/tcp -> physical plug`
+- published `plug_frame -> physical plug`
+- published `port_frame -> physical port`
+- physical plug -> physical port
+
+That one run will tell you whether the miss is:
+- bogus TF target,
+- bogus plug proxy,
+- attachment offset,
+- or genuine dynamic swing.
+
+Do that **before** writing code, because right now you do not know whether to fix scoring payload only, TF synthesis, or cable attachment geometry.
+
+**Ranked recommendations**
+
+1. Run the pose-delta diagnostic first. This is the highest-value batch because it discriminates root cause instead of guessing.
+
+2. If the diagnostic shows the physical plug is offset from the published plug frame by centimeters, fix that before anything else. Right now the fake plug frame in [extension.py](/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py:3355) is a likely self-own.
+
+3. Fix `ISSUE A` immediately after, but mirror Gazebo exactly: publish `target_module_name/port_name`, not a USD basename and not a link name.
+
+4. Do not spend a batch tuning rope stiffness or damping. Cross-repo policy already makes that a cheat, and the evidence so far points harder at frame/attachment mismatch than at unstable dynamics.
+
+5. Keep Path C as the last-resort Friday fallback only if the pose-delta diagnostic proves geometry is deeply broken and you cannot land a sim-side fix in one remaining batch. Right now Path C is an escape from the wrong problem.

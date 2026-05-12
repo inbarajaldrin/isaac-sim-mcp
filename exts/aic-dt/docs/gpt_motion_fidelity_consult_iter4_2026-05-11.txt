@@ -1,0 +1,154 @@
+<answer1>
+Verdict: Not a fundamental “PhysX cannot weld a rope end to a gripper” limit; the dominant issue is articulation topology/lifecycle, with loop-joint configuration as the missing setting.
+
+Confidence: High
+
+Reasoning: PhysX explicitly allows rigid-body joints on articulation links to close loops, so a `FixedJoint` between a gripper link and `link_20` is not inherently unsupported. But the same PhysX docs also say articulation topology cannot be changed after the articulation is already in the scene; adding/removing joints requires remove-and-readd of the articulation, which matches your symptom that USD attrs changed while runtime bodies stayed ~1 m apart. Isaac Sim’s closed-loop guidance adds the second missing piece: articulations must remain trees, and the loop-closing joint should be marked `Exclude from Articulation`, which makes it a maximal-coordinate joint; those joints are solved at lower priority and are the ones that accumulate error. `JointBreakForce` is unlikely to be the blocker because PhysX defaults joints to effectively unbreakable unless you authored finite thresholds. The rope D6 drives and absurdly small cable-link masses can hurt convergence, but they do not explain a persistent 1 m separation after you authored coincident frames nearly as well as “topology changed after cook / joint not excluded from articulation.”
+</answer1>
+
+<answer2>
+Recommended path: (e): hybrid rigid-plug proxy. Keep the rope decorative or secondary, and introduce a kinematic rigid plug body used for scoring, driven from the gripper every physics step; pair that with the deferred synthetic port collider work when you need `insertion_event_fired=true`.
+
+Ranking by all 3 criteria.
+1. `(e)` Hybrid rigid-plug proxy: highest unblock likelihood, medium complexity, low-to-medium architectural disruption.
+2. `(a)` Make `sc_plug_visual` itself kinematic and drive it from the gripper: nearly the same unblock likelihood as `(e)`, lowest implementation cost, but slightly more disruptive to the existing asset because it repurposes the real plug body instead of introducing a dedicated scoring proxy.
+3. `(b)` Stop timeline, rebuild pose/joint, restart: medium unblock likelihood, medium complexity, medium-to-high disruption. It addresses the topology/cook issue, but you still need the loop joint excluded from articulation and you still inherit rope-chain solver error.
+4. `(d)` Slacken rope joints and give sane mass: low-to-medium unblock likelihood, medium complexity, low code disruption. This is the right physics cleanup for M2 fidelity, but it is the wrong bet for an M1 ship gate because it does not solve the topology-change problem and may worsen insertion precision.
+5. `(c)` Reparent `link_20` under the finger in USD: medium unblock likelihood, highest complexity, highest disruption. It is cleaner than fighting a live loop, but it is too invasive for an M1 unblock.
+
+Why `(e)` over `(a)`: `(a)` will probably work, but `(e)` isolates scoring from the rope asset and avoids rewriting the cable’s physics identity. For M1, the practical move is to stop asking PhysX to converge a mid-authored closed loop inside a unified articulation.
+</answer2>
+
+<answer3>
+Probe snippet:
+```python
+import json
+import math
+import omni.usd
+import omni.timeline
+from pxr import UsdGeom, UsdPhysics, PhysxSchema, Gf
+
+stage = omni.usd.get_context().get_stage()
+
+JOINT_PATH = "/World/UR5e/aic_unified_robot/gripper_hande_finger_link_l/CableAttachJoint"
+BODY0_PATH = "/World/UR5e/aic_unified_robot/gripper_hande_finger_link_l"
+BODY1_PATH = "/World/UR5e/cable/Rope/Rope/link_20"
+
+def prim(path):
+    p = stage.GetPrimAtPath(path)
+    return p if p and p.IsValid() else None
+
+def world_pos(p):
+    if not p:
+        return None
+    m = UsdGeom.Xformable(p).ComputeLocalToWorldTransform(0.0)
+    t = m.ExtractTranslation()
+    return [float(t[0]), float(t[1]), float(t[2])]
+
+def add_vec(a, b):
+    return [float(a[i] + b[i]) for i in range(3)]
+
+def mat_transform_point(p, local_xyz):
+    m = UsdGeom.Xformable(p).ComputeLocalToWorldTransform(0.0)
+    v = m.Transform(Gf.Vec3d(*local_xyz))
+    return [float(v[0]), float(v[1]), float(v[2])]
+
+def norm(a, b):
+    return math.sqrt(sum((a[i] - b[i]) ** 2 for i in range(3)))
+
+def articulation_root_path(p):
+    cur = p
+    while cur and cur.IsValid():
+        if cur.HasAPI(UsdPhysics.ArticulationRootAPI) or cur.HasAPI(PhysxSchema.PhysxArticulationAPI):
+            return str(cur.GetPath())
+        cur = cur.GetParent()
+    return None
+
+def authored_attr(prim_obj, names):
+    for name in names:
+        attr = prim_obj.GetAttribute(name)
+        if attr and attr.IsValid():
+            return {"name": name, "authored": attr.HasAuthoredValue(), "value": attr.Get()}
+    return None
+
+joint_prim = prim(JOINT_PATH)
+body0_prim = prim(BODY0_PATH)
+body1_prim = prim(BODY1_PATH)
+
+data = {
+    "timeline_playing": bool(omni.timeline.get_timeline_interface().is_playing()),
+    "joint_exists": bool(joint_prim),
+    "joint_path": JOINT_PATH,
+    "body0_path": BODY0_PATH,
+    "body1_path": BODY1_PATH,
+}
+
+if joint_prim:
+    fixed = UsdPhysics.FixedJoint(joint_prim)
+    local_pos0 = fixed.GetLocalPos0Attr().Get()
+    local_pos1 = fixed.GetLocalPos1Attr().Get()
+    local_rot0 = fixed.GetLocalRot0Attr().Get()
+    local_rot1 = fixed.GetLocalRot1Attr().Get()
+
+    lp0 = [float(local_pos0[0]), float(local_pos0[1]), float(local_pos0[2])] if local_pos0 else None
+    lp1 = [float(local_pos1[0]), float(local_pos1[1]), float(local_pos1[2])] if local_pos1 else None
+
+    body0_world = world_pos(body0_prim)
+    body1_world = world_pos(body1_prim)
+    anchor0_world = mat_transform_point(body0_prim, lp0 or [0.0, 0.0, 0.0]) if body0_prim else None
+    anchor1_world = mat_transform_point(body1_prim, lp1 or [0.0, 0.0, 0.0]) if body1_prim else None
+
+    data.update({
+        "joint_body0_targets": [str(x) for x in fixed.GetBody0Rel().GetTargets()],
+        "joint_body1_targets": [str(x) for x in fixed.GetBody1Rel().GetTargets()],
+        "localPos0": lp0,
+        "localPos1": lp1,
+        "localRot0": list(local_rot0) if local_rot0 else None,
+        "localRot1": list(local_rot1) if local_rot1 else None,
+        "joint_enabled": authored_attr(joint_prim, ["physics:jointEnabled", "jointEnabled"]),
+        "exclude_from_articulation": authored_attr(
+            joint_prim,
+            ["physics:excludeFromArticulation", "excludeFromArticulation", "physxJoint:excludeFromArticulation"],
+        ),
+        "break_force": authored_attr(
+            joint_prim,
+            ["physics:breakForce", "breakForce", "physics:breakTorque", "breakTorque"],
+        ),
+        "joint_authored_attrs_with_keywords": sorted(
+            a.GetName() for a in joint_prim.GetAuthoredAttributes()
+            if any(k in a.GetName().lower() for k in ["exclude", "break", "localpos", "localrot"])
+        ),
+        "body0_world": body0_world,
+        "body1_world": body1_world,
+        "body_origin_error_m": norm(body0_world, body1_world) if body0_world and body1_world else None,
+        "anchor0_world": anchor0_world,
+        "anchor1_world": anchor1_world,
+        "anchor_error_m": norm(anchor0_world, anchor1_world) if anchor0_world and anchor1_world else None,
+        "body0_articulation_root": articulation_root_path(body0_prim) if body0_prim else None,
+        "body1_articulation_root": articulation_root_path(body1_prim) if body1_prim else None,
+        "same_articulation_root": (
+            articulation_root_path(body0_prim) == articulation_root_path(body1_prim)
+            if body0_prim and body1_prim else None
+        ),
+    })
+
+    try:
+        from usd.schema.isaac import robot_schema
+        data["robot_schema_body0_rel"] = robot_schema.utils.GetJointBodyRelationship(joint_prim, 0)
+        data["robot_schema_body1_rel"] = robot_schema.utils.GetJointBodyRelationship(joint_prim, 1)
+    except Exception as exc:
+        data["robot_schema_probe_error"] = repr(exc)
+
+result = json.dumps(data, indent=2, sort_keys=True, default=str)
+```
+
+Interpretation guide:
+- `same_articulation_root=true` and `exclude_from_articulation` missing/false: this is the strongest signal that the attach joint is being treated as an internal loop candidate instead of an excluded maximal-coordinate loop joint. That points to loop configuration, not break force.
+- `anchor_error_m` or `body_origin_error_m` stays ~1.0 while `localPos0/1` are zero: the authored USD constraint is not the runtime constraint state. That points to “joint added after articulation cook / topology not rebuilt.”
+- `break_force` absent or unbounded: breakage is not the reason.
+- `robot_schema_body0_rel/body1_rel` come back `None`: the joint is excluded from articulation from Isaac’s parser point of view. If that happens and the error is still ~1 m, the remaining culprit is lifecycle/rebuild, not the missing exclude flag.
+- If you later rerun this after rebuilding the articulation and see `anchor_error_m` collapse near zero immediately, you confirmed the core problem was topology propagation, not rope stiffness.
+
+</answer3>
+
+Sources: [PhysX Articulations](https://nvidia-omniverse.github.io/PhysX/physx/5.5.0/docs/Articulations.html), [PhysX Joints](https://nvidia-omniverse.github.io/PhysX/physx/5.4.0/docs/Joints.html), [Isaac Sim Closed-Loop Tutorial](https://docs.robotsfan.com/isaacsim/5.0.0/robot_setup_tutorials/rig_closed_loop_structures.html), [Isaac Sim Robot Schema](https://docs.robotsfan.com/isaacsim/latest/omniverse_usd/robot_schema.html), [Isaac Sim Surface Gripper](https://docs.robotsfan.com/isaacsim/latest/robot_simulation/ext_isaacsim_robot_surface_gripper.html)

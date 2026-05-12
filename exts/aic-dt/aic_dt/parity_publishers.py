@@ -519,8 +519,9 @@ class AicParityPublishers:
         if not parent_leaf or not child_leaf:
             return None
 
-        parent_prim = self._stage.GetPrimAtPath(f"{self._robot_xform_path}/{parent_leaf}")
-        child_prim = self._stage.GetPrimAtPath(f"{self._robot_xform_path}/{child_leaf}")
+        from isaacsim.core.utils.prims import get_prim_at_path as _get_prim
+        parent_prim = _get_prim(f"{self._robot_xform_path}/{parent_leaf}")
+        child_prim = _get_prim(f"{self._robot_xform_path}/{child_leaf}")
 
         parent_world = self._world_xform(parent_prim)
         child_world = self._world_xform(child_prim)

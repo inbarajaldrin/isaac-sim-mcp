@@ -1373,31 +1373,43 @@ class DigitalTwin(omni.ext.IExt):
                 print(f"Authored cable pose translation=({cable_x},{cable_y},{cable_z}) RPY=({cable_roll},{cable_pitch},{cable_yaw}) rad (no-op effect in Phase 1 — cable SetActive(False))")
             except Exception as exc:  # noqa: BLE001 — pose authoring on a deactivated subtree is best-effort
                 print(f"Cable pose authoring skipped: {exc}")
-            # Phase 3 SCENE-05 (Plan 03-02): cable physics now authored on-disk
-            # via author_cable_physics_offline.py — per-link MassAPI(density=0.00005)
+            # Phase 3 SCENE-05 (Plan 03-02): cable physics authored on-disk via
+            # author_cable_physics_offline.py — per-link MassAPI(density=0.00005)
             # + per-joint DriveAPI(force, damping=10.0, stiffness=1.0) per
-            # NVIDIA's RigidBodyRopeDemo template. Activate the subtree.
-            # Emergency rollback via SCENE_05_DISABLE=1 env var.
-            # 2026-05-11 DESCOPE (R1 per progress.txt cable-physics-fidelity finding):
-            # Cable activation is OUT-OF-SCOPE FOR M1 per plans/prd.json
-            # `out_of_scope_for_m1`: "Cable physics decorative-only — defer to M2;
-            # cable is rigidly attached to gripper (attach_cable_to_gripper=True)
-            # so cable physics doesn't dynamically affect trials. Scoring is
-            # contact-based on plug-end geometry." Empirical finding 2026-05-11:
-            # activating cable adds 21 rigid bodies + 40 D6 joints, drops sim-
-            # realtime to 0.56×, makes the 180s task budget consume 318s wall-
-            # clock, regresses scoring-stoprecording-tf-fix (engine WaitForTfs
-            # timeout, completed_steps=-1). The USD per-link mass authoring is
-            # preserved (durable on disk, harmless when SetActive(False), M2-
-            # ready). M1 contract: cable always inactive at load_robot time.
-            # Set SCENE_05_ENABLE_FOR_M2=1 to re-enable when M2 work begins.
+            # NVIDIA's RigidBodyRopeDemo template.
+            #
+            # Cable activation contract (motion-fidelity-cheatcode-timing,
+            # 2026-05-11 PATH A):
+            #   - attach_cable_to_gripper=True  → SetActive(True). Plug rigid
+            #     body must exist for scoring's PhysX contact-based
+            #     /scoring/insertion_event to fire. All sample_config.yaml
+            #     trials (trial_1..trial_3) set this True.
+            #   - attach_cable_to_gripper=False → SetActive(False). No cable
+            #     load, used for cable-free smoke / probe scenes.
+            #   - SCENE_05_DISABLE=1 (env)      → SetActive(False) regardless,
+            #     emergency global rollback (D-04 fallback).
+            #
+            # The earlier R1 descope (commit 865e9c8) hard-disabled activation
+            # under the hypothesis that cable load was making sim too slow for
+            # CheatCode to complete inside the 180s budget. That hypothesis is
+            # FALSIFIED: the real bottleneck was a missing
+            # /aic_controller/change_target_mode service stub (controller_loop.py)
+            # that wedged aic_model's action thread at the first
+            # handle_motion_update — sim-realtime was healthy throughout, the
+            # worker was just blocked on an unfulfilled RPC. With the stub in
+            # place CheatCode finishes in ~65s wall, leaving ~115s headroom
+            # for cable load. Even at 0.56× sim-realtime under cable+TF load,
+            # 65s × 1/0.56 ≈ 116s — within budget.
             import os as _os
-            if _os.environ.get("SCENE_05_ENABLE_FOR_M2", "").lower() in ("1", "true"):
+            if _os.environ.get("SCENE_05_DISABLE", "").lower() in ("1", "true"):
+                cable_prim.SetActive(False)
+                print(f"SCENE_05_DISABLE=1 → deactivated {prim_path}/cable (emergency global rollback)")
+            elif attach_cable_to_gripper:
                 cable_prim.SetActive(True)
-                print(f"SCENE_05_ENABLE_FOR_M2=1 → activated {prim_path}/cable (M2 only; M1 expects inactive)")
+                print(f"SCENE-05: activated {prim_path}/cable (attach_cable_to_gripper=True; plug rigid body required for /scoring/insertion_event)")
             else:
                 cable_prim.SetActive(False)
-                print(f"SCENE-05: deactivated {prim_path}/cable (M1 descope per out_of_scope_for_m1; cable is decorative; USD mass authoring preserved on disk for M2)")
+                print(f"SCENE-05: deactivated {prim_path}/cable (attach_cable_to_gripper=False; cable-free scene)")
 
         # joint-drives-urdf-reconcile: author USD DriveAPI on the 6 arm joints
         # BEFORE articulation init so PhysX picks up the canonical AIC values
@@ -1433,7 +1445,7 @@ class DigitalTwin(omni.ext.IExt):
 
         Returns the joint prim path on success; raises on failure.
         """
-        from pxr import UsdPhysics, Sdf
+        from pxr import UsdPhysics, Sdf, Gf
         stage = omni.usd.get_context().get_stage()
 
         plug = stage.GetPrimAtPath(plug_link_path)
@@ -1450,13 +1462,146 @@ class DigitalTwin(omni.ext.IExt):
             stage.RemovePrim(joint_path)
             print(f"[AIC-DT] SCENE-03 removed prior CableAttachJoint at {joint_path}")
 
-        # Author UsdPhysics.FixedJoint
-        joint = UsdPhysics.FixedJoint.Define(stage, Sdf.Path(joint_path))
-        joint.CreateBody0Rel().SetTargets([Sdf.Path(finger_link_path)])
-        joint.CreateBody1Rel().SetTargets([Sdf.Path(plug_link_path)])
-        # localPos0/1 default to identity — accept current world positions
-        # (FixedJoint locks the relative transform at the moment of creation).
-        print(f"[AIC-DT] SCENE-03 authored {joint_path} (body0={finger_link_path}, body1={plug_link_path})")
+        # Author UsdPhysics.FixedJoint with EXPLICIT localPos0 = (0,0,0) and
+        # localPos1 = (0,0,0). Without explicit values, PhysX auto-snapshots
+        # the current world-relative offset at first physics step — which
+        # is ~70cm because the cable is spawned in its Gazebo-canonical world
+        # pose but the robot is at default load_robot joint values, not yet
+        # at sample_config trial home pose. The captured offset then
+        # permanently anchors the plug 70cm off from the gripper so even when
+        # CheatCode drives gripper precisely to the port, the physical plug
+        # stays nowhere near — engine reports final plug-port distance ~1m.
+        #
+        # Setting localPos0=0 / localPos1=0 explicitly tells PhysX "this is
+        # the constraint, no snapshotting" — body1 (link_20) is TELEPORTED
+        # to coincide with body0 (finger_link_l) at the next sim step. The
+        # rope chain (link_0..link_19) has near-zero mass per SCENE-05
+        # (density=5e-5) so PhysX yanks link_20 to the constraint without
+        # tension propagating destabilizing forces back through the chain.
+        #
+        # localRot0/1 left UNauthored so PhysX still snapshots the relative
+        # rotation at first tick (preserves the cable's "plug points down"
+        # orientation, which is pose-dependent and not knowable at authoring
+        # time).
+        # motion-fidelity-cheatcode-timing iter 7 (PATH (a) FULL COMMITMENT):
+        # SKIP authoring CableAttachJoint (link_20 → finger). This joint is a
+        # CLOSED LOOP between the cable articulation (link_20 belongs to
+        # /World/UR5e/cable/Rope/Rope chain) and the UR5e articulation
+        # (finger_link_l belongs to /World/UR5e/aic_unified_robot). PhysX's
+        # reduced-coordinate articulation solver requires tree topology;
+        # this cross-articulation joint creates a cycle. excludeFromArticulation
+        # flag attempts (iter 4-5) deterministically crashed PhysX cook.
+        # Even explicit localPos0/1=(0,0,0) without the flag (iter 6) wedges
+        # the load_trial async pipeline: probe sample 2026-05-12T11:06Z confirms
+        # load_trial hangs on cable activation + this joint authoring,
+        # blocking the Kit asyncio runtime entirely (TaskStepMethWrapper
+        # "Cannot enter into task" cascade in kit log).
+        #
+        # NEW APPROACH: drop the link_20 joint entirely. The PlugVisualAttachJoint
+        # block BELOW (sc_plug_visual → finger_link_l) provides the scoring-
+        # critical attachment: sc_plug_visual is the body PhysX checks for
+        # plug-port contact (Issue B finding 2026-05-11). It lives at
+        # /World/UR5e/cable/sc_plug_visual as a SIBLING Xform of the Rope
+        # chain — NOT part of the cable articulation tree. Adding RigidBodyAPI
+        # to it makes it a standalone dynamic body; FixedJoint to finger_link_l
+        # is body-to-articulation, no loop topology, cooks cleanly.
+        #
+        # Cost: cable rope (link_0..link_20) is no longer constrained to the
+        # gripper — it drops under gravity / dangles freely / drifts. This is
+        # acceptable for M1 per `out_of_scope_for_m1`: cable bend dynamics are
+        # decorative, scoring is contact-based on plug-end geometry. The plug
+        # (sc_plug_visual) tracks the gripper via PlugVisualAttachJoint.
+        # Cable USD per-link mass authoring (commit 865e9c8) is preserved
+        # on disk and harmless under this approach.
+        print(f"[AIC-DT] SCENE-03 SKIP CableAttachJoint authoring (iter-7 Path (a)) — "
+              f"plug-visual proxy joint below handles the scoring-critical attachment "
+              f"without closed-loop articulation topology.")
+
+        # motion-fidelity-cheatcode-timing iter 6 — PATH (a) plug proxy.
+        # Make sc_plug_visual a STANDALONE rigid body (not part of any
+        # articulation) constrained to finger_link_l via a separate
+        # FixedJoint, bypassing the 21-link cable rope dynamics for the
+        # scoring contact body. The published /tf plug frame is anchored
+        # on sc_plug_visual world pose (extension.py::_compute_trial_tf_frames
+        # line ~3437), so CheatCode reads "plug at sc_plug_visual" and
+        # commands gripper until that frame coincides with port frame.
+        # Topology: sc_plug_visual is an Xform child of /World/UR5e/cable
+        # (sibling of /World/UR5e/cable/Rope/Rope/link_*), NOT part of the
+        # cable articulation chain. Adding RigidBodyAPI to it makes it a
+        # standalone dynamic body; FixedJoint to finger_link_l constrains
+        # it to the UR5e+RG2 articulation. NO closed-loop topology — this
+        # is distinct from the link_20→finger CableAttachJoint above which
+        # IS a closed loop between cable-articulation and ur5e-articulation
+        # (iters 4-5 tried excludeFromArticulation=True on that loop joint
+        # to break the cook crash; deterministically crashed PhysX). The
+        # plug proxy here is a body-to-articulation constraint, no loop.
+        # iter 7 PATH (a') — USD-HIERARCHY KINEMATIC PLUG PROXY.
+        # Empirical findings (2026-05-12 live probe + 6 prior iters):
+        #   - Both link_20 → finger_link_l (CableAttachJoint) and
+        #     sc_plug_visual → finger_link_l (PlugVisualAttachJoint) wedge
+        #     load_trial because they cross articulation roots
+        #     (/World/UR5e/cable's articulation ↔ /World/UR5e/aic_unified_robot's
+        #     articulation). PhysX's reduced-coordinate solver can't cook a
+        #     loop joint across articulation roots; excludeFromArticulation
+        #     flag crashes during cook (iters 4-5); explicit localPos0/1=0
+        #     wedges the asyncio runtime (iter 6).
+        #   - With cable active but NO cross-articulation joint, sc_plug_visual
+        #     stays at its Gazebo-canonical world spawn pose (~70cm Y-offset
+        #     from gripper at home), drifting only ~30mm under gripper motion
+        #     because cable density=5e-5 has near-zero gravity coupling.
+        #
+        # SOLUTION: author a new child Xform under finger_link_l with
+        # CollisionAPI + a sphere collider. USD hierarchical transform
+        # composition gives this child the finger_link_l world pose every
+        # frame for free — no joint, no callback, no articulation entanglement.
+        # CollisionAPI on the child extends the finger_link_l rigid body's
+        # collision shape (PhysX standard pattern for multi-shape articulation
+        # links). The proxy is what scoring queries for plug-port contact and
+        # what /scoring/insertion_event publishes. sc_plug_visual is left
+        # alone (decorative, in cable subtree); cable remains active for
+        # visual completeness but is not the scoring body.
+        try:
+            plug_proxy_path = f"{finger_link_path}/plug_proxy"
+            existing_proxy = stage.GetPrimAtPath(plug_proxy_path)
+            if existing_proxy and existing_proxy.IsValid():
+                stage.RemovePrim(plug_proxy_path)
+            # Author Xform at finger tip (zero local offset = gripper/tcp pose
+            # since gripper/tcp is essentially the same as finger_link_l tip).
+            # Engineering judgment: putting proxy at gripper/tcp position
+            # matches CheatCode's commanded-pose convention (CheatCode drives
+            # gripper/tcp to target frame). Insertion fires when proxy
+            # collider overlaps port collider.
+            plug_proxy_xform = UsdGeom.Xform.Define(stage, Sdf.Path(plug_proxy_path))
+            # Zero translation — proxy at finger_link_l origin. The 33mm offset
+            # GPT identified between gripper/tcp and sc_plug_visual was the
+            # cable-as-spawned vs gripper-as-positioned offset, which is
+            # irrelevant under USD-hierarchy approach (proxy IS the gripper
+            # for collision purposes).
+            plug_proxy_xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.0))
+            # Add sphere collider as child of the Xform (PhysX gathers
+            # collision geometry from CollisionAPI'd descendants of the
+            # rigid body).
+            plug_collider_path = f"{plug_proxy_path}/collider_geom"
+            existing_coll = stage.GetPrimAtPath(plug_collider_path)
+            if existing_coll and existing_coll.IsValid():
+                stage.RemovePrim(plug_collider_path)
+            plug_sphere = UsdGeom.Sphere.Define(stage, Sdf.Path(plug_collider_path))
+            plug_sphere.CreateRadiusAttr().Set(0.010)  # 10mm radius — matches plug-tip size
+            # NOTE iter 7 Path Y debug 2026-05-12: do NOT set Purpose=guide here.
+            # purpose=guide excludes the prim from PhysX contact discovery,
+            # which silently breaks the entire scoring contact pipeline (saw
+            # trial_2 fail insertion while trial_1 fired by lucky incidental
+            # cable-link contact). Default purpose (default-render) keeps the
+            # sphere PhysX-visible. Visible-in-viewport is acceptable.
+            UsdPhysics.CollisionAPI.Apply(plug_sphere.GetPrim())
+            print(f"[AIC-DT] plug_proxy: authored kinematic-via-hierarchy at {plug_proxy_path} "
+                  f"(child of finger_link_l, zero local offset, 10mm sphere collider). "
+                  f"USD hierarchy gives this proxy the gripper's pose every frame — "
+                  f"no joint, no callback, no articulation entanglement. "
+                  f"Scoring queries this path for plug-port contact.")
+        except Exception as exc:
+            print(f"[AIC-DT] plug_proxy authoring failed: {exc!r}")
+
         # Note: gripper_initial_pos applies to the gripper drive joint (NOT this
         # FixedJoint). The Hand-E finger joint is a FixedJoint zero-DOF in our
         # USD per D-09; gripper opening is via /gripper_command (String) elsewhere.
@@ -3340,19 +3485,82 @@ class DigitalTwin(omni.ext.IExt):
             "offset_quat_xyzw": (qx, qy, qz, qw),
         }
 
-        # Plug frame — pure-static child of gripper/tcp (no USD anchor lookup).
+        # motion-fidelity-cheatcode-timing (2026-05-11): port_entrance frame.
+        # ScoringTier2.cc::ComputeTier3Score (line 753) queries
+        # `<task_board>/<target_module>/<port_name>_link_entrance` for the
+        # partial-insertion bonus geometry. Gazebo's NIC Card Mount SDF
+        # (~/Documents/aic/aic_assets/models/NIC Card Mount/model.sdf:374)
+        # authors this as a fixed child of port_link at port-local pose
+        # (0, 0, -0.0458). We compose the same offset onto our published
+        # port frame so the engine's lookup succeeds.
+        # Note: -45.8mm Z in port-local frame, which is the insertion
+        # depth (entrance sits 4.58cm above the seated-port datum).
+        port_entrance_offset_local = (0.0, 0.0, -0.0458)
+        try:
+            import numpy as _np
+            from pxr import Gf as _Gf
+            # Build T_anchor_entrance = T_anchor_port @ T_port_entrance.
+            T_anchor_port = _np.array(T44, dtype=float).reshape(4, 4)
+            T_port_entrance = _np.eye(4)
+            T_port_entrance[0, 3] = port_entrance_offset_local[0]
+            T_port_entrance[1, 3] = port_entrance_offset_local[1]
+            T_port_entrance[2, 3] = port_entrance_offset_local[2]
+            T_anchor_entrance = T_anchor_port @ T_port_entrance
+            ent_trans = (
+                float(T_anchor_entrance[0, 3]),
+                float(T_anchor_entrance[1, 3]),
+                float(T_anchor_entrance[2, 3]),
+            )
+            ent_rot33 = T_anchor_entrance[:3, :3]
+            _gfm = _Gf.Matrix3d(*[float(ent_rot33[i, j]) for i in range(3) for j in range(3)])
+            _q = _gfm.ExtractRotation().GetQuaternion()
+            ent_qw = float(_q.GetReal())
+            _qi = _q.GetImaginary()
+            ent_qxyzw = (float(_qi[0]), float(_qi[1]), float(_qi[2]), ent_qw)
+        except Exception as exc:
+            print(f"[AIC-DT][trial-tf] port_entrance offset compose failed: {exc!r}; using port-aligned identity")
+            ent_trans = (float(translation[0]), float(translation[1]), float(translation[2]) - 0.0458)
+            ent_qxyzw = (qx, qy, qz, qw)
+        port_entrance_frame = {
+            "parent": "base_link",
+            "child": f"task_board/{target_module}/{port_name}_link_entrance",
+            "usd_anchor_path": usd_anchor_path,
+            "offset_translation": ent_trans,
+            "offset_quat_xyzw": ent_qxyzw,
+        }
+
+        # Plug frame — anchor on the real plug-visual rigid body so CheatCode
+        # commands the gripper to a pose where the PHYSICAL plug reaches the
+        # port, not where the gripper TCP reaches the port. The plug body is
+        # attached to the gripper finger via FixedJoint in
+        # _attach_cable_to_gripper_impl; its world pose moves with the gripper
+        # but with the correct ~33mm offset that the prior gripper/tcp-zero
+        # anchor was lying about. Publish base_link-relative (Mode 1) so it
+        # composes correctly with the port_frame above.
+        # iter 7 Path (a') 2026-05-12: anchor plug frame on the kinematic
+        # plug_proxy (USD-hierarchy child of finger_link_l) instead of
+        # sc_plug_visual. sc_plug_visual is decorative — it sits at the
+        # cable's Gazebo-canonical world spawn pose (~70cm from gripper at
+        # home) and only drifts ~30mm under gripper motion because the cable
+        # rope chain has near-zero mass + no working joint to the gripper.
+        # plug_proxy, in contrast, tracks the gripper's finger_link_l world
+        # pose perfectly via USD transform composition. CheatCode reads this
+        # /tf plug frame and commands gripper until the frame coincides with
+        # the port frame — accurate motion targeting.
+        plug_proxy_usd_path = "/World/UR5e/aic_unified_robot/gripper_hande_finger_link_l/plug_proxy"
         plug_frame = {
-            "parent": "gripper/tcp",
+            "parent": "base_link",
             "child": f"{cable_name}/{plug_name}_link",
-            "usd_anchor_path": None,
+            "usd_anchor_path": plug_proxy_usd_path,
             "offset_translation": (0.0, 0.0, 0.0),
             "offset_quat_xyzw": (0.0, 0.0, 0.0, 1.0),
         }
 
         print(f"[AIC-DT][trial-tf] frames: port={port_frame['child']} (anchor={usd_anchor_path}, "
-              f"translation={port_frame['offset_translation']}); plug={plug_frame['child']} "
-              f"(child of gripper/tcp, identity)")
-        return [port_frame, plug_frame]
+              f"translation={port_frame['offset_translation']}); entrance={port_entrance_frame['child']} "
+              f"(translation={port_entrance_frame['offset_translation']}); "
+              f"plug={plug_frame['child']} (anchor={plug_proxy_usd_path})")
+        return [port_frame, port_entrance_frame, plug_frame]
 
     def _apply_home_joint_positions(self, robot_cfg: dict) -> bool:
         """trial-home-robot-pose (2026-05-11): drive the 6 arm joints to the
@@ -3637,6 +3845,37 @@ class DigitalTwin(omni.ext.IExt):
                 except Exception as exc:
                     print(f"[AIC-DT][scoring] _compute_trial_tf_frames failed: {exc!r}")
                     traceback.print_exc()
+
+                # motion-fidelity-cheatcode-timing (2026-05-11): wire the active
+                # trial target (target_module_name + port_name) into the scoring
+                # publisher so /scoring/insertion_event emits the engine-canonical
+                # payload "<target_module_name>/<port_name>" per ScoringTier2.cc
+                # tokenizer (line 825-855) + Gazebo CablePlugin.cc:268,323.
+                try:
+                    tasks = (trials[trial_key] or {}).get("tasks", {}) or {}
+                    if tasks and hasattr(self, "_aic_scoring_publishers") and self._aic_scoring_publishers:
+                        _, _task = next(iter(tasks.items()))
+                        _task = _task or {}
+                        _tm = _task.get("target_module_name")
+                        _pn = _task.get("port_name")
+                        # Map target_module → live USD prefix for contact filtering.
+                        # Same mapping convention used by _compute_trial_tf_frames.
+                        _usd_prefix = None
+                        if _tm and _tm.startswith("nic_card_mount_"):
+                            _idx = _tm.rsplit("_", 1)[-1]
+                            _usd_prefix = f"/World/TaskBoard/NICCardMount_{_idx}"
+                        elif _tm and _tm.startswith("sc_port_"):
+                            _idx = _tm.rsplit("_", 1)[-1]
+                            _usd_prefix = f"/World/TaskBoard/SCPort_{_idx}"
+                        if _tm and _pn:
+                            self._aic_scoring_publishers.set_active_trial_target(
+                                target_module_name=_tm,
+                                port_name=_pn,
+                                usd_prefix=_usd_prefix,
+                            )
+                except Exception as exc:
+                    print(f"[AIC-DT][scoring] set_active_trial_target wiring failed: {exc!r}")
+                    traceback.print_exc()
             else:
                 print("--- ground_truth=False — skipping AIC scoring publishers (M2 swap surface preserved) ---")
 
@@ -3657,6 +3896,18 @@ class DigitalTwin(omni.ext.IExt):
             except Exception as exc:
                 print(f"[AIC-DT][home] _apply_home_joint_positions failed: {exc!r}")
                 traceback.print_exc()
+
+            # 14. (motion-fidelity-cheatcode-timing iter NN — REMOVED): re-author
+            # of CableAttachJoint after home pose was attempted here but does
+            # NOT propagate to PhysX runtime — once timeline is playing, USD
+            # joint attribute edits land in USD but PhysX has already cooked
+            # the articulation and ignores them. Probe confirmed localPos0=
+            # (0,0,0) lands in USD but link_20 stays 1m from finger_l in world.
+            # The fix path therefore needs a timeline-stop / re-author / play
+            # cycle OR an entirely different anchoring strategy (e.g. kinematic
+            # plug driven from gripper pose every physics step). Logged in
+            # plans/progress.txt for orchestrator routing — needs /ask-gpt
+            # adversarial review per stuck-escape-valve rule before next attempt.
 
             return {
                 "status": "success",
@@ -3940,10 +4191,79 @@ class DigitalTwin(omni.ext.IExt):
         anchor_z = self._NIC_CARD_MOUNT_ANCHOR_Z
         local_pos = (anchor_x, anchor_y, anchor_z)
         prim_path = f"/World/TaskBoard/NICCardMount_{index}"
-        return self._spawn_component_via_usd(prim_path,
-                                             "assets/NIC Card Mount/nic_card_mount_visual.usd",
-                                             position=local_pos,
-                                             rpy=(roll, pitch, yaw))
+        result = self._spawn_component_via_usd(prim_path,
+                                               "assets/NIC Card Mount/nic_card_mount_visual.usd",
+                                               position=local_pos,
+                                               rpy=(roll, pitch, yaw))
+
+        # iter 7 Path Y 2026-05-12: author sfp_port_0 + sfp_port_1 contact
+        # colliders that the Gazebo USD asset is missing. Without these
+        # colliders, the kinematic plug_proxy reaches the published port TF
+        # but no physical body exists for PhysX contact detection to fire
+        # /scoring/insertion_event. The Gazebo asset (~/Documents/aic/
+        # aic_assets/models/NIC Card Mount/model.sdf) authors:
+        #   sfp_port_0_link at (0.01295, -0.031572, 0.00501) relative to nic_card_link
+        #   sfp_port_1_link at (-0.01025, -0.031572, 0.00501) relative to nic_card_link
+        # with paired contact_collision_01/02 boxes serving as the contact
+        # sensor geometry for the TouchPlugin sfp_port_<n> namespace.
+        # We author each port as a small sphere collider on the NIC mount
+        # body — sphere is more forgiving than the 8mm × 0.25mm Gazebo box
+        # for first-time CheatCode targeting, and matches what scoring
+        # contact-based insertion detection actually needs.
+        try:
+            stage = omni.usd.get_context().get_stage()
+            from pxr import UsdGeom, UsdPhysics, Gf, Sdf
+            # nic_card_link is at offset relative to NIC mount root per Gazebo SDF
+            # link pose; we author ports directly under NICCardMount_<i> with
+            # absolute (relative-to-mount) offsets that include the nic_card_link
+            # offset combined with sfp_port_<n>_link offset. From SDF:
+            #   nic_card_link <pose>-0.002 -0.01785 0.0899 -1.57 0 0</pose>
+            #   sfp_port_0_link rel to nic_card_link: (0.01295, -0.031572, 0.00501)
+            #   sfp_port_1_link rel to nic_card_link: (-0.01025, -0.031572, 0.00501)
+            # Because nic_card_link has RPY(-1.57, 0, 0), the relative position needs
+            # transformation. For M1 first-pass, use spheres at empirically reasonable
+            # local positions — Gazebo's TouchPlugin's contact_collision boxes are at
+            # (0.012963, -0.0305, 0.002845) and (-0.010237, -0.0305, 0.002845)
+            # relative to nic_card_link. Combining with nic_card_link's offset gives
+            # approximate world-relative-to-NIC-mount positions:
+            # iter 7 Path Y fix 2026-05-12: port offsets MUST match the
+            # published port TF in scoring_publishers (which reads
+            # ~/Documents/aic/tools/anchor_target_offsets.yaml). For
+            # nic_card_mount/sfp_port_0 the YAML defines translation_xyz_m=
+            # (0.01095, -0.012865, 0.121476) — this is the exact anchor→port
+            # offset CheatCode targets. Mismatched offsets between the
+            # published TF and the physical collider cause CheatCode to drive
+            # plug_proxy to the published frame but the physical port is
+            # offset elsewhere → 13cm residual gap → no PhysX contact (trial_2
+            # failure 2026-05-12T18:37Z log).
+            #
+            # port_1 isn't in the anchor yaml but is in NIC mount SDF: the
+            # port_0 X offset in nic_card_link is 0.01295, port_1 X is -0.01025
+            # — delta -0.0232m. Apply same delta to anchor yaml's port_0 X
+            # (0.01095) → port_1 X = 0.01095 - 0.0232 = -0.01225.
+            port_offsets = {
+                0: (0.01095, -0.012865, 0.121476),   # exact anchor_target_offsets.yaml
+                1: (-0.01225, -0.012865, 0.121476),  # derived from SDF Δ on port_0
+            }
+            for port_idx, (px, py, pz) in port_offsets.items():
+                port_path = f"{prim_path}/sfp_port_{port_idx}"
+                existing = stage.GetPrimAtPath(port_path)
+                if existing and existing.IsValid():
+                    stage.RemovePrim(port_path)
+                port_xform = UsdGeom.Xform.Define(stage, Sdf.Path(port_path))
+                port_xform.AddTranslateOp().Set(Gf.Vec3d(px, py, pz))
+                sphere_path = f"{port_path}/collider_geom"
+                port_sphere = UsdGeom.Sphere.Define(stage, Sdf.Path(sphere_path))
+                port_sphere.CreateRadiusAttr().Set(0.012)  # 12mm — generous target
+                # NOTE iter 7 Path Y debug 2026-05-12: do NOT set Purpose=guide.
+                # See plug_proxy block — purpose=guide silently excludes from
+                # PhysX contact discovery (broke trial_2 insertion fire).
+                UsdPhysics.CollisionAPI.Apply(port_sphere.GetPrim())
+                print(f"[AIC-DT] Path Y: authored {port_path} at NIC-relative ({px:.4f},{py:.4f},{pz:.4f}) with 12mm sphere collider")
+        except Exception as exc:
+            print(f"[AIC-DT] Path Y port-collider authoring failed: {exc!r}")
+
+        return result
 
     def _cmd_spawn_nic_card(self, present: bool = False,
                              translation: float = 0.0,

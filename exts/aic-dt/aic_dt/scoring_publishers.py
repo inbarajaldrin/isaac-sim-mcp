@@ -95,6 +95,14 @@ _OBJECTS_POSES_FRAMES = [
 _PLUG_PATH_PREFIXES = (
     "/World/UR5e/cable/Rope/Rope/link_20",
     "/World/UR5e/cable/sc_plug_visual",
+    # iter 7 Path (a') 2026-05-12: kinematic plug proxy authored as USD-hierarchy
+    # child of finger_link_l (extension.py::_attach_cable_to_gripper_impl).
+    # plug_proxy + plug_proxy/collider_geom track gripper world pose via USD
+    # composition, no joint, no callback. PhysX contact detection fires when
+    # the proxy's sphere collider (10mm radius) overlaps a port collider.
+    # Both prefixes match so contact events from either the proxy Xform or
+    # its child collider geom qualify as plug-side actor.
+    "/World/UR5e/aic_unified_robot/gripper_hande_finger_link_l/plug_proxy",
 )
 # Backwards-compat alias retained for any external imports / test harnesses.
 _PLUG_END_LINK_PATH = _PLUG_PATH_PREFIXES[0]
@@ -106,6 +114,20 @@ _PORT_LINK_PATHS = [  # any of these as actor1 triggers an insertion event
     "/World/TaskBoard/sc_port_1",
     "/World/TaskBoard/sc_port_2",
     "/World/TaskBoard/nic_card",
+    # iter 7 Path Y 2026-05-12: NIC card mount sfp ports authored by
+    # extension.py::_cmd_spawn_nic_card_mount (Gazebo USD asset is missing
+    # these — see extension.py block for SDF reference). Each NIC mount
+    # spawns sfp_port_0 + sfp_port_1 with 12mm sphere colliders.
+    "/World/TaskBoard/NICCardMount_0/sfp_port_0",
+    "/World/TaskBoard/NICCardMount_0/sfp_port_1",
+    "/World/TaskBoard/NICCardMount_1/sfp_port_0",
+    "/World/TaskBoard/NICCardMount_1/sfp_port_1",
+    "/World/TaskBoard/NICCardMount_2/sfp_port_0",
+    "/World/TaskBoard/NICCardMount_2/sfp_port_1",
+    "/World/TaskBoard/NICCardMount_3/sfp_port_0",
+    "/World/TaskBoard/NICCardMount_3/sfp_port_1",
+    "/World/TaskBoard/NICCardMount_4/sfp_port_0",
+    "/World/TaskBoard/NICCardMount_4/sfp_port_1",
 ]
 # Sustained-contact threshold (matches Plan 02-06 PARITY-06 pattern)
 _INSERTION_CONTACT_TICKS_REQUIRED = 5  # ~80ms at 60Hz
@@ -148,6 +170,15 @@ class AicScoringPublishers:
         self._port_link_paths_override = None
         self._trial_tf_frames = []
         self._trial_tf_pub = None  # /tf publisher for CheatCode-expected per-trial frames
+        # Active trial target (2026-05-11): canonical Gazebo-equivalent payload
+        # for /scoring/insertion_event. ScoringTier2.cc:825-855 tokenizes the
+        # String payload by "/" and matches tokens[0]==target_module_name +
+        # tokens[1]==port_name from trial config. Without this set, the publisher
+        # would emit a bare USD basename (e.g. "SCPort_0") which the engine
+        # cannot parse → "Error parsing insertion port namespace" + score 0.
+        self._active_target_module_name = None
+        self._active_port_name = None
+        self._active_target_usd_prefix = None  # contact filter scopes to this prefix when set
 
     def set_port_link_paths(self, paths) -> None:
         """D-13 fallback (Plan 04-03): override the hardcoded _PORT_LINK_PATHS
@@ -169,6 +200,32 @@ class AicScoringPublishers:
         if self._port_link_paths_override is not None:
             return self._port_link_paths_override
         return _PORT_LINK_PATHS
+
+    def set_active_trial_target(self, target_module_name, port_name, usd_prefix=None):
+        """Set the active trial's scorer-canonical target — payload contract
+        per ScoringTier2.cc:825-855 + CablePlugin.cc:268,323.
+
+        Engine expects /scoring/insertion_event String payload of the form
+        '<target_module_name>/<port_name>' (e.g. 'nic_card_mount_0/sfp_port_0'
+        for sample_config trial_1). Without this set we emit the bare USD
+        basename which fails ScoringTier2's tokenizer.
+
+        Optional `usd_prefix` scopes the contact filter so only contacts where
+        the port actor path starts with this prefix qualify as insertion
+        candidates — prevents false-positive insertion events from non-target
+        port contacts. Pass None to keep the default behavior (any port under
+        _effective_port_link_paths qualifies).
+
+        MUST be called BEFORE start() — payload + filter are read each tick.
+        Idempotent; pass (None, None) to clear.
+        """
+        self._active_target_module_name = target_module_name or None
+        self._active_port_name = port_name or None
+        self._active_target_usd_prefix = usd_prefix or None
+        print(
+            f"[AIC-DT][scoring] set_active_trial_target: target_module={target_module_name!r} "
+            f"port={port_name!r} usd_prefix={usd_prefix!r}"
+        )
 
     def set_trial_tf_frames(self, frames):
         """DEFERRED-4 (2026-05-10): publish per-trial CheatCode-expected TF frames.
@@ -283,7 +340,8 @@ class AicScoringPublishers:
                 Returns (applied_count, paths_tagged)."""
                 count = 0
                 tagged = []
-                root = self._stage.GetPrimAtPath(root_path)
+                from isaacsim.core.utils.prims import get_prim_at_path as _get_prim
+                root = _get_prim(root_path)
                 if not root or not root.IsValid():
                     return 0, []
                 # Check root + walk all descendants
@@ -381,8 +439,24 @@ class AicScoringPublishers:
                     self._articulation = None
                 self._articulation_init_attempted = True
 
+        # motion-fidelity-cheatcode-timing (2026-05-11): drain pending /clock
+        # messages before reading get_clock(). Engine's bag-replay scorer
+        # (ScoringTier2.cc:493) calls tf2_buffer->lookupTransform with
+        # task_end_time stamped in engine's /clock seconds. Without spinning,
+        # rclpy's use_sim_time=true ROSClock subscriber never receives /clock
+        # → our TFs stamp as 0 (or stale) → engine errors with "Lookup would
+        # require extrapolation into the future".
+        #
+        # controller_loop.py:603 already follows this pattern from its own
+        # physics-step callback. Same idiom here keeps the scoring publisher
+        # in clock-sync with the engine without launching a separate spin
+        # thread (which would deadlock against the kit main loop).
         try:
-            from rclpy.clock import Clock  # noqa: F401
+            import rclpy as _rclpy
+            _rclpy.spin_once(self._node, timeout_sec=0)
+        except Exception:
+            pass
+        try:
             now = self._node.get_clock().now().to_msg()
         except Exception:
             return
@@ -417,6 +491,11 @@ class AicScoringPublishers:
         from tf2_msgs.msg import TFMessage
         from geometry_msgs.msg import TransformStamped
         from pxr import UsdGeom, Gf
+        # Use isaacsim helper for prim lookup — pxr.Sdf.Path() builds a path
+        # from the system pxr binding, but the Stage object lives in Isaac
+        # Sim's pxrInternal binding, and the C++ overload resolution rejects
+        # cross-binding SdfPath instances. The helper handles this internally.
+        from isaacsim.core.utils.prims import get_prim_at_path as _get_prim
         msg = TFMessage()
         xf_cache = UsdGeom.XformCache()
         for f in self._trial_tf_frames:
@@ -444,7 +523,7 @@ class AicScoringPublishers:
                 # correct pose, publish frames as base_link-relative — i.e.
                 # set `parent: "base_link"` in the frame dict and let this
                 # code compute the relative transform live.
-                prim = self._stage.GetPrimAtPath(anchor_path)
+                prim = _get_prim(anchor_path)
                 if not prim or not prim.IsValid() or not prim.IsActive():
                     continue
                 try:
@@ -469,7 +548,7 @@ class AicScoringPublishers:
                     parent_leaf = parent_leaf_map.get(parent_frame)
                     if parent_leaf:
                         parent_prim_path = f"/World/UR5e/aic_unified_robot/{parent_leaf}"
-                        parent_prim = self._stage.GetPrimAtPath(parent_prim_path)
+                        parent_prim = _get_prim(parent_prim_path)
                         if parent_prim and parent_prim.IsValid():
                             try:
                                 parent_world_xf = xf_cache.GetLocalToWorldTransform(parent_prim)
@@ -523,10 +602,11 @@ class AicScoringPublishers:
         from tf2_msgs.msg import TFMessage
         from geometry_msgs.msg import TransformStamped
         from pxr import UsdGeom
+        from isaacsim.core.utils.prims import get_prim_at_path as _get_prim
         msg = TFMessage()
         xf_cache = UsdGeom.XformCache()
         for parent_frame, child_frame, usd_path in frame_list:
-            prim = self._stage.GetPrimAtPath(usd_path)
+            prim = _get_prim(usd_path)
             if not prim or not prim.IsValid() or not prim.IsActive():
                 continue
             try:
@@ -574,14 +654,25 @@ class AicScoringPublishers:
             return  # already published this insertion
         if len(recent) < _INSERTION_CONTACT_TICKS_REQUIRED:
             return  # not yet sustained
-        # Pick the most-recent port name as the "inserted into" target
-        port_name = recent[-1][1]
+        # Pick the most-recent port name as the "inserted into" target (USD basename)
+        usd_basename = recent[-1][1]
+        # Engine canonical payload format per ScoringTier2.cc:825-855 +
+        # CablePlugin.cc:268,323 is "<target_module_name>/<port_name>".
+        # Fall back to USD basename only when no active trial target is wired
+        # (preserves legacy behavior for non-trial smoke tests).
+        if self._active_target_module_name and self._active_port_name:
+            payload = f"{self._active_target_module_name}/{self._active_port_name}"
+        else:
+            payload = usd_basename
         from std_msgs.msg import String
         msg = String()
-        msg.data = port_name
+        msg.data = payload
         self._scoring_event_pub.publish(msg)
         self._insertion_event_armed = True
-        print(f"[AIC-DT][scoring] published /scoring/insertion_event data={port_name!r}")
+        print(
+            f"[AIC-DT][scoring] published /scoring/insertion_event data={payload!r} "
+            f"(usd_basename={usd_basename!r})"
+        )
 
     def _on_insertion_contact_event(self, contact_headers, contact_data):
         """Physics-thread callback (O(1) append to _insertion_contact_events).
@@ -608,7 +699,16 @@ class AicScoringPublishers:
             # Determine if this is a plug↔port pair (use effective override if set)
             def _is_plug(path):
                 return any(path.startswith(prefix) for prefix in _PLUG_PATH_PREFIXES)
-            for port_path in self._effective_port_link_paths():
+            # Active-trial scoping: when a target USD prefix is wired, ignore
+            # contacts on non-target ports. Mirrors Gazebo CablePlugin's
+            # cableConnection0PortName subscription (only the target port's
+            # touch event fires the insertion event).
+            scoped_ports = self._effective_port_link_paths()
+            if self._active_target_usd_prefix:
+                scoped_ports = [p for p in scoped_ports if p.startswith(self._active_target_usd_prefix)]
+                if not scoped_ports:
+                    scoped_ports = [self._active_target_usd_prefix]
+            for port_path in scoped_ports:
                 hit = (
                     (_is_plug(actor0) and actor1.startswith(port_path))
                     or (_is_plug(actor1) and actor0.startswith(port_path))

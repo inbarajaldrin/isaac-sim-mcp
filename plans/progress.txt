@@ -2142,3 +2142,1241 @@ RECOMMENDATION for orchestrator (next iter):
   Diagnostic: insertion=false reconfirms the R1 descope is sound — cable physics is NOT the ship-gate blocker. Orchestrator should pin a motion-fidelity / CheatCode-timing task next, NOT parity-report-run.
   Skill cited: isaac-sim-extension-dev — re-confirmed cache-management discipline + cable SetActive(False) M1 contract before running the live trial fire.
   Skill cited: none for nvidia-suite-docs — pure verification re-fire; no Isaac Sim API surface inspected.
+
+[2026-05-11T11:29:39Z] NO-OP iter — TUG_PIN_TASK=cable-physics-descope-validate already passes:true (verified 2026-05-11T11:28:46Z). Exiting without action per orchestrator pin-already-closed rule. Awaiting next orchestrator pin (likely motion-fidelity blocker given insertion_event_fired=false).
+
+[2026-05-11T11:30:06Z] NO-OP iter — TUG_PIN_TASK=cable-physics-descope-validate already passes:true. Exiting normally per pin-already-closed rule. Awaiting orchestrator re-pin to next task (likely motion-fidelity / CheatCode TCP-offset blocker now that cable-physics decoy is ruled out).
+
+[2026-05-11T11:50:00Z] iter: motion-fidelity-cheatcode-timing — VERIFY PARTIAL FAIL (no commit)
+  TUG_PIN_TASK=motion-fidelity-cheatcode-timing. Pre-flight: only progress.txt modified
+  (prior NO-OP append) + standard untracked dirs. Sim UP on 8768 + zenoh UP on 7447.
+
+  ROOT CAUSE FOUND (rejects H1/H2/H3, introduces H4):
+    All three orchestrator hypotheses (TCP offset / TF buffer staleness / sim-realtime)
+    were red herrings. The actual blocker was a missing service handler:
+    aic_model.handle_motion_update() synchronously calls
+    `/aic_controller/change_target_mode` (see ~/Documents/aic/aic_model/aic_model/
+    aic_model.py:354 — `response = self._change_target_mode_client.call(req)` with
+    no timeout). aic-dt's controller_loop.py NEVER registered this service. The
+    real aic_controller (~/Documents/aic/aic_controller/src/aic_controller.cpp:327)
+    serves "~/change_target_mode" within its lifecycle namespace; since aic_controller
+    isn't part of our pipeline (aic_dt_controller_loop substitutes for its
+    motion-command surface), this service was simply unstubbed. Same gap as historic
+    DEFERRED-2 (SwitchController collateral) — different RPC, same shape.
+    
+    Pre-fix evidence in /tmp/aic_model_isaac.log (descope-validate run):
+      - `Setting cartesian mode...` logged once at trial start (line 14)
+      - `Successfully set target mode` NEVER LOGGED — client.call() hung indefinitely
+      - calc_gripper_pose pfrac log: exactly 1 line (`pfrac: 0.0`) — only the very
+        first iteration of the 100-tick ramp completed; thread wedged after that
+      - "insert_cable execute loop": 172 lines (1Hz sim-clock async timer firing
+        in a separate coroutine; not a signal of policy progress)
+    
+    `ros2 service list` shows /aic_controller/change_target_mode because aic_model
+    creates a client which advertises liveliness via zenoh. CLI `ros2 service call`
+    on the same path ALSO times out (confirms no server is responding, despite
+    discovery appearing healthy).
+
+  FIX (single-file aic-dt edit; isolated from the cable physics R1 descope):
+    exts/aic-dt/aic_dt/controller_loop.py:
+      - import ChangeTargetMode from aic_control_interfaces.srv
+      - new instance field self._change_target_mode_srv (init None, cleared in stop())
+      - register service in start() at /aic_controller/change_target_mode → calls
+        new method _on_change_target_mode_request
+      - _on_change_target_mode_request accepts any valid TargetMode value, updates
+        self._last_target_mode (which controller_loop already maintains for the
+        /aic_controller/controller_state publish), returns success=True
+      - start() print line updated to mention the new service
+      - stop() destroys the service handle
+    The rclpy node already spins via spin_once inside _on_physics_step, so the
+    service callback dispatches on physics ticks (no separate executor thread
+    needed).
+    
+    exts/aic-dt/scripts/test_motion_fidelity.sh (NEW): 4-gate verifier per PRD.
+
+  HOT-RELOAD NOTE: first verify attempt FAILED gate 2 (1 pfrac line again)
+  because Kit had stale `aic_dt.controller_loop` in sys.modules from prior trial
+  fires. Soft-reload via execute_python_code: rm pycache + `del sys.modules
+  ['aic_dt.controller_loop']` + `importlib.import_module('aic_dt.controller_loop')`
+  + null all DigitalTwin._aic_controller_loop instances. Verified fresh module had
+  `_on_change_target_mode_request` method via hasattr probe before re-firing.
+
+  VERIFY EVIDENCE (post-fix trial_1 fire):
+    /tmp/aic_model_isaac.log:
+      [1778500187.212] Setting cartesian mode...
+      [1778500187.253] Successfully set target mode  ← 41ms service round-trip
+      ... 530 pfrac log lines spanning ~65s wall ...
+      [1778500252.297] CheatCode.insert_cable() exiting...
+      [1778500252.728] insert_cable() returned True
+    Gate 1 PASS: outcome JSON has all 6 required keys.
+    Gate 2 PASS: 530 pfrac lines >> 50 (action thread NOT wedged — fix proven).
+    Gate 3 FAIL: 0.488 Hz wall rate < 1.0 Hz gate.
+                  ROOT CAUSE: my "execute loop" log timestamps measure
+                  aic_model's create_timer(1.0) async wait at 1Hz SIM-CLOCK
+                  (NOT 10Hz; the orchestrator's 10Hz baseline was wrong about
+                  this log). Sim runs at ~0.56× wall under TF+scoring load,
+                  so 1Hz sim → 0.56Hz wall. Gate definition flaw, not a code
+                  regression. CheatCode's INTERNAL motion-command rate is
+                  paced by sleep_for(0.05) = 20Hz sim = ~11Hz wall, which
+                  vastly exceeds the orchestrator's intended ">= 5Hz" bar
+                  if measured on the right signal.
+    Gate 4 FAIL: insertion_event_fired=false.
+                  ROOT CAUSE (ARCHITECTURAL, NOT MOTION-FIDELITY):
+                  per R1 descope (commit 865e9c8 / 2ab47bf), cable subtree is
+                  SetActive(False). The scoring publisher fires
+                  /scoring/insertion_event ONLY on plug↔port PhysX contact
+                  events. With cable inactive, no plug rigid body exists →
+                  no contact possible → no insertion event possible.
+                  Engine scoring confirms downstream:
+                    tier_2: "Plug is not within max bounding radius from target port"
+                    tier_3: "Distance computation failed, tf between cable and port not found"
+                  Both reference the cable_0/sfp_tip_link TF chain which is
+                  decorative under descope (chained off gripper/tcp with zero
+                  offset). Engine's bounding-radius / distance checks have
+                  tighter thresholds than the static-TF approximation supports
+                  → tier_2 + tier_3 both score 0.
+
+  ARCHITECTURAL CONFLICT (orchestrator must decide):
+    R1 descope decision (11:18Z) said cable was decoy + scoring is contact-based
+    on plug-end geometry. But under cable-INACTIVE, no plug rigid body exists
+    to fire contact. The descope-validate iter (2ab47bf) accepted insertion=false
+    as documentation-only; this iter's PRD requires insertion=true to ship M1.
+    
+    Three paths forward:
+      Path A — reverse R1 partial: keep cable USD edits durable (mass authored)
+               but flip cable_prim.SetActive(True) in load_trial branch only.
+               Now plug rigid body exists; CheatCode can drive it; contact fires.
+               Risk: re-introduces the cable-active sim-realtime drop to 0.56×
+               (was the original reason for R1) BUT now with motion-fidelity
+               proven, CheatCode + the 180s task budget may complete in time.
+               Concrete fix: extension.py:1395-1403 elif branch flip — already
+               present as SCENE_05_ENABLE_FOR_M2 escape valve.
+      Path B — reframe insertion_event detection: add a virtual "plug at port"
+               check in scoring_publishers when cable is inactive (geometry-only,
+               not contact-based). Risk: this is a verifier weakening, on the
+               edge of the cross-repo policy (artificially making trials pass).
+               Likely OUT OF SCOPE.
+      Path C — accept M1 ships without insertion_event_fired=true. Re-pin
+               motion-fidelity-cheatcode-timing with a relaxed acceptance:
+               assert CheatCode fully executes (530 pfrac proven) + completes
+               action with insert_cable()=True + does NOT wedge. Cable physics
+               + true insertion deferred to M2.
+    
+    Recommendation: Path A. The R1 descope was based on the (now-falsified)
+    hypothesis that cable was making sim too slow to allow CheatCode to
+    complete. With change_target_mode fixed, CheatCode finishes in ~65s wall
+    well within the 180s budget. Re-activating cable may slow sim but the
+    headroom looks acceptable. Also: cable USD now has authored mass (commit
+    865e9c8 kept the asset edit), so cable is no longer kinematic — physical
+    interaction is supported.
+
+  REGRESSION SWEEP: not run (verify failed; rule: do NOT commit, do NOT flip).
+    Surface-overlap with passes:true tasks for awareness:
+      - pose-roundtrip-verify, gripper-tcp-ingress, motion-deficit-hunt:
+        controller_loop.py edits are wholly additive (new service registration
+        + new method + new field). No existing surface modified. Zero
+        structural regression risk to these. Re-fire any of those probes after
+        this lands to confirm.
+      - scoring-stoprecording-tf-fix, trial-cycle-frames-loading: no surface
+        overlap (extension.py + wrapper + scoring_publishers.py); zero risk.
+
+  Files (uncommitted; preserved for orchestrator decision):
+    M  exts/aic-dt/aic_dt/controller_loop.py
+    ?? exts/aic-dt/scripts/test_motion_fidelity.sh
+    ?? exts/aic-dt/docs/trial_outcomes/trial_1_isaacsim.json  (refreshed, insertion=false)
+
+  HYPOTHESIS-TEST ATTEMPT COUNT this iter: 1 (the change_target_mode stub fix).
+  The /ask-gpt gate does NOT trigger — fix produced unambiguous progress (1 → 530
+  pfrac), gates 3+4 fails diagnosed as separate issues (gate-definition + R1
+  conflict), not flailing on same root cause.
+
+  Skill cited: isaac-sim-extension-dev for aic-dt MCP socket protocol (used to
+    soft-reload aic_dt.controller_loop module via execute_python_code), rclpy
+    create_service signature on a use_sim_time-aware node + spin_once dispatch
+    semantics from the physics-step callback (existing pattern for motion_update
+    sub + ControllerState pub — mirrored exactly for ChangeTargetMode service
+    handler). Re-confirmed extension.py:1893 `_start_aic_controller_loop` re-
+    imports controller_loop on each call (lazy import inside the method body
+    → sys.modules cache hits — required force-delete the cached entry to pick
+    up edits).
+  Skill cited: nvidia-suite-docs — not consulted live this iter (the fix is
+    rclpy.create_service + ROS lifecycle service shape, not an Isaac Sim API
+    surface — covered by ROS 2 Humble core docs which are stable). The
+    Articulation / OmniGraph / Replicator surfaces remain untouched.
+
+  EXIT: no commit, no passes flip. Orchestrator decision needed on A/B/C
+  before next pin to motion-fidelity-cheatcode-timing.
+
+[2026-05-11T12:14:30Z] iter: motion-fidelity-cheatcode-timing (PATH A) — VERIFY PARTIAL FAIL (no commit)
+  TUG_PIN_TASK=motion-fidelity-cheatcode-timing. Pre-flight: continued uncommitted
+  change_target_mode fix from iter-1 + applied orchestrator's Path A directive.
+  Sim UP on 8768 + zenoh UP on 7447 + RMW on host=cyclonedds (sim has its own
+  RMW selection at launch — verified earlier this batch).
+
+  CHANGES THIS ITER (working tree, NOT committed):
+    M  exts/aic-dt/aic_dt/extension.py
+       Reverted R1 cable descope block (lines 1376-1400). New contract:
+         - SCENE_05_DISABLE=1 env → SetActive(False) emergency rollback
+         - attach_cable_to_gripper=True → SetActive(True), plug rigid body
+           required for /scoring/insertion_event PhysX contact
+         - attach_cable_to_gripper=False → SetActive(False), cable-free scene
+       Comment block updated to reference falsified R1 hypothesis +
+       motion-fidelity headroom math (~65s wall CheatCode + ~50% sim slowdown
+       still fits in 180s budget).
+    M  exts/aic-dt/scripts/test_motion_fidelity.sh
+       Dropped wrong-baseline gate 3 (wall-clock loop-rate >= 1Hz on "execute
+       loop" — that was aic_model's create_timer(1.0) sim-clock async timer,
+       not CheatCode's real ~20Hz sim-clock motion command rate). New 3-gate
+       structure:
+         Gate 1: outcome JSON valid AND completed_steps != -1
+         Gate 2: pfrac >= 500 AND insert_cable() returned True
+         Gate 3: insertion_event_fired == true (M1 SHIP GATE)
+    [unchanged from iter-1] M exts/aic-dt/aic_dt/controller_loop.py
+       change_target_mode service stub (proven 1 -> 530 pfrac).
+
+  HOT-RELOAD: rm pycache + touch + delete sys.modules + null any live
+  DigitalTwin._aic_controller_loop. Confirmed both live DigitalTwin instances
+  picked up Path A code via inspect.getsource probe (has_path_a_text=True,
+  has_old_descope_text=False).
+
+  VERIFY EVIDENCE:
+    Gate 1 PASS: completed_steps=32, all 6 outcome JSON keys present.
+    Gate 2 PASS: 530 pfrac lines (>= 500) AND insert_cable() returned True
+                  (CheatCode policy ran end-to-end; change_target_mode fix held).
+    Gate 3 FAIL: insertion_event_fired=false. Engine log:
+                  tier_2 score=0: "Plug is not within max bounding radius from
+                                   target port, not assigning time bonus"
+                  tier_3 score=0: "Error parsing insertion port namespace:
+                                   SCPort_0"
+
+  TWO ROOT CAUSES IDENTIFIED (both must be fixed for Gate 3 pass):
+
+  ROOT CAUSE A — payload format mismatch.
+    aic-dt scoring_publishers.py:579 publishes std_msgs/String with
+    data=port_name where port_name = port_path.rsplit("/", 1)[-1] => "SCPort_0".
+    Engine ScoringTier2.cc:825-855 tokenizes by "/" and requires >= 2 tokens
+    matching connections[0].targetModuleName + connections[0].portName from
+    sample_config.yaml. For trial_1: needs "nic_card_mount_0/sfp_port_0"
+    (slash-delimited 2-token form). Gazebo CablePlugin.cc:268,323 derives
+    this string from the touch-event topic namespace authored in
+    nic_card_mount_macro.xacro:15 as "${prefix}/sfp_port_0".
+    Fix surface: pass target_module + port_name from load_trial through
+    AicScoringPublishers (1-surface setter, mirrors D-13 pattern), construct
+    payload "<module>/<port>" instead of bare basename.
+
+  ROOT CAUSE B — geometric attachment mismatch (DEEPER than I initially framed).
+    Per GPT adversarial review (codex /ask-gpt invoked this iter — see
+    /tmp/gpt_response.txt):
+      - extension.py:1438 _attach_cable_to_gripper_impl FixedJoints
+        /World/UR5e/cable/Rope/Rope/link_20 (the kinematic-chain endpoint)
+      - extension.py:3254 _compute_trial_tf_frames publishes the plug frame
+        as a ZERO-OFFSET CHILD of gripper/tcp (synthetic, not following
+        physical link_20)
+      - sc_plug_visual is ~33mm away from link_20 in the cable USD
+      - CheatCode reads the published plug frame and drives gripper/tcp to
+        port_link_entrance. With plug frame == gripper/tcp, the GRIPPER
+        reaches the port but the PHYSICAL plug (sc_plug_visual mesh attached
+        to link_20) is offset → outside max bounding radius.
+    "CheatCode completed" only proves the SYNTHETIC TF contract was
+    satisfied, NOT that the physical plug tip reached the physical port.
+    This is a deterministic frame/attachment mismatch first, physics
+    second — NOT a cable-rope-stiffness tuning problem.
+
+  GPT ADVERSARIAL REVIEW VERDICT (full text in /tmp/gpt_response.txt):
+    1. Issue A fix direction correct, mirror Gazebo exactly
+       ("nic_card_mount_0/sfp_port_0" not basename, not link name)
+    2. Issue B framing wrong — sharper formulation: "FixedJoint to link_20
+       while CheatCode commands gripper/tcp + sc_plug_visual is the scored
+       contact body" = deterministic offset, not stochastic dynamics
+    3. Path C is PREMATURE if 2 batches remain. Relaxing M1 to
+       "CheatCode completes" rewards the wrong thing — gate is explicitly
+       "Cable insertion successful" in engine log
+    4. ONE DIAGNOSTIC for next iter (BEFORE any code change):
+       Capture world poses during final descent + 5s settle of:
+         (a) published target frame: task_board/nic_card_mount_0/sfp_port_0_link
+         (b) physical port body/collider
+         (c) gripper/tcp
+         (d) link_20 (cable kinematic endpoint)
+         (e) sc_plug_visual (scored contact body)
+       Compute deltas:
+         - gripper/tcp -> physical plug
+         - published plug_frame -> physical plug
+         - published port_frame -> physical port
+         - physical plug -> physical port
+       This discriminates: bogus-TF / bogus-plug-proxy / attachment-offset /
+       dynamic-swing — without that, Issue B fix is a guess.
+
+  NEXT-ITER RECOMMENDATION (for orchestrator + next executor):
+    1. PIN motion-fidelity-cheatcode-timing again (same task, evolving fix scope)
+    2. Run pose-delta diagnostic FIRST (a probe MCP call that samples the
+       5 world poses over the trial; emit to /tmp/pose_delta_trial_1.csv).
+       Probe code can live at exts/aic-dt/scripts/probe_plug_port_geometry.py
+       and be invoked via execute_python_code. NO code changes before this.
+    3. Based on diagnostic verdict:
+       - If physical plug ≈ published plug frame: Issue A only is
+         sufficient — fix payload format, re-fire, expect gate 3 pass
+         (plug IS at port, just engine misclassifies as parse error)
+       - If physical plug far from published plug frame (cm-scale):
+         attachment fix needed. Move FixedJoint from link_20 to
+         sc_plug_visual's parent body, OR add a static plug-tip xform
+         that mirrors sc_plug_visual's offset. This is a 1-2 surface
+         edit in _attach_cable_to_gripper_impl.
+       - If gripper/tcp itself misses the port: Phase 2 Pitfall 2 Option A
+         tcp offset may be stale — re-verify against URDF.
+    4. After diagnostic + appropriate fix, also apply Issue A payload format
+       (always needed regardless of geometry).
+
+  REGRESSION SWEEP: not run (verify failed; rule = do NOT commit).
+    Surface-overlap with passes:true tasks for next-iter awareness:
+      - extension.py: load_robot cable activation block (Path A revert)
+        does NOT touch the load_robot signature, drives, or articulation
+        setup; risk to passes:true tasks editing extension.py is STRUCTURAL
+        only, and the new SCENE_05_DISABLE env override preserves the
+        emergency-disable path so wrench / motion-deficit / tcp probes can
+        still run cable-free if needed.
+      - test_motion_fidelity.sh is new-this-iter so no prior task references it.
+      - controller_loop.py change_target_mode addition is wholly additive
+        (new field + new method + new service registration + new teardown)
+        — no edits to subscriber or apply paths used by motion-deficit-hunt
+        or pose-roundtrip-verify.
+
+  HYPOTHESIS-TEST ATTEMPT COUNT this iter: 1 (the Path A revert + test
+    script rewrite, fired together).
+  TOTAL ATTEMPTS ON M1 SHIP GATE (across iters): 2 (iter-1 change_target_mode
+    + iter-2 Path A). /ask-gpt rule TRIGGERED per orchestrator directive.
+    Adversarial review COMPLETED inline this iter — verdict captured above
+    + full text in /tmp/gpt_response.txt.
+
+  Files (uncommitted; preserved for next iter):
+    M  exts/aic-dt/aic_dt/controller_loop.py    (change_target_mode stub)
+    M  exts/aic-dt/aic_dt/extension.py          (Path A cable activation revert)
+    ?? exts/aic-dt/scripts/test_motion_fidelity.sh  (3-gate verifier, dropped wrong loop-rate gate)
+    ?? exts/aic-dt/docs/trial_outcomes/trial_1_isaacsim.json  (refreshed; insertion=false)
+
+  Skill cited: isaac-sim-extension-dev — controller_loop.py rclpy service
+    handler pattern + extension.py cable activation gating + hot-reload trap
+    discipline (rm pycache + touch + del sys.modules + null DigitalTwin
+    instance state). Re-confirmed extension.py:1905 _start_aic_controller_loop
+    only re-creates AicControllerLoop when self._aic_controller_loop is None
+    (so forcing-null is required after edit) and extension.py:1378-1400
+    cable activation gate semantics (SCENE_05_DISABLE env + attach_cable_to_gripper
+    parameter coupling).
+  Skill cited: nvidia-suite-docs — meta-router consulted but no sub-skill
+    deep-dive needed this iter. The fixes are pure ROS-API (rclpy service
+    stub) + USD prim activation (SetActive) + script-side gate logic — all
+    on stable surfaces well-covered by the project's prior phase research.
+    Issue B's pose-delta diagnostic for next iter WILL benefit from a
+    nvidia-suite-docs/openusd consult on UsdGeomXformable.ComputeLocalToWorldTransform
+    semantics for non-articulated USD subtrees (cable links under SetActive(True)
+    but with PhysX-stepped poses).
+
+  EXIT: no commit, no passes flip. Next iter (likely re-pin
+    motion-fidelity-cheatcode-timing) should start with the pose-delta
+    diagnostic per GPT's recommendation BEFORE writing any code. M1 ship
+    gate is 1-2 batches away; Path C remains the late-week fallback if
+    geometry fix doesn't land.
+
+  PRE-FLIGHT NOTE FOR NEXT ITER (working-tree surprise):
+    git status --porcelain at session-end shows additional M files NOT touched
+    this iter: scoring_publishers.py + parity_publishers.py. Diff is purely
+    cosmetic (Sdf.Path() wrapping around prim path strings + a local Sdf
+    import). They appeared between session-bootstrap and now (initial
+    git status only showed controller_loop.py + progress.txt as M).
+    Source unknown — possibly a background hot-reload artifact, possibly
+    pre-existing dirty state that the SessionStart snapshot missed.
+    Functional behavior unchanged. Recommendation: next iter triages them
+    in pre-flight — likely safe to git restore (cosmetic-only) OR include
+    in a follow-up cleanup commit, depending on whether they harmonize
+    with other defensive code in the repo. They do NOT trace to motion-
+    fidelity-cheatcode-timing and should NOT land in that commit.
+
+2026-05-11T12:14Z — motion-fidelity-cheatcode-timing — IN-PROGRESS (verify gate 3 STILL fails: insertion_event_fired=false). Pinned by orchestrator (TUG_PIN_TASK). Continued prior iter's diagnostic chain. Pre-flight: kept uncommitted controller_loop.py (prior iter's /aic_controller/change_target_mode service stub) — verified its content + runtime evidence holds on live sim (530 pfrac lines, "insert_cable() returned True", 65s wall clock).
+
+  NEW ROOT CAUSE DISCOVERED + FIXED THIS ITER (pxr-binding mismatch in publishers):
+    Kit log line 20623+ shows BOTH `[AIC-DT][parity] publish error` AND
+    `[AIC-DT][scoring] publish error` firing every physics tick with
+    ArgumentError("Stage.GetPrimAtPath(Stage, str) did not match C++ signature
+    GetPrimAtPath(..., pxrInternal_v0_24__pxrReserved__::SdfPath path)").
+    The exception was caught by the outer try/except in _on_physics_step
+    around _publish_scoring_tf + _publish_objects_poses + _publish_trial_tf_frames
+    + _maybe_publish_insertion_event — net effect: any tick where
+    _publish_trial_tf_frames raised at the first iteration (GetPrimAtPath
+    on port anchor `/World/TaskBoard/NICCardMount_0`), the remaining
+    publishes were skipped including `_maybe_publish_insertion_event`.
+    The engine bag therefore had only the static world→aic_world link at
+    t=0 and ComputeScore's lookupTransform at end_time saw
+    "only time 0.000000 is in the buffer; extrapolation at time 1534s"
+    (engine error verified at /tmp/aic_engine_isaac.log:63-67).
+
+    ROOT CAUSE: Isaac Sim 5.0 ships its own pxr under `pxrInternal_v0_24__`
+    namespace. The Stage object held by `self._stage =
+    omni.usd.get_context().get_stage()` is a pxrInternal Stage. Calls like
+    `stage.GetPrimAtPath(str)` or `stage.GetPrimAtPath(pxr.Sdf.Path(str))`
+    where Sdf comes from the SYSTEM pxr binding hit C++ overload
+    resolution failure — the C++ side expects pxrInternal::SdfPath,
+    the Python side passes pxr::SdfPath, different type tags.
+
+  TWO HYPOTHESIS-TEST CYCLES (both addressed the publish-error root cause):
+    Cycle 1: wrap all GetPrimAtPath(str) call sites with `Sdf.Path(str)` —
+      4 sites in scoring_publishers.py (lines 287, 448, 473, 530), 2 in
+      parity_publishers.py (522, 523). VERIFY: error type changed in kit
+      log from "(Stage, str)" to "(Stage, Path)" but C++ side still
+      rejected — pxr.Sdf.Path is the WRONG SdfPath (system binding, not
+      pxrInternal). Still failed at line 99391.
+    Cycle 2: replace with `isaacsim.core.utils.prims.get_prim_at_path(str)`
+      — Isaac Sim wrapper that internally handles the binding boundary.
+      VERIFY: publish error GONE in kit log post-reload. /scoring/insertion_event
+      NOW fires (visible in kit log line 121748+: "[AIC-DT][scoring]
+      published /scoring/insertion_event data='SCPort_0'"). Engine error
+      message CHANGED from "Distance computation failed, tf between cable
+      and port not found" to "Error parsing insertion port namespace:
+      SCPort_0" — TF chain now resolves end-to-end (tier_3 reaches the
+      payload-parsing branch).
+
+  NEW BLOCKER REMAINING (different root cause):
+    /scoring/insertion_event payload = "SCPort_0" — engine's
+    ParseInsertionEvent (aic_scoring/src/ScoringTier2.cc:825-855) expects
+    `<targetModuleName>/<portName>` separated by `/` (2 tokens). With only
+    1 token, engine returns Tier3Score(0.0, "Error parsing insertion port
+    namespace: SCPort_0"). For trial_1, expected payload =
+    "nic_card_mount_0/sfp_port_0" (per sample_config.yaml:144-146 task_1.target_module_name +
+    task_1.port_name).
+
+    Two follow-up sub-issues entangled here:
+      (a) Payload format wrong — scoring_publishers._maybe_publish_insertion_event
+          line 585 uses `port_name = port_path.rsplit("/", 1)[-1]` (USD prim
+          basename = "SCPort_0"). Needs trial-config-aware mapping that
+          publishes the trial's target_module_name + port_name slash-joined.
+      (b) GEOMETRIC MISS — plug rigid body contacts /World/TaskBoard/SCPort_0
+          (the SC port) not /World/TaskBoard/NICCardMount_0 (the trial-1
+          target). Even with correct payload format, tokens[0] ("sc_port_0"
+          or similar) won't match targetModuleName ("nic_card_mount_0") →
+          engine returns kInsertionPenalty (negative score). The actual fix
+          needs CheatCode to bring plug into geometric proximity of the
+          target module's port location — requires either correct port_frame
+          anchor offset (anchor_target_offsets.yaml verification) OR fix to
+          the cable-attach FixedJoint geometry so plug rigid body tracks
+          gripper at the correct offset.
+
+  EMPIRICAL EVIDENCE THIS ITER (post-fix trial fire at 12:13Z):
+    /tmp/aic_model_isaac.log:
+      [1778501642.140] insert_cable execute loop (×5 in last 10s before exit)
+      [1778501649.369] CheatCode.insert_cable() exiting...
+      [1778501650.144] insert_cable() returned True
+    /tmp/aic_engine_isaac.log:
+      [aic_engine]   tier_2:
+      [aic_engine]     score: 0
+      [aic_engine]     categories:
+      [aic_engine]       contacts: 0 ("No contact detected" — sustained
+                                       contact filter rejected; 6 transient
+                                       SCPort_0 publishes did not survive)
+      [aic_engine]       duration: 0 ("Plug is not within max bounding radius")
+      [aic_engine]       insertion force: 0 ("No excessive force detected")
+      [aic_engine]       trajectory efficiency: 0 ("Plug is not within max bounding radius")
+      [aic_engine]       trajectory smoothness: 0 ("Plug is not within max bounding radius")
+      [aic_engine]   tier_3:
+      [aic_engine]     score: 0
+      [aic_engine]     message: "Error parsing insertion port namespace: SCPort_0"  ← NEW
+    Gate 1 PASS (outcome JSON + completed_steps != -1).
+    Gate 2 PASS (530 pfrac, insert_cable() returned True).
+    Gate 3 FAIL (insertion_event_fired=False — wrapper parses engine log
+    for "Cable insertion successful"; "Error parsing" ≠ successful).
+
+  HYPOTHESIS-COUNTING (for /ask-gpt gate):
+    This iter attempted 2 cycles on the pxr-binding root cause. Cycle 1
+    failed (Sdf.Path wrap kept failing). Cycle 2 SUCCEEDED structurally
+    (publish error gone, /scoring/insertion_event firing, tier_3 reaches
+    payload parsing). The task remains open because of an UNRELATED bug
+    (payload format + geometric miss) surfaced ONLY AFTER cycle 2 unblocked
+    visibility. Going further is a fresh diagnosis — /ask-gpt gate does
+    NOT trigger.
+
+  FILES UNCOMMITTED (preserved for next iter to consume):
+    M  exts/aic-dt/aic_dt/controller_loop.py (prior iter's change_target_mode
+       service stub — REAL FIX, 530 pfrac proof holds across multiple fires)
+    M  exts/aic-dt/aic_dt/scoring_publishers.py (this iter: 4 GetPrimAtPath
+       sites → isaacsim.core.utils.prims.get_prim_at_path; eliminates publish
+       error)
+    M  exts/aic-dt/aic_dt/parity_publishers.py (this iter: 2 sites same fix)
+    ?? exts/aic-dt/scripts/test_motion_fidelity.sh (prior iter's verifier;
+       has 3 gates, gate 3 = M1 ship gate)
+    ?? exts/aic-dt/docs/trial_outcomes/trial_1_isaacsim.json (refreshed by
+       this iter's verify; insertion=false)
+
+  NEXT-ITER PLAN (handover to next executor):
+    Layer 3 fix (single PRD task, focused scope):
+    (a) Add `set_trial_insertion_target(target_module_name: str, port_name:
+        str, target_port_usd_path: str)` setter on AicScoringPublishers
+        — mirrors set_trial_tf_frames / set_port_link_paths D-13 pattern.
+        Caller: extension.py::_cmd_load_trial after _compute_trial_tf_frames
+        (extract task.target_module_name + task.port_name from trial_cfg;
+        derive target_port_usd_path = self-mapped from target_module_name
+        per the anchor pattern at extension.py:3307-3314).
+    (b) In _on_insertion_contact_event, filter contacts to those involving
+        the target_port_usd_path (and its descendants — apply prefix match
+        like the current _PLUG_PATH_PREFIXES check). All other ports
+        ignored. This prevents transient contacts on SCPort_0 (not the
+        trial target) from contaminating the buffer.
+    (c) In _maybe_publish_insertion_event, publish payload
+        `f"{target_module_name}/{port_name}"` (trial-config values, joined
+        by "/"). Engine's tokens[0] == targetModuleName + tokens[1] ==
+        portName check then passes → kInsertionCompletionScore +
+        "Cable insertion successful." → INSERTION_EVENT_FIRED="true" in
+        outcome JSON.
+    (d) If (a-c) doesn't pass: investigate geometric miss — CheatCode's
+        plug pose vs target port pose at end_time. Probe via
+        execute_python_code: read both world transforms, compute delta,
+        confirm <0.005m XY proximity (kEntranceXYTol per ScoringTier2.cc:738).
+        If delta too large: fix port_frame anchor offset in
+        anchor_target_offsets.yaml OR fix cable-attach FixedJoint geometry.
+
+  Skill cited: isaac-sim-extension-dev — for the cooking-deadlock vs
+    post-play-wedge distinction (irrelevant this iter), the prim-path bug
+    history (relevant: prior plan-04-01 (A4) verdict on hardcoded port
+    paths), and the project's `omni.usd.get_context().get_stage()` +
+    SdfPath conventions. Re-confirmed Isaac Sim 5.0 ships pxrInternal_v0_24__
+    namespace per the runtime ArgumentError C++ signature output.
+  Skill cited: nvidia-suite-docs — meta-router consulted; did not deep-fetch
+    into a sub-skill this iter (the binding-mismatch diagnosis was
+    empirically clear from the kit-log error message — no API uncertainty
+    to resolve). The 2-tier pxr binding split (system pxr vs Isaac Sim
+    pxrInternal) is a known Isaac Sim 5.0 pattern; the proper resolution is
+    the isaacsim.core.utils.prims helper, not Sdf.Path() wrapping.
+
+  EXIT DISCIPLINE: no commit, no passes flip. Verify gate 3 still fails.
+  Uncommitted files preserved for next iter. Orchestrator may decide whether
+  to: (a) commit the structural progress (publish-error fix is independently
+  valuable even if task not yet closed), (b) keep accumulating until task
+  fully closes, (c) re-pin a different task. This executor recommends (b)
+  with continuation by next pinned-iter on payload-format fix per the
+  4-step plan above. M1 is ~2 layers away (this layer + payload format).
+
+  CORRECTION (post-write): pre-flight git status had also included `M
+  exts/aic-dt/aic_dt/extension.py` (prior iter's Path A cable-activation
+  revert per progress.txt:2097, 2452). This iter did NOT modify extension.py
+  directly. The Path A revert is consistent with this iter's empirical
+  finding (insertion contact-based scoring REQUIRES plug rigid body, which
+  REQUIRES SetActive(True) on cable subtree when attach_cable_to_gripper=True).
+  No conflict with batch_context's "DO NOT re-enable cable" — that
+  directive predates the empirical falsification of the cable-decoy
+  hypothesis and the test_motion_fidelity.sh script's contract which
+  explicitly names Path A as a required prerequisite (script header:1-12).
+
+  COMPLETE UNCOMMITTED FILE LIST after this iter:
+    M exts/aic-dt/aic_dt/controller_loop.py    (prior iter: change_target_mode service stub)
+    M exts/aic-dt/aic_dt/extension.py          (prior iter: Path A cable activation revert)
+    M exts/aic-dt/aic_dt/parity_publishers.py  (THIS iter: 2 GetPrimAtPath → isaacsim helper)
+    M exts/aic-dt/aic_dt/scoring_publishers.py (THIS iter: 4 GetPrimAtPath → isaacsim helper)
+    M plans/progress.txt                        (THIS iter: diagnostic appended)
+    ?? exts/aic-dt/scripts/test_motion_fidelity.sh    (prior iter: 3-gate verifier)
+    ?? exts/aic-dt/docs/trial_outcomes/trial_1_isaacsim.json (refreshed by verify)
+
+================================================================================
+2026-05-11T12:18Z — motion-fidelity-cheatcode-timing — ITER 2 (PATH A applied)
+================================================================================
+
+  STATE AT ENTRY:
+    Working tree from iter 1 (continued): change_target_mode service stub in
+    controller_loop.py + test_motion_fidelity.sh (3-gate, loop-rate gate
+    dropped) + extension.py PATH A revert (cable SetActive(True) when
+    attach_cable_to_gripper=True).
+    Stale .tmp file (exts/aic-dt/aic_dt/scoring_publishers.py.tmp.3902945...)
+    removed.
+    Cosmetic parity_publishers.py + scoring_publishers.py diffs (Sdf.Path
+    cross-binding fix → get_prim_at_path helper) untouched; do NOT trace
+    to this task; orchestrator briefing explicitly excludes them from the
+    commit.
+
+  ACTIONS THIS ITER:
+    1. Cleared exts/aic-dt/aic_dt/__pycache__, touched controller_loop.py +
+       extension.py for mtime invalidation
+    2. Over MCP: probed sys.modules — aic_dt.controller_loop /
+       parity_publishers / scoring_publishers all NOT in sys.modules (fresh
+       import will happen at next quick_start)
+    3. Confirmed sim env: RMW_IMPLEMENTATION=rmw_zenoh_cpp, ROS_DOMAIN_ID=7,
+       host zenohd up — sim precondition satisfied
+    4. Ran bash exts/aic-dt/scripts/test_motion_fidelity.sh
+
+  VERIFY OUTCOME:
+    Gate 1 PASS — trial_1_isaacsim.json valid, completed_steps=32, not -1
+    Gate 2 PASS — 530 pfrac lines + "insert_cable() returned True" (motion
+                  fidelity proven; change_target_mode stub held end-to-end)
+    Gate 3 FAIL — outcome JSON insertion_event_fired=false
+
+  ENGINE LOG SMOKING GUNS:
+    [WARN]  aic_engine: Failed to get initial plug port distance
+    [ERROR] aic_engine: Error parsing insertion port namespace: SCPort_0
+    tier_3 message: "Error parsing insertion port namespace: SCPort_0"
+    tier_2 messages: "Plug is not within max bounding radius from target port"
+                     (× time bonus, efficiency bonus, jerk bonus)
+
+  MODEL LOG (motion is healthy):
+    pfrac: 1.0 xy_error ≈ 1e-4 rad (CheatCode converged on its own IK estimate)
+
+  STUCK-ESCAPE-VALVE TRIGGER:
+    Per per-iter mandate: 2 hypothesis-test attempts against same root cause
+    (M1 ship gate insertion=true) → MUST invoke /ask-gpt before any 3rd
+    attempt. Invoked Mode 1 text-only consult with structured-output
+    contract (full prompt at /tmp/ask-gpt-prompt.txt; response at
+    /tmp/gpt_response.txt).
+
+  GPT ADVERSARIAL REVIEW VERDICT (partial):
+    Biggest blind spot: I conflated TWO separate scorer contracts —
+      (a) /scoring/tf frame-lookup failure: "Failed to get initial plug
+          port distance" means the scorer can't find a TF frame at the
+          name it expects.
+      (b) /scoring/insertion_event payload format: "Error parsing
+          insertion port namespace: SCPort_0" means a contact event
+          fired with an unparseable payload string.
+    AND: trial_1.task_1 targets sfp_port_0 inside nic_card_mount_0 — NOT
+    an SC port at all. The "SCPort_0" in the error is a WRONG-PORT
+    contact (our scoring_publishers tags every spawned port leaf and
+    fires the event off whichever one happens to be touched first).
+
+  CONFIRMED VIA YAML READ:
+    ~/Documents/aic/aic_engine/config/sample_config.yaml trial_1.task_1:
+      plug_type: "sfp"
+      plug_name: "sfp_tip"
+      port_type: "sfp"
+      port_name: "sfp_port_0"
+      target_module_name: "nic_card_mount_0"
+      time_limit: 180
+
+  GPT'S PATH RECOMMENDATION:
+    Path D — build an explicit scorer-compatibility adapter that publishes
+    exact Gazebo-equivalent /scoring/tf child_frame_ids and exact
+    /scoring/insertion_event namespace strings per active trial. Keep
+    internal USD prim names unchanged. Path A (global prim rename) and
+    Path B (global frame_id rename) both miss the point — the contract is
+    PER-TRIAL-TARGET-SPECIFIC, not a single global mapping.
+
+  RISKS GPT FLAGGED:
+    - Translating names while keeping the wrong physical anchor body still
+      scores zero (geometry wrong, not just names).
+    - Non-target-specific contact filter still emits false insertion
+      events from non-target contacts (masking the real failure mode).
+
+  GPT'S INVESTIGATION-FIRST CHECKLIST FOR NEXT ITER:
+    1. Read together:
+       - ~/Documents/aic/aic_engine/config/sample_config.yaml (DONE — trial_1
+         targets nic_card_mount_0/sfp_port_0/sfp_tip)
+       - ~/Documents/aic/aic_engine/src/aic_engine.cpp
+       - ~/Documents/aic/aic_scoring/include/aic_scoring/ScoringTier2.hh
+       - ~/Documents/aic/aic_scoring/src/ScoringTier2.cc
+       - ~/Documents/aic/aic_gazebo/src/CablePlugin.cc (insertion_event
+         payload contract)
+    2. Live-capture one /scoring/tf message during trial_1 and verify it
+       contains the EXACT child frames expected by ScoringTier2:
+         - cable_0/sfp_tip_link
+         - task_board/nic_card_mount_0/sfp_port_0_link
+         - task_board/nic_card_mount_0/sfp_port_0_link_entrance
+    3. Inspect exts/aic-dt/aic_dt/scoring_publishers.py — current published
+       names appear to be task_board_sc_port_0 / cable/sc_plug_link style;
+       won't satisfy ScoringTier2 lookups for trial_1.
+    4. Trace /scoring/insertion_event end-to-end against CablePlugin.cc.
+    5. Make the contact filter target-specific for the ACTIVE trial only,
+       not a flat list of all spawned port leafs.
+    6. Verify the scored plug pose anchor is the real SFP plug tip
+       expected by trial_1 — motion convergence ≠ scoring geometry.
+
+  COMMIT STATUS THIS ITER:
+    None. PRD task remains passes:false. Working tree preserved for next
+    iter — controller_loop.py + extension.py + test_motion_fidelity.sh
+    changes are all valid prerequisites; what's missing is the scorer-
+    adapter layer in scoring_publishers.py.
+
+  WHAT NOT TO TOUCH NEXT ITER:
+    - PATH A cable activation is correct architectural state (plug rigid
+      body must exist for PhysX contact-based scoring). Keep.
+    - change_target_mode stub is correct (CheatCode end-to-end proven).
+      Keep.
+    - test_motion_fidelity.sh 3-gate design stays; gates 1+2 are durable
+      regression fences for the change_target_mode + Path A fixes.
+
+  RECOMMENDED NEXT-ITER SHAPE:
+    Either (A) Promote motion-fidelity-cheatcode-timing's scope to include
+    the scorer-adapter rework (probably warrants splitting into a new PRD
+    task: "trial-target-aware-scoring-adapter") so the change_target_mode
+    + cable-activate land as their own atomic commit and the deeper
+    scorer-adapter work gets its own task, OR (B) leave the task as-is
+    pending and split — orchestrator decision.
+
+  ORCHESTRATOR DECISION NEEDED (for batch_context.md update):
+    The orchestrator's PATH A vs Path C frame from the briefing is
+    obsolete — neither was the right axis. PATH D (per-trial scorer
+    adapter) is the new axis. May warrant a fresh /grill-me on the
+    scorer-adapter design before any code edits.
+
+  EXIT: No commit, no passes flip. Working tree intact for next iter to
+    consume. Iter time ~8 min wall (mostly the wrapper trial fire +
+    GPT consult).
+
+2026-05-11T12:43Z — motion-fidelity-cheatcode-timing — PARTIAL (verify gate 3 still false; deeper layer surfaced; no commit). Continued PATH D scorer-adapter implementation. Iter focus: empirically fix TF/payload/timestamp chain so engine scorer can actually compute distance, then triage what remains.
+
+  WORKING-TREE FORWARD PROGRESS (all uncommitted, preserve for next iter):
+    M exts/aic-dt/aic_dt/controller_loop.py — /aic_controller/change_target_mode service stub (iter 1, durable)
+    M exts/aic-dt/aic_dt/extension.py — Path A cable activation revert (prior iter) + set_active_trial_target wiring (this iter) + plug-frame anchor change to /World/UR5e/cable/sc_plug_visual (this iter) + port_entrance frame per ScoringTier2 PortEntranceTfName() contract (this iter)
+    M exts/aic-dt/aic_dt/scoring_publishers.py — set_active_trial_target() method + engine-canonical payload "<target_module>/<port_name>" + active-target USD prefix contact-filter scoping + rclpy.spin_once() in _on_physics_step to drain /clock (this iter)
+    M exts/aic-dt/aic_dt/parity_publishers.py + scoring_publishers.py — null-guard fixes (prior iter)
+    ?? exts/aic-dt/scripts/test_motion_fidelity.sh — 3-gate verify
+    ?? exts/aic-dt/docs/trial_outcomes/trial_1_isaacsim.json — refreshed by verify
+
+  GATE STATE AFTER ITER:
+    Gate 1 PASS (outcome JSON valid, completed_steps=534)
+    Gate 2 PASS (530 pfrac lines, insert_cable() returned True after 65s wall)
+    Gate 3 FAIL (insertion_event_fired=false)
+
+  ENGINE LOG STATE — KEY PROGRESS vs PRIOR ITER:
+    PRIOR ITER ERROR (gone): "Transform between aic_world and cable_0/sfp_tip_link not found"
+      Root cause: rclpy use_sim_time=true never drained /clock (no executor spin).
+      Fix: rclpy.spin_once(self._node, timeout_sec=0) at top of _on_physics_step.
+      Verified: engine bag now contains plug TF at real sim-clock timestamps that
+      match task_end_time (no more "extrapolation into future" errors).
+
+    NEW STATE THIS ITER:
+      tier_3 message: "No insertion detected. Final plug port distance: 0.98m."
+      tier_2 categories all 0: "Plug is not within max bounding radius from target port"
+
+  DEEPER ROOT CAUSE FOUND (the actual ship-gate blocker):
+    /World/TaskBoard/NICCardMount_0 USD subtree contains ONLY:
+      - ISO_4762___M2_x_8_054 (Mesh, no RigidBodyAPI, no CollisionAPI) — a single socket-cap screw
+      - Looks/Screw (Material), Looks/Black (Material), shaders
+    NO sfp_port_*_link, NO collision geometry, NO port mesh whatsoever.
+    Asset file: exts/aic-dt/assets/assets/NIC Card Mount/nic_card_mount_visual.usd
+      — vendored is the visual-only screw, NOT the full Gazebo model.sdf subtree.
+
+    Gazebo canonical (~/Documents/aic/aic_assets/models/NIC Card Mount/model.sdf:369-400):
+      sfp_port_0_link, sfp_port_1_link, sfp_port_2_link — each with collision
+      geometry, plus _link_entrance children at port-local Z=-0.0458m.
+
+    SCPort_0 in our scene works (sc_port_visual has RigidBodyAPI + tagged) —
+    /World/TaskBoard/SCPort_0: ['/World/TaskBoard/SCPort_0/sc_port_visual'].
+    But trial_1's target is nic_card_mount_0 (the SFP/RJ45/NIC family), not SC.
+
+  /ASK-GPT CONSULT THIS ITER (3rd-attempt rule trigger):
+    Path: /tmp/gpt_response.txt — verdict "partial". GPT reiterated Path D
+    investigation steps from prior consult but did NOT directly address Q1
+    (which root cause for 0.98m), Q2 (live-probe snippet), or Q3 (vendor-USD
+    vs synthetic-RB-authoring vs target-swap). The new evidence (NICCardMount
+    has no port rigid body at all) is the architectural gap GPT missed.
+    Logged consult to /tmp/gpt_response.txt for next iter's review.
+
+  WHAT THIS ITER PROVED:
+    1. change_target_mode stub holds end-to-end (530 pfrac, 65s wall convergence)
+    2. Path A cable activation works (sc_plug_visual + link_20 both rigid + tagged)
+    3. /scoring/insertion_event payload format now correct (publisher would
+       emit "nic_card_mount_0/sfp_port_0" IF a contact event fires — log shows
+       set_active_trial_target wired correctly, contact-filter scoped to
+       active USD prefix)
+    4. rclpy.spin_once() fix is durable + correct (verified by absence of
+       extrapolation errors); same idiom controller_loop already uses
+    5. port_entrance frame correctly composes T_anchor_port @ T(0,0,-0.0458)
+
+  WHAT THIS ITER REVEALED AS THE REAL REMAINING BLOCKER:
+    NIC Card Mount asset gap. /World/TaskBoard/NICCardMount_0 has no rigid
+    body, no collision, no port mesh — only a decorative screw. Even with
+    every other layer fixed, PhysX can never fire an insertion contact event
+    because there's nothing to touch. Compounding evidence: tier_3 reports
+    final plug-port distance 0.98m — the gripper either never reached the
+    port (because there's no port mesh at the trial-target location) OR
+    the plug frame I anchor on sc_plug_visual physically drifts via the rope
+    chain (FixedJoint pins link_20 not sc_plug_visual).
+
+  RECOMMENDED NEXT ITER:
+    A. Probe sc_plug_visual world pose vs gripper_tcp world pose DURING a
+       live trial run (between steps) — answers whether the plug rigid body
+       actually tracks the gripper or drifts via rope dynamics. Concrete
+       diagnostic:
+         code = "import omni.usd; from pxr import UsdGeom; stage = omni.usd.get_context().get_stage(); xc = UsdGeom.XformCache(); plug = stage.GetPrimAtPath('/World/UR5e/cable/sc_plug_visual'); gripper = stage.GetPrimAtPath('/World/UR5e/aic_unified_robot/gripper_tcp'); pt = xc.GetLocalToWorldTransform(plug).ExtractTranslation(); gt = xc.GetLocalToWorldTransform(gripper).ExtractTranslation(); import json; result = json.dumps({'plug_world': [float(pt[0]),float(pt[1]),float(pt[2])], 'gripper_world':[float(gt[0]),float(gt[1]),float(gt[2])]})"
+       Run during the CheatCode descend phase (manually pause trial run mid-flight)
+       to see if (plug-gripper) delta is ~33mm (correct: FixedJoint binds the
+       chain) vs ~1m (broken: cable swings free).
+    B. Either vendor a proper nic_card_mount_rigid.usd or author runtime
+       RigidBodyAPI+CollisionAPI on a synthetic NICCardMount_0/sfp_port_0_link
+       child. Option B is faster; sequence:
+         (1) Create Xform at /World/TaskBoard/NICCardMount_0/sfp_port_0_link
+         (2) Set local pose from anchor_target_offsets.yaml's nic_card_mount
+             entry (translation_xyz_m + T_anchor_port_4x4_rowmajor)
+         (3) Add UsdGeom.Cube child at port-local origin, sized to the SFP
+             port footprint (~13x10x10 mm — get exact from model.sdf line 369-400)
+         (4) Apply UsdPhysics.RigidBodyAPI + UsdPhysics.CollisionAPI
+         (5) CreateKinematicEnabledAttr().Set(True) so PhysX doesn't move it
+         (6) Apply PhysxSchema.PhysxContactReportAPI (existing code in
+             scoring_publishers.start() will find it during _tag_rigid_bodies_under)
+       Also vendor or author the _link_entrance synthetic child at the
+       SDF-canonical offset for tier_3 partial-insertion scoring.
+    C. Until the rigid-body authoring is done, gate 3 cannot pass via the
+       insertion_event PhysX-contact path. Path C fallback (relax gate 3 to
+       "CheatCode completes") is the orchestrator's decision; do not adopt
+       in an executor iter.
+
+  COMMIT STATUS THIS ITER:
+    None. PRD task remains passes:false. Working tree preserved for next
+    iter — all 5 forward fixes (change_target_mode, Path A, payload, plug
+    anchor, timestamp spin_once, port_entrance) are valid prerequisites
+    that will not need re-derivation.
+
+  ITER WALL: ~22 min (mostly 4× verify runs of ~4 min each).
+
+  
+  /ASK-GPT CONSULT CORRECTION (initial read was truncated; full response now available):
+    /tmp/gpt_response.txt — verdict "Diagnose (a) first, keep sc_plug_visual
+    anchor, implement Y to unblock Gate 3." Three direct answers:
+    
+    Q1 RANK (highest-confidence first):
+      (a) PORT-FRAME ANCHOR MISMATCH — top suspect.
+          ~/Documents/aic/tools/anchor_target_offsets.yaml constants are
+          declared `relative to: anchor_link: nic_card_mount_link`. Our
+          extension.py:3307+3347 anchors the published port frame on
+          `/World/TaskBoard/NICCardMount_0` (mount ROOT), not on the
+          (missing-in-USD) `nic_card_mount_link` child. If the link has
+          any nonzero offset from the mount root in Gazebo's URDF/SDF,
+          our composed port pose is off by that offset → could trivially
+          explain 0.98m miss for a target whose real distance ought to be
+          mm-level.
+      (b) PLUG DRIFT — secondary. sc_plug_visual anchor is directionally
+          correct (don't revert) BUT physical drift via rope chain is a
+          real risk because FixedJoint pins link_20, not sc_plug_visual.
+          Comments at extension.py:3399 calling the plug "attached via
+          FixedJoint" are now technically inaccurate — flag in the next
+          iter's commit.
+      (c) Controller drop — Gate 2 rules out (insert_cable() returned True
+          + 530 pfrac lines proves motion loop ran end-to-end).
+      (d) Clock skew — addressed by this iter's spin_once fix.
+    
+    Q2 DIAGNOSTIC (paste-ready execute_python_code snippet provided in
+       /tmp/gpt_response.txt lines 35-130): samples 15s of live TFs +
+       USD world poses, then reports per-tick d_tf_plug_to_tf_port,
+       d_usd_scplug_to_tf_port, d_tf_tcp_to_tf_port, d_tf_plug_to_usd_scplug.
+       Interpretation:
+       - d_tf_plug_to_usd_scplug ≈ 0 → plug TF publication is good
+       - d_tf_tcp_to_tf_port small but d_usd_scplug_to_tf_port large →
+         plug trails gripper → (b) plug drift
+       - both d_tf_tcp_to_tf_port AND d_usd_scplug_to_tf_port large →
+         port TF wrong → (a) port-frame anchor mismatch (top suspect)
+    
+    Q3 — PATH Y (post-spawn synthetic NICCardMount_0/sfp_port_0_link).
+       Reject Z (cross-repo policy violation). X is correct long-term
+       but heavier than this fix iteration needs. Y authoring sequence:
+       1. Define Xform at /World/TaskBoard/NICCardMount_0/sfp_port_0_link
+       2. Set local pose from the SAME source the published port TF uses
+          (anchor_target_offsets.yaml.nic_card_mount.T_anchor_port_4x4)
+          so the synthetic rigid body + the published TF coincide
+       3. Add small UsdGeom.Cube child (e.g. .../contact_box) with
+          UsdPhysics.CollisionAPI
+       4. Apply UsdPhysics.RigidBodyAPI on sfp_port_0_link +
+          kinematic_enabled=True (matches the existing task-board
+          authoring pattern at extension.py:3886)
+       5. PhysxContactReportAPI: either apply directly OR let
+          scoring_publishers.start() tag it during _tag_rigid_bodies_under
+          walk — both work.
+       6. _link_entrance child is optional (entrance TF already published
+          by our synthetic _publish_trial_tf_frames path).
+    
+    NET NEXT-ITER PLAN:
+      Step 1: paste Q2 diagnostic during a live trial mid-flight, capture
+              the distance breakdown JSON. This DISCRIMINATES (a) vs (b)
+              decisively before any code edit. ~1 min cost.
+      Step 2: If (a) confirmed — derive the anchor_link→mount_root offset
+              from ~/Documents/aic/aic_description/urdf/task_board.urdf.xacro
+              or its xacro/sdf chain, and apply that offset in
+              _compute_trial_tf_frames before composing T_anchor_port.
+              Likely a small constant addend.
+      Step 3: Implement Path Y rigid-body authoring for NICCardMount port
+              subtree. This unblocks PhysX contact-event path so that
+              once geometric convergence holds (step 2), an insertion_event
+              will actually fire.
+      Step 4: Verify gates 1+2+3 — Gate 3 should flip green.
+    
+    Critical: GPT explicitly says DO NOT REVERT the sc_plug_visual anchor.
+
+
+2026-05-11T13:20Z — motion-fidelity-cheatcode-timing — PARTIAL ITER 4 (3 attempts, /ask-gpt consulted, sim crashed; no commit).
+
+  WORKING-TREE STATE (preserved for next iter):
+    M exts/aic-dt/aic_dt/extension.py   — _attach_cable_to_gripper_impl now authors
+                                          FixedJoint with explicit localPos0=localPos1=
+                                          (0,0,0) AND physics:excludeFromArticulation=
+                                          True per GPT consult. The prior iter's
+                                          plug-frame anchor, port_entrance frame,
+                                          set_active_trial_target wiring, Path A
+                                          cable activation revert all still in place.
+                                          REMOVED the step-14 mid-sim re-attach
+                                          (didn't propagate to PhysX runtime).
+    M exts/aic-dt/aic_dt/controller_loop.py   — change_target_mode service stub (iter 1)
+    M exts/aic-dt/aic_dt/parity_publishers.py — null-guard fixes (prior iter)
+    M exts/aic-dt/aic_dt/scoring_publishers.py — set_active_trial_target + payload format + spin_once
+    ?? exts/aic-dt/scripts/test_motion_fidelity.sh   — 3-gate verify
+    ?? exts/aic-dt/docs/gpt_motion_fidelity_review_2026-05-11.txt
+    ?? exts/aic-dt/docs/trial_outcomes/trial_1_isaacsim.json (refreshed by attempts)
+
+  ATTEMPT TIMELINE THIS ITER:
+    ATTEMPT 1 — Pre-translate cable USD subtree (xformOp:translate) so link_20
+      world coincides with finger_link_l world BEFORE FixedJoint authoring.
+      Result: engine reported final distance 1.81m (WORSE than baseline 0.98m).
+      Diagnosis: sim was already playing; PhysX rigid bodies on cable links own
+      their pose state once cooked; USD parent Xform changes don't propagate
+      to PhysX runtime. Reverted.
+
+    ATTEMPT 2 — Author FixedJoint with explicit physics:localPos0/1=(0,0,0).
+      Goal: bypass PhysX's "snapshot relative pose at first sim step" by
+      authoring explicit zero constraint values.
+      Result: engine reported final distance 1.01m (≈ baseline). USD attrs
+      confirmed (0,0,0). But link_20 still ~1m from finger_l in runtime.
+      Diagnosis: cross-articulation loop joints inside a single articulation
+      require special flag handling that wasn't being set.
+
+    /ASK-GPT CONSULT — invoked per stuck-escape-valve rule (2 same-root-cause
+      attempts failed). Full response at /tmp/gpt_response.txt (preserved).
+      KEY VERDICT:
+        Q1: Not a fundamental PhysX limitation — the FixedJoint needs
+            physics:excludeFromArticulation=True to be treated as a maximal-
+            coordinate loop joint. Without this flag, PhysX mis-fits it as
+            an articulation tree edge, silently ignores it at constraint
+            resolution, and link_20 follows rope-chain D6 dynamics instead.
+            Cites PhysX 5.5 Articulations docs + Isaac Sim closed-loop
+            structures tutorial.
+        Q2: RECOMMENDED PATH (e) — hybrid rigid-plug proxy: keep rope as
+            decorative; introduce kinematic rigid plug body driven from
+            gripper every physics step. M1 unblock highest likelihood. Or
+            (a) make sc_plug_visual kinematic itself + drive from gripper.
+        Q3: Diagnostic probe snippet provided that captures joint constraint
+            state including same_articulation_root, anchor_error_m,
+            authored excludeFromArticulation flag, joint_enabled,
+            break_force attrs. Paste-ready in /tmp/gpt_response.txt.
+
+    ATTEMPT 3 — Apply excludeFromArticulation=True to FixedJoint authoring
+      AND restart sim so articulation re-cooks with the new flag (PhysX
+      doesn't pick up topology changes after cook).
+      Procedure: kill sim, relaunch under zenoh-canonical env, run verify.
+      Result: SIM CRASHED MID-VERIFY. Engine reported "Failed to find a
+      valid clock" at 10s. Sim process exited (likely PhysX-side crash
+      during articulation re-cook with new loop-joint topology + cable
+      activation + 46-DOF unified articulation). All 3 gates failed
+      including gate 1+2 which were green pre-restart.
+      Sim is now DOWN at iter end.
+
+  SIM REGRESSION I CAUSED:
+    My first relaunch attempt used `nohup bash -c "..."` which DID NOT
+    propagate env vars to the actual isaacsim child process — the sim
+    came up on default rmw_cyclonedds_cpp + ROS_DOMAIN_ID=0 instead of
+    the required rmw_zenoh_cpp + ROS_DOMAIN_ID=7. Verify-1 failed on
+    "Failed to find a valid clock" for this reason. Fixed by writing a
+    /tmp/launch_aic_zenoh.sh wrapper that does export-then-exec.
+    Second relaunch had correct env (verified via /proc/$PID/environ)
+    but sim crashed during the verify trial fire ~25s into Kit boot.
+
+  ANALYSIS:
+    The crash is suspicious — the excludeFromArticulation flag itself
+    should not crash PhysX. More likely:
+    - The unified articulation re-cook with the new loop joint
+      definition + 46 DOFs + cable activation hit a PhysX assertion or
+      memory issue. PhysX articulations require all joints to be
+      reachable from the root via a tree path; if excludeFromArticulation
+      isn't honored at cook time (only at solve time), the cook itself
+      may fail.
+    - Possible: the spawn_cable / load_robot path during fresh-sim
+      load_trial doesn't pump enough sim ticks before the controller
+      loop's _on_physics_step starts firing rclpy spin_once. We saw
+      a `TypeError('Must pass a builtin_interfaces.msg.Time object')`
+      in the Kit log just before the crash. May be a tangentially
+      related issue surfaced by the fresh boot ordering.
+
+  NEXT-ITER PLAN (one of these, orchestrator decides):
+
+    PATH P3 (FOLLOWUP TO THIS ITER): restart sim under zenoh-canonical
+      env; verify the excludeFromArticulation flag actually works on
+      a clean load_trial path. If it does AND distance drops to <5cm,
+      keep the change; flip prd passes.
+
+    PATH (a) GPT-Q2 KINEMATIC PLUG PROXY: bypass the cable rope physics
+      entirely. Make sc_plug_visual a kinematic rigid body (add
+      UsdPhysics.RigidBodyAPI + CreateKinematicEnabledAttr(True)).
+      Add a _on_physics_step callback in extension.py that reads
+      finger_link_l world pose and writes sc_plug_visual world pose
+      with a fixed offset (e.g. +0.033m along finger -Z). The 21-link
+      rope chain stays decorative or becomes unused. CheatCode's
+      plug TF anchors on sc_plug_visual; engine PhysX contact-events
+      can still fire on kinematic-vs-kinematic (or kinematic-vs-dynamic).
+      Implementation cost: ~30 LOC + minor schema authoring.
+      M1 unblock probability: HIGH per GPT.
+
+    PATH (e) GPT-RECOMMENDED HYBRID: same as (a) but introduce a
+      DEDICATED sc_plug_proxy rigid body separate from sc_plug_visual,
+      driven kinematically from finger. Used purely for scoring contacts.
+      sc_plug_visual stays dynamic for visual fidelity. More invasive
+      but cleaner separation of concerns.
+
+    PATH (b) STOP-EDIT-RESTART: stop timeline, edit FixedJoint
+      attributes, restart timeline. Per GPT, lower probability than
+      (a)/(e) because the underlying issue is articulation topology
+      not just constraint values.
+
+    PATH Y RESIDUAL (NICCardMount port collider authoring): even after
+      the cable plug reaches the port geometrically, PhysX contact-event
+      won't fire because /World/TaskBoard/NICCardMount_0 has no port
+      mesh / no collision geometry / no RigidBodyAPI under it (only a
+      decorative screw + Looks subtree). This is the DEFERRED separate
+      issue identified prior iter — engine's tier_3 uses TF distance
+      so the M1 ship-gate may still PASS if (a)/(e) close the geometric
+      gap (insertion_event_fired might still be False on PhysX contacts
+      but tier_3 will report distance < threshold and a fallback gate
+      could be acceptable). OR pursue Path Y after (a)/(e) for proper
+      contact-event coverage.
+
+  EXIT: No commit. Working tree preserved (excludeFromArticulation
+    change kept; localPos0=(0,0,0) kept; step-14 mid-sim re-attach
+    removed; iter 1-3 fixes intact). PRD task passes:false.
+    Sim is DOWN — next iter must restart under zenoh-canonical env.
+    Per "stuck-escape-valve" + "WEB-FIRST DISCIPLINE", the GPT consult
+    response with citations to PhysX 5.5 Articulations + Isaac Sim
+    closed-loop-structures docs is the next iter's anchor.
+    
+    Iter wall: ~40 min.
+
+
+2026-05-11T14:00Z — motion-fidelity-cheatcode-timing — ITER 5 (PATH P3 verify; sim crashed again; reverted excludeFromArticulation; recommend PATH (a) next).
+
+  PRE-FLIGHT:
+    Working-tree iter 1-4 changes all trace to this task — continued per
+    batch_context guidance. Cache healthy 161MB. Sim DOWN at iter start
+    (iter 4 left it down).
+
+  SKILL CITATIONS (mandatory per discipline rule):
+    Skill cited: isaac-sim-extension-dev for sim launch / cache discipline / postload
+    Skill cited: nvidia-suite-docs for routing (Isaac Sim 5.0 PhysX articulation surface)
+
+  ACTIONS THIS ITER:
+    1. Launched sim via /tmp/launch_aic_zenoh.sh (env-propagating wrapper);
+       verified /proc/$PID/environ has RMW=rmw_zenoh_cpp + ROS_DOMAIN_ID=7
+       + ZENOH_CONFIG_OVERRIDE present. Sim READY (10s).
+    2. Ran verify: bash exts/aic-dt/scripts/test_motion_fidelity.sh
+       Result: all 3 gates FAIL.
+       - Engine log: "Waiting for clock" → 10s → "Failed to find a
+         valid clock" → "Engine failed to initialize"
+       - Sim PID 3960868 GONE post-verify (process crashed)
+       - aic_model log: 0 pfrac lines, no "insert_cable" line
+       - outcome JSON: completed_steps=-1, insertion_event_fired=false
+
+  KIT LOG ANALYSIS (kit_20260511_062147.log):
+    - load_trial completed [MCP] "status: success" at +41s sim time
+    - All parity/scoring publishers started cleanly
+    - set_active_trial_target='nic_card_mount_0' / port='sfp_port_0'
+      logged correctly
+    - controller _setup_kinematics tool0→gripper/tcp +0.1965m cached
+    - Articulation dof_names confirm 46 DOFs (6 arm + 40 cable D6 joints)
+    - Last log line at +46s — Performance warning then SILENT
+    - No traceback, no segfault marker, no assertion failure logged
+    - Behavior consistent with iter 4 ATTEMPT 3 crash:
+      "SIM CRASHED MID-VERIFY... PhysX-side crash during articulation
+      re-cook with new loop-joint topology"
+
+  EMPIRICAL ROOT CAUSE CONFIRMED:
+    physics:excludeFromArticulation=True on the cable-attach FixedJoint
+    deterministically crashes Isaac Sim PhysX cook on a fresh boot.
+    Two consecutive fresh-boot reproductions (iter 4 ATTEMPT 3 + iter 5
+    PATH P3) yield identical symptom: load_trial reports success,
+    physics ticks proceed briefly, sim process dies silently within
+    ~5s of articulation construction with no traceback in kit log.
+
+    The /ask-gpt iter 4 recommendation (cite: PhysX 5.5 Articulations
+    docs + Isaac Sim closed-loop-structures tutorial) is THEORETICALLY
+    correct — loop joints require the flag — but the underlying PhysX
+    implementation in Isaac Sim 5.0 5.x cannot handle this specific
+    topology (UR5e arm 6-DOF + cable rope 40-DOF unified articulation
+    + cross-link loop joint to gripper finger). Likely an Isaac Sim
+    bug or a different topology requirement we haven't identified.
+
+  HYPOTHESIS RULE STATE:
+    Iter 4 already triggered /ask-gpt rule on this diagnosis
+    (excludeFromArticulation as primary cause for plug-port miss).
+    Iter 5 verified the recommended fix → CRASHED twice. This is now
+    the 2nd-3rd consecutive failure on the same root-cause diagnosis.
+    Per stuck-escape-valve rule: BEFORE the 3rd attempt on this same
+    diagnosis, MUST switch to an OBVIOUSLY-DIFFERENT hypothesis.
+
+    PATH (a) "kinematic plug proxy" qualifies as obviously-different:
+      - Bypasses cable physics entirely for scoring
+      - Makes sc_plug_visual a kinematic body (PhysX position-driven)
+      - Drive sc_plug_visual world pose from finger_link_l world pose
+        every physics step via either UsdPhysics.RigidBodyAPI +
+        kinematicEnabled=True + direct xformOp write, OR via
+        omni.physx.IPhysxScene.set_kinematic_target() per Isaac Sim
+        kinematic-rigid-body docs
+      - GPT verdict M1 unblock probability: HIGH
+      - Implementation cost: ~30 LOC + minor schema authoring
+
+  REVERT THIS ITER:
+    Removed the 4-line `physics:excludeFromArticulation=True` authoring
+    block from `_attach_cable_to_gripper_impl` in extension.py.
+    Working tree now matches iter 3 ATTEMPT 2 stable state:
+      - FixedJoint authored with explicit localPos0=localPos1=(0,0,0)
+      - No excludeFromArticulation flag
+      - Cable activation (Path A) intact
+      - All other iter 1-3 fixes (change_target_mode stub, set_active_trial_target,
+        plug-frame anchor on sc_plug_visual, port_entrance frame,
+        spin_once timestamp fix) preserved
+    Stability: sim was stable at this state per iter 3 ATTEMPT 2
+    (engine reported final distance 1.01m, no crash) — known baseline.
+
+  NEXT-ITER PLAN (PATH (a) — KINEMATIC PLUG PROXY):
+    Step 1: In `_attach_cable_to_gripper_impl` (or a new helper called
+      from `_cmd_load_trial` step 14 area):
+        a) Get sc_plug_visual prim at /World/UR5e/cable/sc_plug_visual
+        b) Apply UsdPhysics.RigidBodyAPI (idempotent if already applied)
+        c) Set physics:kinematicEnabled = True
+        d) Apply PhysxSchema.PhysxRigidBodyAPI (for kinematic semantics)
+        Note: this is in addition to (NOT replacing) the FixedJoint
+        authoring. Keep FixedJoint as no-op stabilizer for the rope chain.
+    Step 2: Add a physics-step callback (likely in controller_loop._on_physics_step
+      or a new XformCommandsRunner — TBD architecturally):
+        a) Read finger_link_l world pose via Isaac Sim ArticulationView
+           or omni.usd.XformCache + sim-step subscription
+        b) Compute target world pose = finger_link_l_world @ T_offset
+           where T_offset is the static gripper/tcp → sc_plug_visual
+           offset (probe live first; expected ~+0.033m along finger -Z
+           per iter 3 sc_plug_visual analysis but exact value TBD)
+        c) Write sc_plug_visual world pose via:
+           - Option A (preferred): direct USD attr write on xformOp:translate
+             and xformOp:orient on /World/UR5e/cable/sc_plug_visual
+           - Option B (cleaner): omni.physx.IPhysxScene.set_kinematic_target()
+             with the same pose; gives PhysX kinematic interpolation
+    Step 3: Verify with bash exts/aic-dt/scripts/test_motion_fidelity.sh
+      Gate 1: outcome JSON valid, completed_steps != -1
+      Gate 2: ≥500 pfrac lines + insert_cable() returned True
+      Gate 3: insertion_event_fired=true (M1 SHIP GATE)
+    Step 4: If Gate 3 still fails because NICCardMount has no port
+      rigid body (the PATH Y residual issue from iter 3):
+      - tier_3 distance gate may still report PASS (engine uses TF
+        distance, not just PhysX contact)
+      - Orchestrator decides: pursue PATH Y (synthetic NICCardMount
+        port-link authoring) or accept tier_3 partial pass for M1
+
+  EXIT:
+    No commit. Working tree preserved with iter 4's bad change reverted.
+    PRD task remains passes:false.
+    Sim DOWN — next iter must restart under zenoh-canonical env.
+    Iter wall: ~30 min.
+
+
+2026-05-11T13:45Z — motion-fidelity-cheatcode-timing — ITER 6 (PATH (a) plug-proxy authored; verify BLOCKED on reproducible GPU driver crash; no commit)
+
+  PRE-FLIGHT:
+    Working-tree iter 1-5 changes all trace to this task — continued per batch_context.md
+    guidance. Cache healthy 162MB (162M /home/aaugus11/.cache/ov/DerivedDataCache).
+    Sim DOWN at iter start (iter 5 left it down).
+
+  SKILL CITATIONS (mandatory per discipline rule):
+    Skill cited: isaac-sim-extension-dev for cache discipline + launch path + sim restart pattern
+    Skill cited: nvidia-suite-docs for routing context (Isaac Sim 5.0 PhysX kinematic / RigidBodyAPI / FixedJoint topology)
+
+  IMPLEMENTATION THIS ITER — PATH (a) "kinematic-style plug proxy":
+    Per iter 5 NEXT-ITER PLAN. Simplified the GPT-recommended approach: rather than
+    authoring a kinematic rigid body + physics-step driver callback (~50 LOC + callback
+    lifecycle complexity), authored sc_plug_visual as a STANDALONE DYNAMIC rigid body
+    + separate FixedJoint to finger_link_l. ~15 LOC; no callback needed.
+
+    TOPOLOGY REASONING (why this isn't the iter-4-5 crash):
+      The iter-4-5 crash was specifically the cable→finger CableAttachJoint with
+      excludeFromArticulation=True. That joint connects link_20 (in cable articulation
+      chain, 21 D6 joints) to finger_link_l (in UR5e+RG2 articulation). With both ends
+      in different articulations and a constraint between them, you have a CLOSED LOOP
+      between two articulations. Tagging excludeFromArticulation tries to ask PhysX to
+      treat the joint as a constraint not part of the cook — deterministically crashes.
+
+      sc_plug_visual is an Xform CHILD of /World/UR5e/cable (sibling of /World/UR5e/cable/
+      Rope/Rope/link_*), NOT part of the cable articulation. Adding RigidBodyAPI makes it
+      a STANDALONE rigid body (not in any articulation). FixedJoint to finger_link_l
+      constrains a standalone body to an articulation body — NO closed loop, no
+      excludeFromArticulation flag needed, no PhysX cook crash.
+
+    CODE CHANGES (extension.py::_attach_cable_to_gripper_impl):
+      After existing CableAttachJoint authoring (kept unchanged as link_20 stabilizer for
+      the visual rope chain), inserted ~30 LOC:
+        - GetPrimAtPath(/World/UR5e/cable/sc_plug_visual)
+        - UsdPhysics.RigidBodyAPI.Apply (idempotent)
+        - UsdPhysics.MassAPI.Apply + CreateMassAttr(0.05) (50g — light, FixedJoint dominates)
+        - PhysxSchema.PhysxRigidBodyAPI.Apply
+        - UsdPhysics.CollisionAPI.Apply (needed for PhysX contact-event between plug + port)
+        - UsdPhysics.FixedJoint.Define at finger/PlugVisualAttachJoint
+        - body0=finger, body1=sc_plug_visual, localPos0=localPos1=(0,0,0)
+        - localRot left unauthored — PhysX snapshots rotational offset at first tick
+
+    EXPECTED OUTCOME (when GPU recovers):
+      - sc_plug_visual tracks finger_link_l rigidly (FixedJoint constraint dominates the
+        light mass), so as gripper drives toward port, sc_plug_visual world pose follows
+      - Published /tf plug_frame (extension.py::_compute_trial_tf_frames line ~3437,
+        anchored on /World/UR5e/cable/sc_plug_visual) tracks the gripper directly
+      - CheatCode commands plug_frame → port_frame, gripper drives, sc_plug_visual reaches
+        port, plug collider penetrates port collider, /scoring/insertion_event fires
+      - Cable rope chain (link_*) becomes decorative; cable plug-end (link_20) still
+        FixedJointed to finger via the original CableAttachJoint above
+      - PATH Y RESIDUAL still possible: if NICCardMount_0 has no port collider geometry,
+        PhysX contact event won't fire even when sc_plug_visual reaches port (tier_3 might
+        still report distance < threshold via TF instead — fallback gate)
+
+  VERIFY ATTEMPT — BLOCKED BY REPRODUCIBLE GPU DRIVER CRASH:
+    5 consecutive launch+verify attempts crashed Isaac Sim with the SAME signature:
+      [Error] [carb.graphics-vulkan.plugin] VkResult: ERROR_DEVICE_LOST (×6 per crash)
+      [Error] [gpu.foundation.plugin] A GPU crash occurred. Exiting the application...
+      kernel: isaacsim[<pid>]: segfault at 0 ip 0x...ca4 sp 0x... error 6 in
+        libgpu.foundation.plugin.so[+0x89ca4]   ← same offset every time, deterministic
+      [Warning] [gpu.foundation.plugin] aftermath dump failed to be produced within
+        timeout window (15 seconds), proceeding without wait
+
+    PATTERN: sim launches fine (READY in 10s). load_scene works (~6s, ground plane +
+    enclosure + physics). Crash triggers when load_robot loads the unified UR5e+cable USD
+    or when load_trial fires the trial config. UsdContext::createViewportImpl is the
+    immediate trigger frame in the Kit log.
+
+    GPU HEALTH (during crashes):
+      NVIDIA RTX A4500, 1.6GB / 20GB memory, 0-7% utilization, 36-37°C
+      No competing GPU compute clients (nvidia-smi --query-compute-apps empty)
+      Driver: NVIDIA 550.163.01
+      dmesg: numerous "nvidia-drm Failed to grab modeset ownership" (display ownership
+        contention with KDE compositor) + 2 segfaults logged via journalctl
+
+    LAUNCH ATTEMPTS:
+      Attempt 1 (13:33Z): launch OK, probe OK (3 prims valid:false — scene not loaded),
+        quick_start → Vulkan crash during viewport composition
+      Attempt 2 (13:34Z): same — viewport ERROR_DEVICE_LOST
+      Attempt 3 (13:36Z): launch OK, load_scene OK in 6.4s, load_robot → Vulkan crash
+      Attempt 4 (13:39Z): same
+      Attempt 5 (13:41Z, after touch + 15s pause): launch OK, test_motion_fidelity.sh
+        wrapper fired load_trial → Vulkan crash within seconds. Verify gates ALL FAIL
+        (completed_steps=-1; pfrac=0; insertion_event_fired=False) because the trial
+        never started — engine container saw no /clock from a dead sim.
+
+    THIS IS NOT THE PRIOR ITER-4-5 CRASH — those were PhysX cook crashes on
+    excludeFromArticulation. This is a Vulkan/GPU driver crash that fires BEFORE PhysX
+    even gets to cook anything (during USD reference resolution + viewport setup).
+    Reproducibility suggests:
+      (a) GPU driver state corruption from prior iter5 crash that hasn't recovered
+      (b) Stale shader/GLCache entries interacting with Isaac Sim 5.0 5.x
+      (c) Specific shader in the UR5e or cable USD chain hitting a 550.163.01 driver bug
+
+  WORKAROUND OPTIONS (orchestrator decides):
+    (1) MACHINE REBOOT: clears GPU driver state, NVRM context, shader compile caches in
+        kernel-side. Most likely to restore working state. Operator-required.
+    (2) WIPE ALL OV CACHES: per isaac-sim-extension-dev skill rule "either keep or wipe
+        shaders+DerivedDataCache+GLCache+mesa together, never selectively". Would force
+        cold-cache cooking on next quick_start — cold-cache cooking is documented as
+        BROKEN in Isaac Sim 5.x with cable+UR5e USD (CLAUDE.md "Cache state matters" §).
+        Likely to wedge load_robot indefinitely; NOT recommended without operator
+        approval given snapshot-restore is the supported model.
+    (3) DRIVER RESET WITHOUT REBOOT: `nvidia-smi --gpu-reset` (requires root + no
+        attached processes). Operator-required.
+    (4) WAIT FOR PASSIVE RECOVERY: some Vulkan device-lost events recover after the
+        driver completes its internal reset (~minutes). Next iter could retry; if same
+        crash, escalate to (1) or (3).
+
+  EXIT:
+    No commit. Working tree preserved with iter 6 PATH (a) code change atop iter 1-5
+    changes (all trace to this task). PRD task remains passes:false. Sim DOWN.
+    extension.py +30 LOC plug-proxy authoring block in _attach_cable_to_gripper_impl
+    (lines after CableAttachJoint print, before gripper_initial_pos handling).
+
+    Iter wall: ~50 min, mostly fighting GPU driver crashes after the code edit landed
+    in ~5 min. Next iter should attempt verify FIRST (no new code edits) to confirm the
+    GPU crash either persists (escalate to operator) or recovers (then PATH (a) verifies
+    as designed).
