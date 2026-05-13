@@ -1028,20 +1028,20 @@ class DigitalTwin(omni.ext.IExt):
         # the two GLBs locally (assets/Floor/floor.usda).
         self.import_floor()
 
-        # Activate Isaac Sim viewport "Colored Lights" rig. Rig USDs at
-        #   .../omni.kit.viewport.menubar.lighting-*/data/usd/{Default,Colored_Lights,Grey_Studio}.usda
-        # NOTE: the API expects display names with SPACES ("Colored Lights",
-        # "Grey Studio") — not the underscored filenames. _get_rig_names_and_paths
-        # converts `_` → ` ` when scanning the data dir.
-        # Side-effect: VisibilityEdit hides any scene-authored UsdLux prims
-        # while a rig is active — /World/Lights/* stays authored but isn't
-        # used until the user switches to Stage Lights mode.
+        # Switch viewport to "Stage Lights" mode so the /World/Lights/* prims
+        # authored by `_setup_aic_lights()` actually contribute. The default
+        # boot state hides scene-authored UsdLux while a rig (Default /
+        # Colored Lights / Grey Studio) is active — VisibilityEdit applies
+        # `visibility=invisible` overrides to every UsdLux prim in the scene
+        # for the rig duration. Switching to "Stage Lights" removes those
+        # overrides and re-enables /World/Lights/{enclosure_light,
+        # ceiling_01, ceiling_02, ceiling_panel_rect}.
         try:
             from omni.kit.viewport.menubar.lighting.actions import _set_lighting_mode
-            ok, applied, prev = _set_lighting_mode("Default", usd_context=omni.usd.get_context())
-            print(f"[AIC-DT] light rig: Default (ok={ok}, prev={prev!r})")
+            ok, applied, prev = _set_lighting_mode("Stage Lights", usd_context=omni.usd.get_context())
+            print(f"[AIC-DT] lighting mode: Stage Lights (ok={ok}, prev={prev!r})")
         except Exception as exc:
-            print(f"[AIC-DT] light rig activation skipped: {exc!r}")
+            print(f"[AIC-DT] lighting-mode switch skipped: {exc!r}")
 
         # Author /World/workspace_camera (Gazebo-parity GUI vantage,
         # viewport-only — no ROS publish). Coupled to baseline so the user
@@ -1065,6 +1065,32 @@ class DigitalTwin(omni.ext.IExt):
         settings = carb.settings.get_settings()
         settings.set("/persistent/simulation/minFrameRate", self._min_frame_rate)
         print(f"Set persistent/simulation/minFrameRate to {self._min_frame_rate}")
+
+        # RTX ambient-occlusion ray length. Default 35 m means the AO sample
+        # ray almost always escapes interior geometry → no crevice darkening.
+        # 1.0 m was the iteratively-found sweet spot (Gazebo-vs-Isaac parity
+        # audits — 8.2/10 vs default 35m=3/10, 0.3m=4.0/10, 2.0m=7.3/10).
+        # Restores contact shadows at panel junctions / corner seams without
+        # the broad-AO washout that the long ray produces.
+        settings.set("/rtx/ambientOcclusion/rayLength", 1.0)
+        settings.set("/rtx/ambientOcclusion/enabled", True)
+        # Iray tonemap filmIso 100 → 81 (-0.3 EV). The default exposure
+        # over-exposes whites vs Gazebo; head-to-head GPT preference test
+        # picked -0.3 EV. Smaller drops feel washed-out, bigger drops crush
+        # interior detail.
+        settings.set("/rtx/post/tonemap/filmIso", 81.2)
+        # Zero the residual scene-DB ambient (default (0.1,0.1,0.1)) so the
+        # interior corners aren't flooded with gray fill. Head-to-head GPT
+        # parity test preferred (0,0,0) over (0.1,0.1,0.1).
+        settings.set("/rtx/sceneDb/ambientLightColor", (0.0, 0.0, 0.0))
+        # Lift indirect-diffuse bounces 2→4. More bounces = more interreflection
+        # = stronger tonal variation between adjacent surfaces (back wall lit
+        # by reflected floor light, etc.). Closes Gazebo's "softer falloff,
+        # more indirect shadowing" character that RaytracedLighting otherwise
+        # under-renders at the default 2 bounces.
+        settings.set("/rtx/indirectDiffuse/maxBounces", 4)
+        print("[AIC-DT] RTX AO rayLength = 1.0 m, filmIso = 81.2 (-0.3 EV), "
+              "sceneDb/ambientLightColor zeroed")
 
         # Configure physics scene
         physics_scene_prim = stage.GetPrimAtPath("/physicsScene")
@@ -1112,6 +1138,11 @@ class DigitalTwin(omni.ext.IExt):
             xform.AddTranslateOp().Set(Gf.Vec3d(*self._enclosure_position))
             xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
             print(f"AIC enclosure imported at {prim_path}, position={self._enclosure_position}")
+
+        # No runtime material compensation — the bake script authors
+        # source-true GLB values into enclosure_split.usdc (verified via
+        # parse_glb_materials.py). RTX renders metallic WHITE darker than
+        # ogre2 by renderer-pipeline difference, not by authoring divergence.
 
     def import_floor(self):
         """Import the AIC Floor USD (floor_visual.glb + walls_visual.glb).
@@ -1245,7 +1276,10 @@ class DigitalTwin(omni.ext.IExt):
         spot_path = f"{lights_root}/enclosure_light"
         spot = UsdLux.SphereLight.Define(stage, spot_path)
         spot.CreateRadiusAttr(0.05)
-        spot.CreateIntensityAttr(500.0)
+        # RTX RaytracedLighting needs higher intensity than ogre2 to reach
+        # the workspace through enclosure occlusion. 15000 chosen after
+        # Gazebo-vs-Isaac parity audit found B much darker than A.
+        spot.CreateIntensityAttr(15000.0)
         spot.CreateColorAttr(Gf.Vec3f(1.0, 1.0, 1.0))
         shaping = UsdLux.ShapingAPI.Apply(spot.GetPrim())
         shaping.CreateShapingConeAngleAttr(2.0 * 180.0 / 3.14159265)  # rad → deg (Gazebo outer_angle=2)
@@ -1268,8 +1302,67 @@ class DigitalTwin(omni.ext.IExt):
             xf.AddTranslateOp().Set(Gf.Vec3d(*xyz))
             xf.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
 
-        print(f"[AIC-DT] authored 3 Gazebo-parity lights under {lights_root} "
-              f"(enclosure_light spot @ 2.5m, 2× point @ 6m ceiling)")
+        # 3a. DomeLight for broad ambient fill. Gazebo's reference render has
+        # near-uniform diffuse fill on the back wall + floor. RTX with only
+        # SphereLight + RectLight sources still produces shadow pooling.
+        # A low-intensity DomeLight gives the "everywhere fill" character.
+        # 3a. DomeLight at low intensity for ambient fill. v7 baseline; the
+        # v8 attempt to remove it collapsed the scene's contrast — kept here.
+        # Slightly warm tint (1.0, 0.96, 0.88) compensates for Gazebo's
+        # "soft warm cast" observed in the reference render vs RTX's
+        # cool/neutral default. Lift / warm tint are documented RTX-vs-ogre2
+        # compensation, NOT a Gazebo light setting (Gazebo's lights are 1,1,1).
+        dome_path = f"{lights_root}/ambient_dome"
+        dome = UsdLux.DomeLight.Define(stage, dome_path)
+        dome.CreateIntensityAttr(300.0)
+        dome.CreateColorAttr(Gf.Vec3f(1.0, 0.91, 0.78))
+
+        # 3b. RectLight INSIDE the enclosure — the dominant interior fill.
+        # Gazebo's render shows broad diffuse overhead illumination (not the
+        # point-source falloff that SphereLights produce). A RectLight just
+        # below the translucent inner ceiling (z=2.5) covering the enclosure
+        # footprint (≈1.4×1.4 m) emits downward into the workspace, giving
+        # the same area-light character. Sits below GRAY75_CEILING so its
+        # cone is unobstructed; visible through the translucent panel as the
+        # "white opening above" that Gazebo's ceiling panel reveals.
+        enc_rect_path = f"{lights_root}/enclosure_panel_rect"
+        enc_rect = UsdLux.RectLight.Define(stage, enc_rect_path)
+        enc_rect.CreateWidthAttr(1.4)
+        enc_rect.CreateHeightAttr(1.4)
+        enc_rect.CreateIntensityAttr(3000.0)
+        enc_rect.CreateColorAttr(Gf.Vec3f(1.0, 1.0, 1.0))
+        xf = UsdGeom.Xformable(enc_rect.GetPrim())
+        xf.ClearXformOpOrder()
+        # z=2.50 (just below GRAY75_CEILING at z≈2.52); emits -Z (down) by default
+        xf.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 2.50))
+        xf.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
+
+        # 4. RectLight — proxy for the Material_003 emissive ceiling panel.
+        # In Gazebo's ogre2 renderer, walls_visual.glb Material_003 has
+        # `emissive_strength=625` and acts as a full-ceiling area light. RTX
+        # in RaytracedLighting mode renders the emissive material as bright
+        # pixels but does NOT propagate light from it (only PathTracing
+        # mode does). UsdLux.RectLight works in BOTH modes and avoids
+        # path-tracer firefly artifacts. Position + dimensions match the
+        # Plane_003 Material_003 GeomSubset bbox in walls_split.usdc:
+        # corners ±4.7165, z=7.0478 → 9.433×9.433 m at z=7.048 facing -Z.
+        rect_path = f"{lights_root}/ceiling_panel_rect"
+        rect = UsdLux.RectLight.Define(stage, rect_path)
+        rect.CreateWidthAttr(9.433)
+        rect.CreateHeightAttr(9.433)
+        # 6000 = v7 value (4200 was tried in v8 — produced a flatter look).
+        rect.CreateIntensityAttr(6000.0)
+        rect.CreateColorAttr(Gf.Vec3f(1.0, 1.0, 1.0))
+        # RectLight emits along -Z by default; ceiling pointing -Z (down) is
+        # the no-rotation case. Translate to the panel center.
+        xf = UsdGeom.Xformable(rect.GetPrim())
+        xf.ClearXformOpOrder()
+        xf.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 7.048))
+        xf.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
+
+        print(f"[AIC-DT] authored 6 lights under {lights_root} "
+              f"(enclosure_light spot @ 2.5m, enclosure_panel_rect @ 2.5m, "
+              f"ambient_dome, 2× point @ 6m, ceiling_panel_rect @ 7.05m)")
 
     def _toggle_viewport_rendering(self):
         """Toggle viewport rendering on/off to free GPU resources."""
