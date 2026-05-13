@@ -2645,7 +2645,7 @@ class DigitalTwin(omni.ext.IExt):
         return removed
 
     def _ensure_camera_pump_running(self):
-        """Start the replicator orchestrator pump if not already running.
+        """(Re)start the replicator orchestrator pump.
 
         The pump perpetually calls `rep.orchestrator.step_async` which drives
         Hydra to render secondary `IsaacCreateRenderProduct` render products
@@ -2653,12 +2653,26 @@ class DigitalTwin(omni.ext.IExt):
         it, the Helper graph executes and the SDG publishers exist with valid
         wiring, but the annotator chain never receives RGBA data (publisher
         inputs:width stays at 0, no topic on ROS bus).
+
+        Always cancels-then-restarts. A stale pump task from a previous stage
+        (orphaned by `new_stage` / `load_scene` since render products are
+        per-stage) keeps `.done() == False` but no longer drives anything
+        useful — confirmed live 2026-05-13 after a user reported a fresh
+        load_scene → load_robot → start_wrist_camera_stream sequence
+        producing no topic. Cancel + restart cheaply re-binds the pump
+        onto the live stage's render-product pipeline.
         """
-        if getattr(self, "_camera_pump_task", None) is not None:
-            return
         import asyncio
         import omni.kit.async_engine
         import omni.replicator.core as rep
+
+        # Cancel any pre-existing pump (handles orphaned-after-new_stage case)
+        prior = getattr(self, "_camera_pump_task", None)
+        if prior is not None:
+            try:
+                prior.cancel()
+            except Exception:
+                pass
 
         async def _pump():
             while True:
@@ -2671,7 +2685,7 @@ class DigitalTwin(omni.ext.IExt):
                     await asyncio.sleep(0.5)
 
         self._camera_pump_task = omni.kit.async_engine.run_coroutine(_pump())
-        print("[AIC-DT] replicator orchestrator pump started for camera streams")
+        print("[AIC-DT] replicator orchestrator pump (re)started for camera streams")
 
     def _cancel_camera_pump(self):
         """Cancel the perpetual pump task. Idempotent."""
