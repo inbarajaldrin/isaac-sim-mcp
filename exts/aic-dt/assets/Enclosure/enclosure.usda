@@ -1,0 +1,33 @@
+#usda 1.0
+(
+    defaultPrim = "Enclosure"
+    upAxis = "Z"
+    metersPerUnit = 1.0
+)
+
+def Xform "Enclosure"
+{
+    def Xform "EnclosureVisual" (
+        prepend references = @./enclosure_split.usdc@
+    )
+    {
+        # enclosure_split.usdc has the GLB mesh SPLIT into atomic per-material
+        # Mesh prims (V1014952_001_GRAY75_{FLOOR,MID,CEILING} + V1014952_001_WHITE)
+        # and has the full source-stage TRS + mPU=0.01 → 1.0 conversion BAKED
+        # INTO the vertex points. So this wrapper is identity — no manual
+        # scale, no rotateX, no Z lift needed. Splitter (script in chat /
+        # session 2026-05-13) reads /World/V1014952_001's local-to-world
+        # transform from the converted USD, composes it with cm→m, applies
+        # to every point + normal, and emits dst as upAxis=Z + mPU=1.0.
+        # Final WHITE top sits at world z=2.5794 (matches Gazebo collision
+        # `v1015013001_collider_box` top z=2.579 per Enclosure/model.sdf).
+        double3 xformOp:translate = (0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # NOTE: enclosurewalls_visual.glb (resolves to a giant Cube wall mesh)
+    # and light_visual.glb (lamp fixture decorative mesh) are intentionally
+    # NOT referenced here — the pre-baked scene/aic.usd kept /enclosurewalls
+    # as an empty Xform placeholder and omitted the light mesh entirely.
+    # Adding either changes the visible scene compared to the original.
+}

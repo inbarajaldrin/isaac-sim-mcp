@@ -558,7 +558,11 @@ class DigitalTwin(omni.ext.IExt):
         self._robot_position = (-0.18, -0.122, 0.0)
 
         # AIC enclosure — at world origin per aic.sdf (no <pose> on Enclosure <include>).
-        self._enclosure_usd = "scene/aic.usd"
+        # Direct-GLB-reference wrapper (enclosure_visual.glb + enclosurewalls_visual.glb
+        # + light_visual.glb). Preserves per-panel GLB materials/textures —
+        # the prior scene/aic.usd pre-bake collapsed them to a single
+        # /World/Looks/visual_material UsdPreviewSurface (material parity gap).
+        self._enclosure_usd = "Enclosure/enclosure.usda"
         self._enclosure_position = (0.0, 0.0, 0.0)
 
         # Ground plane Z — Floor model at world origin in aic.sdf.
@@ -998,20 +1002,64 @@ class DigitalTwin(omni.ext.IExt):
             GroundPlane(prim_path="/World/defaultGroundPlane", z_position=self._ground_plane_z, size=5000)
             print(f"Added ground plane at z={self._ground_plane_z}")
 
-        # Add default dome light if no lights exist
-        from pxr import UsdLux
-        has_light = False
-        for prim in stage.Traverse():
-            if prim.IsA(UsdLux.DomeLight) or prim.IsA(UsdLux.DistantLight):
-                has_light = True
-                break
-        if not has_light:
-            dome = UsdLux.DomeLight.Define(stage, "/World/defaultDomeLight")
-            dome.CreateIntensityAttr().Set(1000.0)
-            print("Added default dome light at 1000 lux")
+        # Author Gazebo-parity lighting (replaces the single default dome).
+        # Sources: ~/Documents/aic/aic_description/world/aic.sdf lines 138-186
+        #   <light spot enclosure_light>  pose 0 0 2.5, intensity 0.4, range 2, cone 0.1↔2 rad
+        #   <light point ceiling_01>      pose  2  2 6, intensity 2, range 9
+        #   <light point ceiling_02>      pose -2 -2 6, intensity 2, range 9
+        # Gazebo's <ambient>0 0 0</ambient> means NO global ambient term — so we
+        # author NO DomeLight (instead of one with intensity=0, which still leaks).
+        self._setup_aic_lights()
+
+        # Set viewport background to match aic.sdf <background>0.15 0.15 0.15 1</background>
+        try:
+            _settings = carb.settings.get_settings()
+            _settings.set("/rtx/sceneDb/ambientLightIntensity", 0.0)
+            _settings.set("/rtx/raytracing/showLights", 1)
+            _settings.set("/app/window/clearColor", [0.15, 0.15, 0.15, 1.0])
+        except Exception as exc:
+            print(f"[AIC-DT] viewport bg config skipped: {exc!r}")
 
         # Import AIC enclosure
         self.import_enclosure()
+
+        # Import AIC floor (Gazebo's model://Floor — floor_visual.glb +
+        # walls_visual.glb). Authored as a thin USDA wrapper referencing
+        # the two GLBs locally (assets/Floor/floor.usda).
+        self.import_floor()
+
+        # Activate Isaac Sim viewport "Colored Lights" rig. Rig USDs at
+        #   .../omni.kit.viewport.menubar.lighting-*/data/usd/{Default,Colored_Lights,Grey_Studio}.usda
+        # NOTE: the API expects display names with SPACES ("Colored Lights",
+        # "Grey Studio") — not the underscored filenames. _get_rig_names_and_paths
+        # converts `_` → ` ` when scanning the data dir.
+        # Side-effect: VisibilityEdit hides any scene-authored UsdLux prims
+        # while a rig is active — /World/Lights/* stays authored but isn't
+        # used until the user switches to Stage Lights mode.
+        try:
+            from omni.kit.viewport.menubar.lighting.actions import _set_lighting_mode
+            ok, applied, prev = _set_lighting_mode("Default", usd_context=omni.usd.get_context())
+            print(f"[AIC-DT] light rig: Default (ok={ok}, prev={prev!r})")
+        except Exception as exc:
+            print(f"[AIC-DT] light rig activation skipped: {exc!r}")
+
+        # Author /World/workspace_camera (Gazebo-parity GUI vantage,
+        # viewport-only — no ROS publish). Coupled to baseline so the user
+        # can switch viewport to it right after load_scene.
+        self._setup_workspace_camera()
+
+        # Hide /World/defaultGroundPlane visually (Xform invisible — both
+        # `geom` Mesh and `collisionPlane` Plane inherit). PhysX collision
+        # is driven by CollisionAPI, not USD visibility — floor still works.
+        try:
+            from pxr import UsdGeom as _UsdGeom
+            gp_root = stage.GetPrimAtPath("/World/defaultGroundPlane")
+            if gp_root and gp_root.IsValid():
+                _UsdGeom.Imageable(gp_root).MakeInvisible()
+                print("[AIC-DT] /World/defaultGroundPlane → invisible (physics retained)")
+        except Exception as exc:
+            print(f"[AIC-DT] ground plane hide skipped: {exc!r}")
+
 
         # Set minimum frame rate
         settings = carb.settings.get_settings()
@@ -1064,6 +1112,164 @@ class DigitalTwin(omni.ext.IExt):
             xform.AddTranslateOp().Set(Gf.Vec3d(*self._enclosure_position))
             xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
             print(f"AIC enclosure imported at {prim_path}, position={self._enclosure_position}")
+
+    def import_floor(self):
+        """Import the AIC Floor USD (floor_visual.glb + walls_visual.glb).
+
+        Mirrors `model://Floor` from `aic.sdf:200-204` — included at world
+        origin with no pose override. The local USDA wrapper at
+        `assets/Floor/floor.usda` references the two GLBs as Xform children.
+        """
+        stage = omni.usd.get_context().get_stage()
+        prim_path = "/World/AIC_Floor"
+        if stage.GetPrimAtPath(prim_path).IsValid():
+            print(f"AIC floor already exists at {prim_path}, skipping")
+            return
+        try:
+            asset_path = _local_asset("Floor/floor.usda")
+        except FileNotFoundError as e:
+            print(f"Warning: {e}")
+            return
+        add_reference_to_stage(usd_path=asset_path, prim_path=prim_path)
+        for _ in range(10):
+            prim = stage.GetPrimAtPath(prim_path)
+            if prim.IsValid():
+                break
+            time.sleep(0.1)
+        prim = stage.GetPrimAtPath(prim_path)
+        if prim.IsValid():
+            xform = UsdGeom.Xform(prim)
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.0))
+            xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
+            print(f"AIC floor imported at {prim_path}")
+
+    def _setup_workspace_camera(self):
+        """Author /World/workspace_camera (Gazebo-parity GUI vantage).
+
+        Mirrors aic.sdf:32 <camera_pose>0.95 -0.1 1.3 0 0 3.14</camera_pose>
+        with USD camera frame conversion → quat(x,y,z,w)=(0.5,0.5,0.5,0.5).
+        Idempotent — skips if /World/workspace_camera already exists. NO ROS
+        publish (Gazebo's MinimalScene <camera_pose> is viewport-only).
+        """
+        stage = omni.usd.get_context().get_stage()
+        ws_prim_path = "/World/workspace_camera"
+        if stage.GetPrimAtPath(ws_prim_path).IsValid():
+            print(f"[AIC-DT] workspace_camera already at {ws_prim_path}, skipping")
+            return
+        ws_position = (0.95, -0.1, 1.3)
+        ws_quat_xyzw = (0.5, 0.5, 0.5, 0.5)
+        # Match Gazebo MinimalScene defaults from
+        # ~/Documents/aic/aic_description/world/aic.sdf:28-32
+        #   <camera_clip><near>0.01</near><far>500</far></camera_clip>
+        # Gazebo MinimalScene's default HFOV is M_PI/2 = 90° (verified
+        # against gz-gui/src/plugins/minimal_scene/MinimalScene.hh:251 —
+        # `math::Angle cameraHFOV = math::Angle(M_PI * 0.5)`). NOT the 60°
+        # of a typical camera sensor. VFOV is derived from widget aspect.
+        # Resolution 781×952 (portrait) matches the Gazebo 3D View widget's
+        # current screenshot size so vertical FOV + framing collapse on
+        # both sides. Adjust if the Gazebo widget geometry changes.
+        ws_width, ws_height = 781, 952
+        hfov_deg = 90.0
+        vfov_deg = 2.0 * np.rad2deg(np.arctan(np.tan(np.deg2rad(hfov_deg / 2)) * ws_height / ws_width))
+        camera_prim = UsdGeom.Camera.Define(stage, ws_prim_path)
+        if not camera_prim:
+            return
+        fx = ws_width / (2 * np.tan(np.deg2rad(hfov_deg / 2)))
+        fy = ws_height / (2 * np.tan(np.deg2rad(vfov_deg / 2)))
+        cx, cy = ws_width * 0.5, ws_height * 0.5
+        horizontal_aperture_mm = 36.0
+        focal_length_mm = fx * horizontal_aperture_mm / ws_width
+        vertical_aperture_mm = ws_height * focal_length_mm / fy
+        cam = UsdGeom.Camera(camera_prim.GetPrim())
+        cam.CreateHorizontalApertureAttr().Set(horizontal_aperture_mm)
+        cam.CreateVerticalApertureAttr().Set(vertical_aperture_mm)
+        cam.CreateFocalLengthAttr().Set(focal_length_mm)
+        cam.CreateProjectionAttr().Set("perspective")
+        # Gazebo aic.sdf <camera_clip>: near 0.01, far 500
+        cam.CreateClippingRangeAttr().Set(Gf.Vec2f(0.01, 500.0))
+        cp = camera_prim.GetPrim()
+        cp.CreateAttribute("omni:lensdistortion:model", Sdf.ValueTypeNames.String).Set("opencvPinhole")
+        cp.CreateAttribute("omni:lensdistortion:opencvPinhole:imageSize", Sdf.ValueTypeNames.Int2).Set(Gf.Vec2i(ws_width, ws_height))
+        cp.CreateAttribute("omni:lensdistortion:opencvPinhole:fx", Sdf.ValueTypeNames.Float).Set(fx)
+        cp.CreateAttribute("omni:lensdistortion:opencvPinhole:fy", Sdf.ValueTypeNames.Float).Set(fy)
+        cp.CreateAttribute("omni:lensdistortion:opencvPinhole:cx", Sdf.ValueTypeNames.Float).Set(cx)
+        cp.CreateAttribute("omni:lensdistortion:opencvPinhole:cy", Sdf.ValueTypeNames.Float).Set(cy)
+        for attr_name in ["k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6", "s1", "s2", "s3", "s4"]:
+            cp.CreateAttribute(f"omni:lensdistortion:opencvPinhole:{attr_name}", Sdf.ValueTypeNames.Float).Set(0.0)
+        xform = UsdGeom.Xform(camera_prim.GetPrim())
+        xform.ClearXformOpOrder()
+        xform.AddTranslateOp().Set(Gf.Vec3d(*ws_position))
+        quat = Gf.Quatd(ws_quat_xyzw[3], ws_quat_xyzw[0], ws_quat_xyzw[1], ws_quat_xyzw[2])
+        xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat)
+        print(f"[AIC-DT] workspace_camera authored at {ws_prim_path} ({ws_width}x{ws_height})")
+        # Make this camera the active viewport so the user sees it right after load_scene
+        try:
+            from omni.kit.viewport.utility import get_active_viewport
+            vp = get_active_viewport()
+            if vp:
+                vp.camera_path = ws_prim_path
+                print(f"[AIC-DT] active viewport → {ws_prim_path}")
+        except Exception as exc:
+            print(f"[AIC-DT] viewport switch to workspace_camera skipped: {exc!r}")
+
+    def _setup_aic_lights(self):
+        """Author the 3 lights Gazebo's aic.sdf declares (lines 138-186).
+
+        Mapping Gazebo → USD:
+          - <light type="spot">  → UsdLux.SphereLight + UsdLux.ShapingAPI cone
+          - <light type="point"> → UsdLux.SphereLight (omnidirectional, no shaping)
+
+        Gazebo intensity units differ from USD/RTX. Gazebo uses small physical
+        scalars (0.4 for the spot, 2 for the points) tuned for ogre2. RTX
+        expects much larger values for visible illumination — we scale to
+        Isaac Sim-appropriate magnitudes while preserving relative ratios
+        (spot=0.2× → 500, points=1.0× → 2500). Adjust if exposure looks off.
+        """
+        from pxr import UsdLux, Gf, Sdf, UsdGeom
+        stage = omni.usd.get_context().get_stage()
+        lights_root = "/World/Lights"
+        # Clear any prior lighting so we don't double up across re-runs
+        for legacy in ("/World/defaultDomeLight",):
+            p = stage.GetPrimAtPath(legacy)
+            if p and p.IsValid():
+                stage.RemovePrim(legacy)
+                print(f"[AIC-DT] removed legacy {legacy}")
+        UsdGeom.Xform.Define(stage, lights_root)
+
+        # 1. Spot — enclosure_light at (0,0,2.5) pointing -Z (Gazebo spot
+        # default look-dir is +X but pose RPY=0 in aic.sdf means it points
+        # straight down +X... wait — Gazebo light "spot" with no rpy points
+        # down -Z by convention for ogre2. We mirror that: USD spot also
+        # defaults -Z. So zero-rotation is correct.
+        spot_path = f"{lights_root}/enclosure_light"
+        spot = UsdLux.SphereLight.Define(stage, spot_path)
+        spot.CreateRadiusAttr(0.05)
+        spot.CreateIntensityAttr(500.0)
+        spot.CreateColorAttr(Gf.Vec3f(1.0, 1.0, 1.0))
+        shaping = UsdLux.ShapingAPI.Apply(spot.GetPrim())
+        shaping.CreateShapingConeAngleAttr(2.0 * 180.0 / 3.14159265)  # rad → deg (Gazebo outer_angle=2)
+        shaping.CreateShapingConeSoftnessAttr(0.5)
+        xf = UsdGeom.Xformable(spot.GetPrim())
+        xf.ClearXformOpOrder()
+        xf.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 2.5))
+        xf.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
+
+        # 2/3. Point lights — ceiling_01 at (+2,+2,6) and ceiling_02 at (-2,-2,6)
+        for name, xyz in [("ceiling_01", (2.0, 2.0, 6.0)),
+                          ("ceiling_02", (-2.0, -2.0, 6.0))]:
+            path = f"{lights_root}/{name}"
+            pt = UsdLux.SphereLight.Define(stage, path)
+            pt.CreateRadiusAttr(0.1)
+            pt.CreateIntensityAttr(2500.0)
+            pt.CreateColorAttr(Gf.Vec3f(1.0, 1.0, 1.0))
+            xf = UsdGeom.Xformable(pt.GetPrim())
+            xf.ClearXformOpOrder()
+            xf.AddTranslateOp().Set(Gf.Vec3d(*xyz))
+            xf.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
+
+        print(f"[AIC-DT] authored 3 Gazebo-parity lights under {lights_root} "
+              f"(enclosure_light spot @ 2.5m, 2× point @ 6m ceiling)")
 
     def _toggle_viewport_rendering(self):
         """Toggle viewport rendering on/off to free GPU resources."""
@@ -1192,64 +1398,10 @@ class DigitalTwin(omni.ext.IExt):
                 print(f"[AIC-DT] randomize_lighting skipped: {e}")
             await app.next_update_async()
 
-        # 8. Create workspace camera at 640x480
-        # Pose mirrors Gazebo GUI 3D-View camera from
-        # ~/Documents/aic/aic_description/world/aic.sdf:32
-        #   <camera_pose>0.95 -0.1 1.3 0.0 0.0 3.14</camera_pose>
-        # Gazebo body frame (+X fwd, +Y left, +Z up) at yaw=π → looks toward
-        # world -X. Conversion to USD camera frame (-Z fwd, +X right, +Y up)
-        # for this pose: q(x,y,z,w) = (0.5, 0.5, 0.5, 0.5) — cyclic axis perm.
-        print("--- Creating Workspace Camera (640x480) ---")
-        stage = omni.usd.get_context().get_stage()
-        ws_prim_path = "/World/workspace_camera"
-        ws_position = (0.95, -0.1, 1.3)
-        ws_quat_xyzw = (0.5, 0.5, 0.5, 0.5)
-        ws_width, ws_height = 640, 480
-
-        camera_prim = UsdGeom.Camera.Define(stage, ws_prim_path)
-        if camera_prim:
-            hfov_deg, vfov_deg = 69.4, 42.5
-            fx = ws_width / (2 * np.tan(np.deg2rad(hfov_deg / 2)))
-            fy = ws_height / (2 * np.tan(np.deg2rad(vfov_deg / 2)))
-            cx, cy = ws_width * 0.5, ws_height * 0.5
-
-            horizontal_aperture_mm = 36.0
-            focal_length_mm = fx * horizontal_aperture_mm / ws_width
-            vertical_aperture_mm = ws_height * focal_length_mm / fy
-
-            cam = UsdGeom.Camera(camera_prim.GetPrim())
-            cam.CreateHorizontalApertureAttr().Set(horizontal_aperture_mm)
-            cam.CreateVerticalApertureAttr().Set(vertical_aperture_mm)
-            cam.CreateFocalLengthAttr().Set(focal_length_mm)
-            cam.CreateProjectionAttr().Set("perspective")
-            cam.CreateClippingRangeAttr().Set(Gf.Vec2f(0.1, 10000.0))
-
-            cp = camera_prim.GetPrim()
-            cp.CreateAttribute("omni:lensdistortion:model", Sdf.ValueTypeNames.String).Set("opencvPinhole")
-            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:imageSize", Sdf.ValueTypeNames.Int2).Set(Gf.Vec2i(ws_width, ws_height))
-            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:fx", Sdf.ValueTypeNames.Float).Set(fx)
-            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:fy", Sdf.ValueTypeNames.Float).Set(fy)
-            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:cx", Sdf.ValueTypeNames.Float).Set(cx)
-            cp.CreateAttribute("omni:lensdistortion:opencvPinhole:cy", Sdf.ValueTypeNames.Float).Set(cy)
-            for attr_name in ["k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6", "s1", "s2", "s3", "s4"]:
-                cp.CreateAttribute(f"omni:lensdistortion:opencvPinhole:{attr_name}", Sdf.ValueTypeNames.Float).Set(0.0)
-
-            xform = UsdGeom.Xform(camera_prim.GetPrim())
-            xform.ClearXformOpOrder()
-            xform.AddTranslateOp().Set(Gf.Vec3d(*ws_position))
-            quat = Gf.Quatd(ws_quat_xyzw[3], ws_quat_xyzw[0], ws_quat_xyzw[1], ws_quat_xyzw[2])
-            xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat)
-            print(f"Workspace camera created at {ws_prim_path} with resolution {ws_width}x{ws_height}")
-        await app.next_update_async()
-
-        # 9. Workspace camera is a VIEWPORT-ONLY vantage (mirrors Gazebo's
-        # MinimalScene <camera_pose> in aic.sdf:32, which is also viewport-only
-        # and not bridged to ROS). The wrist cameras (left/center/right_camera)
-        # are the policy-facing sensors and are wired separately by
-        # setup_wrist_cameras. So we deliberately do NOT call
-        # _create_camera_actiongraph here — no ROS publish for parity with
-        # Gazebo's GUI camera.
-        print("--- Workspace camera is viewport-only (no ROS publish — matches Gazebo) ---")
+        # 8. Workspace camera now authored by load_scene (baseline). Viewport-
+        # only (no ROS publish), Gazebo-parity pose. Idempotent — already in
+        # stage from step 1 unless caller manipulated the stage.
+        print("--- Workspace camera was authored in load_scene (viewport-only) ---")
         await app.next_update_async()
 
         # 10. Already playing from step 2b — no-op the original play() at the end.
@@ -3240,7 +3392,7 @@ class DigitalTwin(omni.ext.IExt):
         try:
             from omni.kit.async_engine import run_coroutine
             run_coroutine(self.load_scene())
-            return {"status": "success", "message": "Scene loaded (physics, ground plane, dome light, AIC enclosure)"}
+            return {"status": "success", "message": "Scene loaded (physics, hidden ground plane, AIC enclosure + walls, AIC floor, Gazebo-parity lights, Default light rig)"}
         except Exception as e:
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
