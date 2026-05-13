@@ -1,21 +1,31 @@
 #!/usr/bin/env python3
-# Reference: built per Phase 1 Plan 09 (SCENE-01) — emits thin USD wrappers
-# for LC/SFP/SC Mount Rail components vendored from
-# ~/Documents/aic/aic_assets/models/<X> Mount/. Pattern follows the Plan 02
-# vendoring contract (capitalized folders, sibling textures preserved) and
-# uses the same `_local_asset` resolver shape downstream extension code expects.
+# Reference: built per Phase 1 Plan 09 (SCENE-01); 2026-05-13 extended to
+# cover ALL 7 task-board-part visual assets (was just LC/SFP/SC mount rails).
+# Replaces omni.kit.asset_converter outputs (the .usd files that shipped with
+# rotateX:unitsResolve+scale:unitsResolve xform ops baked into the wrapping
+# Xform, which composed wrong against spawn-atom RPYs for SC Port / NIC Card /
+# Task Board Base / NIC Card Mount). The thin-USD-references-GLB pattern
+# delegates axis/units handling to the gltf SDF plugin at load time and emits
+# regular xform ops instead, matching how the working LC/SFP/SC mount rails
+# load. Pattern follows the Plan 02 vendoring contract (capitalized folders,
+# sibling textures preserved) and uses the `_local_asset` resolver shape
+# downstream extension code expects.
 """
-Author thin USD wrappers around LC/SFP/SC Mount mesh assets.
+Author thin USD wrappers around ALL task-board-part mesh assets.
 
-The AIC source folders (~/Documents/aic/aic_assets/models/<X> Mount/) ship
+The AIC source folders (~/Documents/aic/aic_assets/models/<X>/) ship
 .glb / .dae / .stl meshes — there are no pre-cooked USDs upstream. This
-script emits one tiny USD per folder that references the mesh via a
-relative AddReference, so the extension's existing `_local_asset(...)
-+ Sdf payload` flow loads it the same way the Plan-02 vendored USDs load.
+script:
+  1. Vendors any source GLB that's missing from the extension's
+     assets/assets/<X>/ folder (copies from AIC repo).
+  2. Emits one tiny USD per (folder, output_usd, source_glb) tuple that
+     references the target GLB via a relative AddReference, so the
+     extension's existing `_local_asset(...) + Sdf payload` flow loads it
+     identically to the Plan-02 vendored mount-rail USDs.
 
-If the source folder lacks a mesh, the per-folder author step prints a
-WARN and continues — Task 2's per-component spawn atom degrades gracefully
-when the resulting USD is missing.
+The TARGETS list is explicit (folder, output_usd, source_glb) — necessary
+because folders like "NIC Card Mount" contain multiple GLBs and we need
+to map each output USD to the right source.
 
 Usage (run with Isaac Sim's bundled python that ships pxr):
     ~/.local/share/ov/pkg/isaac-sim-4.2.0/python.sh \\
@@ -26,30 +36,87 @@ Or any python with the `usd-core` package installed.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 
 
-def author_mount_usd(folder: str, usd_name: str) -> str:
-    """Author a tiny USD that references the first mesh found in `folder`.
+# (folder, output_usd_filename, source_glb_filename)
+# Explicit glb name disambiguates folders with multiple GLBs (NIC Card Mount).
+TARGETS = [
+    # Existing working pattern (mount rails) — re-authoring is idempotent.
+    ("LC Mount",         "lc_mount_visual.usd",         "lc_mount_visual.glb"),
+    ("SFP Mount",        "sfp_mount_visual.usd",        "sfp_mount_visual.glb"),
+    ("SC Mount",         "sc_mount_visual.usd",         "sc_mount_visual.glb"),
+    # Newly converted to thin-USD pattern (2026-05-13 replace asset_converter
+    # outputs that shipped with unitsResolve ops). AIC_OBJECTS["…"]["usd"]
+    # entries in extension.py point at these exact USD names.
+    ("SC Port",          "sc_port.usd",                 "sc_port_visual.glb"),
+    ("NIC Card",         "nic_card.usd",                "nic_card_visual.glb"),
+    ("Task Board Base",  "task_board_rigid.usd",        "base_visual.glb"),
+    ("NIC Card Mount",   "nic_card_mount_visual.usd",   "nic_card_mount_visual.glb"),
+    # PCB child asset referenced separately by _cmd_spawn_nic_card_mount
+    # (composed under each NICCardMount_<i>/nic_card_link/). AIC ships
+    # nic_card_visual.glb inside BOTH the NIC Card and NIC Card Mount
+    # folders; here we point at the one in NIC Card Mount.
+    ("NIC Card Mount",   "nic_card_visual.usd",         "nic_card_visual.glb"),
+]
 
-    Returns the absolute path to the authored USD on success; raises on
-    failure. Caller should catch and log to keep the loop tolerant.
+# Source GLBs not yet vendored under the extension are copied from here.
+AIC_SOURCE = os.path.expanduser("~/Documents/aic/aic_assets/models")
+
+
+def vendor_source_glb(folder_path: str, glb_name: str) -> None:
+    """Copy <glb_name> from the AIC source repo if missing locally.
+
+    Idempotent: if the GLB is already present at folder_path/<glb_name>,
+    this is a no-op. Raises RuntimeError if the source GLB is missing in
+    AIC's repo (caller catches + logs).
+    """
+    dst = os.path.join(folder_path, glb_name)
+    if os.path.exists(dst):
+        return
+    folder_name = os.path.basename(folder_path)
+    src = os.path.join(AIC_SOURCE, folder_name, glb_name)
+    if not os.path.exists(src):
+        raise RuntimeError(
+            f"AIC source GLB missing: {src} "
+            f"(cannot vendor {glb_name} into {folder_path})"
+        )
+    shutil.copyfile(src, dst)
+    sz = os.path.getsize(dst)
+    print(f"[build_mount_rail_usds] vendored {glb_name} ({sz} B) "
+          f"from AIC source → {folder_path}")
+
+
+def author_mount_usd(folder: str, usd_name: str, glb_name: str = None) -> str:
+    """Author a tiny USD at folder/usd_name that references glb_name.
+
+    If glb_name is None, falls back to the legacy "first mesh by extension"
+    heuristic (prefer .dae > .glb > .stl > .obj). Pass the explicit glb_name
+    when the folder contains multiple meshes.
+
+    Returns the absolute path on success; raises on failure (caller catches).
     """
     from pxr import Usd, UsdGeom
 
     usd_path = os.path.join(folder, usd_name)
-    # Prefer .dae (carries materials) > .glb > .stl > .obj
-    candidates = []
-    for ext in (".dae", ".glb", ".stl", ".obj"):
-        candidates.extend(
-            sorted(
-                f for f in os.listdir(folder)
-                if f.lower().endswith(ext)
+
+    if glb_name is None:
+        # Legacy heuristic — prefer .dae (carries materials) > .glb > .stl > .obj
+        candidates = []
+        for ext in (".dae", ".glb", ".stl", ".obj"):
+            candidates.extend(
+                sorted(
+                    f for f in os.listdir(folder)
+                    if f.lower().endswith(ext)
+                )
             )
-        )
-    if not candidates:
-        raise RuntimeError(f"No mesh (.dae/.glb/.stl/.obj) found in {folder}")
-    mesh_src = candidates[0]
+        if not candidates:
+            raise RuntimeError(f"No mesh (.dae/.glb/.stl/.obj) found in {folder}")
+        glb_name = candidates[0]
+    else:
+        if not os.path.exists(os.path.join(folder, glb_name)):
+            raise RuntimeError(f"Specified mesh {glb_name} not found in {folder}")
 
     stage = Usd.Stage.CreateNew(usd_path)
     root = UsdGeom.Xform.Define(stage, "/Root")
@@ -57,34 +124,29 @@ def author_mount_usd(folder: str, usd_name: str) -> str:
     # Relative path resolves against the USD layer location at load time —
     # since the mesh sits in the same vendored folder, this stays valid as
     # long as the folder is moved as a unit (Plan 02 D-05 vendoring contract).
-    mesh_prim.GetReferences().AddReference(f"./{mesh_src}")
+    mesh_prim.GetReferences().AddReference(f"./{glb_name}")
     stage.SetDefaultPrim(root.GetPrim())
     stage.GetRootLayer().Save()
-    print(f"[build_mount_rail_usds] wrote {usd_path} referencing {mesh_src}")
+    print(f"[build_mount_rail_usds] wrote {usd_path} "
+          f"({os.path.getsize(usd_path)} B) referencing {glb_name}")
     return usd_path
 
 
 def main(argv):
     base = argv[1] if len(argv) > 1 else "exts/aic-dt/assets/assets"
-    targets = [
-        ("LC Mount", "lc_mount_visual.usd"),
-        ("SFP Mount", "sfp_mount_visual.usd"),
-        ("SC Mount", "sc_mount_visual.usd"),
-    ]
     written = 0
-    for name, usd_name in targets:
-        folder = os.path.join(base, name)
+    for folder_name, usd_name, glb_name in TARGETS:
+        folder = os.path.join(base, folder_name)
         if not os.path.isdir(folder):
             print(f"[build_mount_rail_usds] WARN folder missing: {folder}")
             continue
         try:
-            author_mount_usd(folder, usd_name)
+            vendor_source_glb(folder, glb_name)
+            author_mount_usd(folder, usd_name, glb_name)
             written += 1
         except Exception as exc:  # noqa: BLE001 — degrade gracefully per plan
-            print(f"[build_mount_rail_usds] WARN {name}: {exc}")
-    print(f"[build_mount_rail_usds] done — {written}/{len(targets)} USDs authored")
-    # Exit 0 even on partial — Plan 09 Task 1 acceptance allows >= 2/3 success;
-    # Task 2's atoms degrade gracefully when a USD is missing.
+            print(f"[build_mount_rail_usds] WARN {folder_name}/{usd_name}: {exc}")
+    print(f"[build_mount_rail_usds] done — {written}/{len(TARGETS)} USDs authored")
     return 0
 
 
