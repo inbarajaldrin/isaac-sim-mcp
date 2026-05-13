@@ -1,0 +1,1647 @@
+[
+  {
+    "name": "ground_plane",
+    "category": "environment",
+    "role": "World ground plane / floor collision; PhysX kinematic plane that catches anything dropped",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/Floor/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/Floor/floor_visual.glb",
+        "/home/aaugus11/Documents/aic/aic_assets/models/Floor/walls_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/world/aic.sdf line 201 (<include><uri>model://Floor</uri></include> — no <pose> override, defaults to world origin)",
+      "default_pose": "(0, 0, 0) identity",
+      "visual_uri": "floor_visual.glb (2x2 unit plane, z=0) + walls_visual.glb (3D walls, sized 2 x 7.05 x 2 m — these are the room walls baked into 'Floor' model)",
+      "visual_glb_aabb_raw_m": {
+        "floor_visual.glb": [
+          2.0,
+          2.0,
+          0.0
+        ],
+        "walls_visual.glb": [
+          2.027,
+          7.048,
+          2.028
+        ]
+      },
+      "collision_type": "<plane size='10 10'/> (10x10m infinite plane proxy)",
+      "scoring_references": "off_limit_floor topics (touching the floor is a CheatCode penalty per aic_engine scoring); no per-frame TF"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: GroundPlane creation at /World/defaultGroundPlane (load_scene, ~line 998)",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: self._ground_plane_z = 0.0 (line 565)"
+      ],
+      "usd_asset_paths": [
+        "BUILT-IN: isaacsim.core.api.objects.GroundPlane (default checkerboard)"
+      ],
+      "spawn_prim_path": "/World/defaultGroundPlane",
+      "current_live_pose": "(0.0000, 0.0000, 0.0000)",
+      "scale_op": "size=5000 (5km x 5km) — implicit scaling on GroundPlane()",
+      "known_divergences": "Gazebo Floor model includes a 'walls_visual.glb' room shell (3D walls forming an interior room) that the Isaac Sim version DOES NOT spawn separately — only the bare GroundPlane is created. The decorative room walls visible in Gazebo are absent in Isaac Sim. Also: GroundPlane is the default Isaac checkerboard, not the Gazebo concrete-floor texture."
+    },
+    "notes": "Floor model in Gazebo conflates two roles: collision plane + decorative room walls. Isaac Sim only models the collision plane."
+  },
+  {
+    "name": "floor_walls_decorative",
+    "category": "environment",
+    "role": "Decorative 3D room walls baked into 'Floor' model (NOT collision)",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/Floor/walls_visual.glb"
+      ],
+      "world_pose_source": "Same Floor model as ground_plane — child visual of floor_link, no separate pose",
+      "default_pose": "(0,0,0) identity",
+      "visual_uri": "walls_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        2.027,
+        7.048,
+        2.028
+      ],
+      "collision_type": "(none — visual-only)",
+      "scoring_references": "(none)"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [],
+      "spawn_prim_path": null,
+      "current_live_pose": null,
+      "scale_op": null,
+      "known_divergences": "MISSING — not imported into Isaac Sim. The Gazebo room appearance comes from this, plus the Enclosure on top."
+    },
+    "notes": "Gazebo only; Isaac Sim relies solely on AIC_Enclosure for room context."
+  },
+  {
+    "name": "aic_enclosure",
+    "category": "environment",
+    "role": "Workcell enclosure: floor + 4 corner posts + ceiling — physical bounding box for the robot/task-board scene",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/Enclosure/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/Enclosure/enclosure_visual.glb",
+        "/home/aaugus11/Documents/aic/aic_assets/models/Enclosure/light_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/world/aic.sdf line 188 (no <pose> override, identity)",
+      "default_pose": "(0, 0, 0) identity",
+      "visual_uri": "enclosure_visual.glb + light_visual.glb (a glowing ceiling diffuser plate)",
+      "visual_glb_aabb_raw_m": {
+        "enclosure_visual.glb": [
+          1500.0,
+          2579.2,
+          1500.0
+        ],
+        "light_visual.glb": [
+          1.38,
+          1.38,
+          0.01
+        ]
+      },
+      "collision_type": "5x <box>: 1.5x1.139x1.5 floor box at z=0.57 (acts as floor extension), four 0.0508x0.0508x2.5m vertical corner posts at (±0.713, ±0.733, z=1.33), 0.0608x1.5x1.5 ceiling box at z=2.55",
+      "scoring_references": "Off-limit contact target — enclosure walls/posts are off_limit_static; CheatCode penalized if robot hits them"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: import_enclosure (line 1034)",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: self._enclosure_position = (0.0, 0.0, 0.0) (line 562)",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: self._enclosure_usd = 'scene/aic.usd' (line 561)"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/scene/aic.usd (vendored compound USD of full enclosure)"
+      ],
+      "spawn_prim_path": "/World/AIC_Enclosure",
+      "current_live_pose": "(0.0000, 0.0000, 0.0000)",
+      "scale_op": "(identity — meters)",
+      "known_divergences": "enclosure_visual.glb POSITION buffer reports coords up to 2488 units — looks like raw mm packed as meter values (1500x2579x1500 'meters' is implausible for a workcell that should be ~1.5x1.5x2.5m). Either the GLB is in mm, OR the scene/aic.usd vendored asset has been pre-scaled in USD. Origin matches (0,0,0) on both sides."
+    },
+    "notes": "enclosurewalls_visual.glb (in same dir) is in meters (2x2x1.38m) and is the cleanly-scaled variant; main enclosure_visual.glb appears raw-mm. The Enclosure Walls sibling model is the one referenced as 'enclosure walls' include in aic.sdf line 195."
+  },
+  {
+    "name": "enclosure_walls",
+    "category": "environment",
+    "role": "Glass/plexi side walls separate from the structural Enclosure — included as second model in world",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/Enclosure Walls/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/Enclosure Walls/enclosure_walls_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/world/aic.sdf line 194-198",
+      "default_pose": "(0, 0, 0) identity",
+      "visual_uri": "enclosure_walls_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        1500.0,
+        1369.2,
+        1500.0
+      ],
+      "collision_type": "4x <box>: 0.050x1.359x1.378 m vertical wall slabs at four sides (back/left/front/right walls of the workcell at z≈1.83m)",
+      "scoring_references": "Off-limit contact target (transparent wall hits penalized)"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [],
+      "spawn_prim_path": null,
+      "current_live_pose": null,
+      "scale_op": null,
+      "known_divergences": "POSSIBLY ROLLED INTO scene/aic.usd — the enclosure USD in Isaac may bake both Enclosure and Enclosure Walls into a single asset. No separate /World/EnclosureWalls prim seen in the live probe. Cannot verify without inspecting aic.usd contents. If absent, transparent-wall collisions are not modeled in sim."
+    },
+    "notes": "Visual GLB also reports 1500-unit (mm-as-m) sizes. Collisions in model.sdf authored in meters and are correct."
+  },
+  {
+    "name": "dome_light",
+    "category": "environment",
+    "role": "Ambient sky light for global illumination",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/world/aic.sdf"
+      ],
+      "world_pose_source": "aic.sdf lines 138-186 (spot enclosure_light + two point ceiling lights)",
+      "default_pose": "spot @ (0,0,2.5) + point @ (2,2,6) + point @ (-2,-2,6)",
+      "visual_uri": "(SDF lights, no mesh)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "(none)",
+      "scoring_references": "(none — lighting is observational only)"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: UsdLux.DomeLight.Define('/World/defaultDomeLight') intensity=1000 (line 1009)"
+      ],
+      "usd_asset_paths": [],
+      "spawn_prim_path": "/World/defaultDomeLight",
+      "current_live_pose": "(0,0,0) — DomeLight is infinity-distant",
+      "scale_op": null,
+      "known_divergences": "Gazebo uses three discrete spot/point lights with calibrated attenuation; Isaac Sim uses a single dome light at intensity 1000. Lighting falloff and shadows differ — this affects rendered camera images for vision-based policies."
+    },
+    "notes": "randomize_lighting() exists in extension.py and randomizes parameters at quick_start time"
+  },
+  {
+    "name": "task_board_base",
+    "category": "static_structure",
+    "role": "Base plate that mounts to the bench and carries all task-board children (rails, ports, NIC mounts)",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/Task Board Base/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/Task Board Base/base_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/urdf/task_board.urdf.xacro lines 12-17 (xacro args x=-0.2 y=0.2 z=1.14 yaw=-3.141) — overridden per-trial by sample_config.yaml trials.<id>.scene.task_board.pose",
+      "default_pose": "(-0.2, 0.2, 1.14) yaw=-π (xacro default); trials 1/2: (0.15, -0.2, 1.14) yaw=π; trial 3: (0.17, 0.0, 1.14) yaw=3.0",
+      "visual_uri": "base_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        21.0,
+        321.7,
+        440.0
+      ],
+      "collision_type": "2x box: <box size='0.14 0.087 0.005'/> at (-0.075, 0.05, 0.0105) AND <box size='0.3 0.425 0.012'/> at (0,0,0.006) — main slab 300x425x12mm, mounting nub 140x87x5mm",
+      "scoring_references": "/scoring/tf publishes task_board/base_link frame; off_limit collisions check against the slab volume"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: AIC_OBJECTS['task_board_base'] @ line 66",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_spawn_task_board_base @ line 4085 (defaults x=0.15 y=-0.2 z=1.14 yaw=3.1415 — trial_1/2 defaults, NOT xacro)"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/assets/Task Board Base/task_board_rigid.usd",
+        "exts/aic-dt/assets/assets/Task Board Base/base_visual.usd"
+      ],
+      "spawn_prim_path": "/World/TaskBoard",
+      "current_live_pose": "(0.1500, -0.2000, 1.1400)",
+      "scale_op": "(identity)",
+      "known_divergences": "GLB AABB shows 21x322x440 — UNITS ARE MILLIMETERS (a real task board base is ~14x32x44 cm). The vendored task_board_rigid.usd / base_visual.usd were converted from this GLB; if the converter assumed meters, the on-disk USD would be 21x322x440 METERS (1000x too big). Audit note in extension.py line 4060 (taskboard-prim-authoring) suggests this is being handled via RigidBodyAPI kinematic_enabled fixups but does NOT mention a scale fix here. Live world pose matches Gazebo trial_1 (0.15, -0.2, 1.14). Default yaw in code is 3.1415 (== π); Gazebo xacro default is -3.141; sample_config.yaml trial_1 uses 3.1415. Match."
+    },
+    "notes": "Trials randomize translation/rotation of children (rails, ports, NIC mounts) but the base plate itself is at the trial-supplied pose."
+  },
+  {
+    "name": "nic_card_mount_0",
+    "category": "static_structure",
+    "role": "NIC card mount rail (index 0/4) — a vertical bracket on the right side of the task board that holds a NIC card PCB. Has two sfp_port child sockets the cable plug must insert into.",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/nic_card_mount_visual.glb",
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/nic_card_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/urdf/task_board.urdf.xacro line ~203 (anchor pose: x=-0.081418+translation, y=-0.1745, z=0.012 relative to base)",
+      "default_pose": "local-to-base x=-0.081418 y=-0.1745 z=0.012",
+      "visual_uri": "nic_card_mount_visual.glb (mount bracket) + nic_card_visual.glb (PCB child)",
+      "visual_glb_aabb_raw_m": {
+        "nic_card_mount_visual.glb": [
+          185.0,
+          113.1,
+          55.8
+        ],
+        "nic_card_visual.glb": [
+          0.121,
+          0.145,
+          0.058
+        ]
+      },
+      "collision_type": "Mount link (nic_card_mount_link): 7+ box colliders forming the bracket geometry. NIC PCB link (nic_card_link): 8+ box colliders + 2 cylinder mounting-hole bushings. Additional sfp_port_0_link + sfp_port_1_link children with contact_collision boxes for plug insertion detection.",
+      "scoring_references": "/scoring/tf publishes task_board/nic_card_mount_0/nic_card_mount_link and child frames including sfp_port_0_link, sfp_port_1_link. anchor_target_offsets.yaml lists nic_card_mount anchor → sfp_port_0 transform (translation_xyz_m: 0.01095, -0.012865, 0.121476)."
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_spawn_nic_card_mount @ line 4195",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _NIC_CARD_MOUNT_ANCHOR_X = -0.081418 @ line 4006",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _NIC_CARD_MOUNT_ANCHOR_Y_BY_INDEX = (-0.1745, -0.1345, -0.0945, -0.0545, -0.0145) @ line 4008",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: sfp_port_0/1 sphere-collider authoring inline @ lines 4221-4286",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: nic_card_link composition inline @ lines 4288-4324 (with 0.01x scale fix per nic-card-visual-scale comment)"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/assets/NIC Card Mount/nic_card_mount_visual.usd (THE BRACKET — but per extension comment '...ships as ONLY a single ISO 4762 M2x8 screw mesh — no mount body, no PCB')",
+        "exts/aic-dt/assets/assets/NIC Card Mount/nic_card_visual.usd (PCB — vertex coords are 100x too big per inline comment)",
+        "exts/aic-dt/assets/assets/NIC Card Mount/nic_card_mount_visual_v2.usd (alternate v2 — purpose not documented)",
+        "exts/aic-dt/assets/assets/NIC Card/nic_card.usd (standalone NIC card USD)"
+      ],
+      "spawn_prim_path": "/World/TaskBoard/NICCardMount_0",
+      "current_live_pose": "(0.1954, -0.0255, 1.1520)",
+      "scale_op": "child nic_card_link gets Scale(0.01, 0.01, 0.01) because nic_card_visual.usd vertices are 100x too big (per extension.py comment line ~4306)",
+      "known_divergences": "MAJOR: (1) The vendored nic_card_mount_visual.usd reportedly contains ONLY an M2x8 screw mesh — the actual bracket geometry is MISSING from the Isaac Sim asset. Comment at line 4288 acknowledges this and composes a separate nic_card_link child to add the PCB, but the BRACKET BODY itself appears not to render properly. (2) The PCB child (nic_card_visual.usd) has vertex coords 100x too big and needs an inline Scale(0.01) workaround. (3) The 10+ collision boxes from Gazebo's nic_card_mount_link are NOT replicated; Isaac Sim authors only two sphere colliders for sfp_port_0/1 contact detection. (4) sfp_port_0 collider offset (0.01095, -0.012865, 0.121476) matches anchor_target_offsets.yaml exactly; sfp_port_1 offset (-0.01225, ...) is DERIVED from SDF delta — not directly verified against the live Gazebo TF."
+    },
+    "notes": "index 0: currently active in live scene"
+  },
+  {
+    "name": "nic_card_mount_1",
+    "category": "static_structure",
+    "role": "NIC card mount rail (index 1/4) — a vertical bracket on the right side of the task board that holds a NIC card PCB. Has two sfp_port child sockets the cable plug must insert into.",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/nic_card_mount_visual.glb",
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/nic_card_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/urdf/task_board.urdf.xacro line ~203 (anchor pose: x=-0.081418+translation, y=-0.1345, z=0.012 relative to base)",
+      "default_pose": "local-to-base x=-0.081418 y=-0.1345 z=0.012",
+      "visual_uri": "nic_card_mount_visual.glb (mount bracket) + nic_card_visual.glb (PCB child)",
+      "visual_glb_aabb_raw_m": {
+        "nic_card_mount_visual.glb": [
+          185.0,
+          113.1,
+          55.8
+        ],
+        "nic_card_visual.glb": [
+          0.121,
+          0.145,
+          0.058
+        ]
+      },
+      "collision_type": "Mount link (nic_card_mount_link): 7+ box colliders forming the bracket geometry. NIC PCB link (nic_card_link): 8+ box colliders + 2 cylinder mounting-hole bushings. Additional sfp_port_0_link + sfp_port_1_link children with contact_collision boxes for plug insertion detection.",
+      "scoring_references": "/scoring/tf publishes task_board/nic_card_mount_1/nic_card_mount_link and child frames including sfp_port_0_link, sfp_port_1_link. anchor_target_offsets.yaml lists nic_card_mount anchor → sfp_port_0 transform (translation_xyz_m: 0.01095, -0.012865, 0.121476)."
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_spawn_nic_card_mount @ line 4195",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _NIC_CARD_MOUNT_ANCHOR_X = -0.081418 @ line 4006",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _NIC_CARD_MOUNT_ANCHOR_Y_BY_INDEX = (-0.1745, -0.1345, -0.0945, -0.0545, -0.0145) @ line 4008",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: sfp_port_0/1 sphere-collider authoring inline @ lines 4221-4286",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: nic_card_link composition inline @ lines 4288-4324 (with 0.01x scale fix per nic-card-visual-scale comment)"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/assets/NIC Card Mount/nic_card_mount_visual.usd (THE BRACKET — but per extension comment '...ships as ONLY a single ISO 4762 M2x8 screw mesh — no mount body, no PCB')",
+        "exts/aic-dt/assets/assets/NIC Card Mount/nic_card_visual.usd (PCB — vertex coords are 100x too big per inline comment)",
+        "exts/aic-dt/assets/assets/NIC Card Mount/nic_card_mount_visual_v2.usd (alternate v2 — purpose not documented)",
+        "exts/aic-dt/assets/assets/NIC Card/nic_card.usd (standalone NIC card USD)"
+      ],
+      "spawn_prim_path": "/World/TaskBoard/NICCardMount_1",
+      "current_live_pose": "INVALID — index 1 not spawned this session",
+      "scale_op": "child nic_card_link gets Scale(0.01, 0.01, 0.01) because nic_card_visual.usd vertices are 100x too big (per extension.py comment line ~4306)",
+      "known_divergences": "MAJOR: (1) The vendored nic_card_mount_visual.usd reportedly contains ONLY an M2x8 screw mesh — the actual bracket geometry is MISSING from the Isaac Sim asset. Comment at line 4288 acknowledges this and composes a separate nic_card_link child to add the PCB, but the BRACKET BODY itself appears not to render properly. (2) The PCB child (nic_card_visual.usd) has vertex coords 100x too big and needs an inline Scale(0.01) workaround. (3) The 10+ collision boxes from Gazebo's nic_card_mount_link are NOT replicated; Isaac Sim authors only two sphere colliders for sfp_port_0/1 contact detection. (4) sfp_port_0 collider offset (0.01095, -0.012865, 0.121476) matches anchor_target_offsets.yaml exactly; sfp_port_1 offset (-0.01225, ...) is DERIVED from SDF delta — not directly verified against the live Gazebo TF."
+    },
+    "notes": "index 1: not spawned in current trial"
+  },
+  {
+    "name": "nic_card_mount_2",
+    "category": "static_structure",
+    "role": "NIC card mount rail (index 2/4) — a vertical bracket on the right side of the task board that holds a NIC card PCB. Has two sfp_port child sockets the cable plug must insert into.",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/nic_card_mount_visual.glb",
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/nic_card_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/urdf/task_board.urdf.xacro line ~203 (anchor pose: x=-0.081418+translation, y=-0.0945, z=0.012 relative to base)",
+      "default_pose": "local-to-base x=-0.081418 y=-0.0945 z=0.012",
+      "visual_uri": "nic_card_mount_visual.glb (mount bracket) + nic_card_visual.glb (PCB child)",
+      "visual_glb_aabb_raw_m": {
+        "nic_card_mount_visual.glb": [
+          185.0,
+          113.1,
+          55.8
+        ],
+        "nic_card_visual.glb": [
+          0.121,
+          0.145,
+          0.058
+        ]
+      },
+      "collision_type": "Mount link (nic_card_mount_link): 7+ box colliders forming the bracket geometry. NIC PCB link (nic_card_link): 8+ box colliders + 2 cylinder mounting-hole bushings. Additional sfp_port_0_link + sfp_port_1_link children with contact_collision boxes for plug insertion detection.",
+      "scoring_references": "/scoring/tf publishes task_board/nic_card_mount_2/nic_card_mount_link and child frames including sfp_port_0_link, sfp_port_1_link. anchor_target_offsets.yaml lists nic_card_mount anchor → sfp_port_0 transform (translation_xyz_m: 0.01095, -0.012865, 0.121476)."
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_spawn_nic_card_mount @ line 4195",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _NIC_CARD_MOUNT_ANCHOR_X = -0.081418 @ line 4006",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _NIC_CARD_MOUNT_ANCHOR_Y_BY_INDEX = (-0.1745, -0.1345, -0.0945, -0.0545, -0.0145) @ line 4008",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: sfp_port_0/1 sphere-collider authoring inline @ lines 4221-4286",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: nic_card_link composition inline @ lines 4288-4324 (with 0.01x scale fix per nic-card-visual-scale comment)"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/assets/NIC Card Mount/nic_card_mount_visual.usd (THE BRACKET — but per extension comment '...ships as ONLY a single ISO 4762 M2x8 screw mesh — no mount body, no PCB')",
+        "exts/aic-dt/assets/assets/NIC Card Mount/nic_card_visual.usd (PCB — vertex coords are 100x too big per inline comment)",
+        "exts/aic-dt/assets/assets/NIC Card Mount/nic_card_mount_visual_v2.usd (alternate v2 — purpose not documented)",
+        "exts/aic-dt/assets/assets/NIC Card/nic_card.usd (standalone NIC card USD)"
+      ],
+      "spawn_prim_path": "/World/TaskBoard/NICCardMount_2",
+      "current_live_pose": "INVALID — index 2 not spawned this session",
+      "scale_op": "child nic_card_link gets Scale(0.01, 0.01, 0.01) because nic_card_visual.usd vertices are 100x too big (per extension.py comment line ~4306)",
+      "known_divergences": "MAJOR: (1) The vendored nic_card_mount_visual.usd reportedly contains ONLY an M2x8 screw mesh — the actual bracket geometry is MISSING from the Isaac Sim asset. Comment at line 4288 acknowledges this and composes a separate nic_card_link child to add the PCB, but the BRACKET BODY itself appears not to render properly. (2) The PCB child (nic_card_visual.usd) has vertex coords 100x too big and needs an inline Scale(0.01) workaround. (3) The 10+ collision boxes from Gazebo's nic_card_mount_link are NOT replicated; Isaac Sim authors only two sphere colliders for sfp_port_0/1 contact detection. (4) sfp_port_0 collider offset (0.01095, -0.012865, 0.121476) matches anchor_target_offsets.yaml exactly; sfp_port_1 offset (-0.01225, ...) is DERIVED from SDF delta — not directly verified against the live Gazebo TF."
+    },
+    "notes": "index 2: not spawned in current trial"
+  },
+  {
+    "name": "nic_card_mount_3",
+    "category": "static_structure",
+    "role": "NIC card mount rail (index 3/4) — a vertical bracket on the right side of the task board that holds a NIC card PCB. Has two sfp_port child sockets the cable plug must insert into.",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/nic_card_mount_visual.glb",
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/nic_card_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/urdf/task_board.urdf.xacro line ~203 (anchor pose: x=-0.081418+translation, y=-0.0545, z=0.012 relative to base)",
+      "default_pose": "local-to-base x=-0.081418 y=-0.0545 z=0.012",
+      "visual_uri": "nic_card_mount_visual.glb (mount bracket) + nic_card_visual.glb (PCB child)",
+      "visual_glb_aabb_raw_m": {
+        "nic_card_mount_visual.glb": [
+          185.0,
+          113.1,
+          55.8
+        ],
+        "nic_card_visual.glb": [
+          0.121,
+          0.145,
+          0.058
+        ]
+      },
+      "collision_type": "Mount link (nic_card_mount_link): 7+ box colliders forming the bracket geometry. NIC PCB link (nic_card_link): 8+ box colliders + 2 cylinder mounting-hole bushings. Additional sfp_port_0_link + sfp_port_1_link children with contact_collision boxes for plug insertion detection.",
+      "scoring_references": "/scoring/tf publishes task_board/nic_card_mount_3/nic_card_mount_link and child frames including sfp_port_0_link, sfp_port_1_link. anchor_target_offsets.yaml lists nic_card_mount anchor → sfp_port_0 transform (translation_xyz_m: 0.01095, -0.012865, 0.121476)."
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_spawn_nic_card_mount @ line 4195",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _NIC_CARD_MOUNT_ANCHOR_X = -0.081418 @ line 4006",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _NIC_CARD_MOUNT_ANCHOR_Y_BY_INDEX = (-0.1745, -0.1345, -0.0945, -0.0545, -0.0145) @ line 4008",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: sfp_port_0/1 sphere-collider authoring inline @ lines 4221-4286",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: nic_card_link composition inline @ lines 4288-4324 (with 0.01x scale fix per nic-card-visual-scale comment)"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/assets/NIC Card Mount/nic_card_mount_visual.usd (THE BRACKET — but per extension comment '...ships as ONLY a single ISO 4762 M2x8 screw mesh — no mount body, no PCB')",
+        "exts/aic-dt/assets/assets/NIC Card Mount/nic_card_visual.usd (PCB — vertex coords are 100x too big per inline comment)",
+        "exts/aic-dt/assets/assets/NIC Card Mount/nic_card_mount_visual_v2.usd (alternate v2 — purpose not documented)",
+        "exts/aic-dt/assets/assets/NIC Card/nic_card.usd (standalone NIC card USD)"
+      ],
+      "spawn_prim_path": "/World/TaskBoard/NICCardMount_3",
+      "current_live_pose": "INVALID — index 3 not spawned this session",
+      "scale_op": "child nic_card_link gets Scale(0.01, 0.01, 0.01) because nic_card_visual.usd vertices are 100x too big (per extension.py comment line ~4306)",
+      "known_divergences": "MAJOR: (1) The vendored nic_card_mount_visual.usd reportedly contains ONLY an M2x8 screw mesh — the actual bracket geometry is MISSING from the Isaac Sim asset. Comment at line 4288 acknowledges this and composes a separate nic_card_link child to add the PCB, but the BRACKET BODY itself appears not to render properly. (2) The PCB child (nic_card_visual.usd) has vertex coords 100x too big and needs an inline Scale(0.01) workaround. (3) The 10+ collision boxes from Gazebo's nic_card_mount_link are NOT replicated; Isaac Sim authors only two sphere colliders for sfp_port_0/1 contact detection. (4) sfp_port_0 collider offset (0.01095, -0.012865, 0.121476) matches anchor_target_offsets.yaml exactly; sfp_port_1 offset (-0.01225, ...) is DERIVED from SDF delta — not directly verified against the live Gazebo TF."
+    },
+    "notes": "index 3: not spawned in current trial"
+  },
+  {
+    "name": "nic_card_mount_4",
+    "category": "static_structure",
+    "role": "NIC card mount rail (index 4/4) — a vertical bracket on the right side of the task board that holds a NIC card PCB. Has two sfp_port child sockets the cable plug must insert into.",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/nic_card_mount_visual.glb",
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/nic_card_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/urdf/task_board.urdf.xacro line ~203 (anchor pose: x=-0.081418+translation, y=-0.0145, z=0.012 relative to base)",
+      "default_pose": "local-to-base x=-0.081418 y=-0.0145 z=0.012",
+      "visual_uri": "nic_card_mount_visual.glb (mount bracket) + nic_card_visual.glb (PCB child)",
+      "visual_glb_aabb_raw_m": {
+        "nic_card_mount_visual.glb": [
+          185.0,
+          113.1,
+          55.8
+        ],
+        "nic_card_visual.glb": [
+          0.121,
+          0.145,
+          0.058
+        ]
+      },
+      "collision_type": "Mount link (nic_card_mount_link): 7+ box colliders forming the bracket geometry. NIC PCB link (nic_card_link): 8+ box colliders + 2 cylinder mounting-hole bushings. Additional sfp_port_0_link + sfp_port_1_link children with contact_collision boxes for plug insertion detection.",
+      "scoring_references": "/scoring/tf publishes task_board/nic_card_mount_4/nic_card_mount_link and child frames including sfp_port_0_link, sfp_port_1_link. anchor_target_offsets.yaml lists nic_card_mount anchor → sfp_port_0 transform (translation_xyz_m: 0.01095, -0.012865, 0.121476)."
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_spawn_nic_card_mount @ line 4195",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _NIC_CARD_MOUNT_ANCHOR_X = -0.081418 @ line 4006",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _NIC_CARD_MOUNT_ANCHOR_Y_BY_INDEX = (-0.1745, -0.1345, -0.0945, -0.0545, -0.0145) @ line 4008",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: sfp_port_0/1 sphere-collider authoring inline @ lines 4221-4286",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: nic_card_link composition inline @ lines 4288-4324 (with 0.01x scale fix per nic-card-visual-scale comment)"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/assets/NIC Card Mount/nic_card_mount_visual.usd (THE BRACKET — but per extension comment '...ships as ONLY a single ISO 4762 M2x8 screw mesh — no mount body, no PCB')",
+        "exts/aic-dt/assets/assets/NIC Card Mount/nic_card_visual.usd (PCB — vertex coords are 100x too big per inline comment)",
+        "exts/aic-dt/assets/assets/NIC Card Mount/nic_card_mount_visual_v2.usd (alternate v2 — purpose not documented)",
+        "exts/aic-dt/assets/assets/NIC Card/nic_card.usd (standalone NIC card USD)"
+      ],
+      "spawn_prim_path": "/World/TaskBoard/NICCardMount_4",
+      "current_live_pose": "INVALID — index 4 not spawned this session",
+      "scale_op": "child nic_card_link gets Scale(0.01, 0.01, 0.01) because nic_card_visual.usd vertices are 100x too big (per extension.py comment line ~4306)",
+      "known_divergences": "MAJOR: (1) The vendored nic_card_mount_visual.usd reportedly contains ONLY an M2x8 screw mesh — the actual bracket geometry is MISSING from the Isaac Sim asset. Comment at line 4288 acknowledges this and composes a separate nic_card_link child to add the PCB, but the BRACKET BODY itself appears not to render properly. (2) The PCB child (nic_card_visual.usd) has vertex coords 100x too big and needs an inline Scale(0.01) workaround. (3) The 10+ collision boxes from Gazebo's nic_card_mount_link are NOT replicated; Isaac Sim authors only two sphere colliders for sfp_port_0/1 contact detection. (4) sfp_port_0 collider offset (0.01095, -0.012865, 0.121476) matches anchor_target_offsets.yaml exactly; sfp_port_1 offset (-0.01225, ...) is DERIVED from SDF delta — not directly verified against the live Gazebo TF."
+    },
+    "notes": "index 4: not spawned in current trial"
+  },
+  {
+    "name": "sc_port_0",
+    "category": "static_structure",
+    "role": "SC fiber-optic port (index 0/1) — a flush rectangular socket on the task board for SC plug insertion",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/SC Port/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/SC Port/sc_port_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/urdf/task_board.urdf.xacro lines 180-188 (anchor: x=-0.075+translation, y=0.0295, z=0.0165, rpy=(1.57+roll, pitch, 1.57+yaw))",
+      "default_pose": "local-to-base x=-0.075 y=0.0295 z=0.0165 rpy=(1.57,0,1.57)",
+      "visual_uri": "sc_port_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        15.0,
+        23.3,
+        19.5
+      ],
+      "collision_type": "8+ box colliders + cylinder; including sc_port_base_link child link for the actual insertion socket cavity. Surface friction tuned (torsional 0.5, bullet 0.5).",
+      "scoring_references": "/scoring/tf publishes task_board/sc_port_0/sc_port_link AND sc_port_base_link. anchor_target_offsets.yaml lists sc_port anchor → sc_port_base transform (translation 0, -0.002, 0)."
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_spawn_sc_port @ line 4165",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _SC_PORT_ANCHOR_X=-0.075, _Z=0.0165, Y_BY_INDEX=(0.0295, 0.0705) (lines 4013-4016)",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _SC_PORT_RPY_OFFSET_RAD=(1.57, 0.0, 1.57) (line 4016)"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/assets/SC Port/sc_port.usd",
+        "exts/aic-dt/assets/assets/SC Port/sc_port_visual.usd"
+      ],
+      "spawn_prim_path": "/World/TaskBoard/SCPort_0",
+      "current_live_pose": "(0.1830, -0.2295, 1.1565)",
+      "scale_op": "(identity)",
+      "known_divergences": "GLB AABB 15.0 x 23.3 x 19.5 — likely mm-as-m (real SC port is ~15mm x 23mm x 19mm — these numbers match if interpreted as mm). The vendored sc_port.usd was converted; whether the converter unit-normalized is unverified. Index 0 active. Collision footprint differs from Gazebo: Gazebo has 8+ boxes including a sc_port_base_link child for the actual receptacle; Isaac Sim uses whatever fell out of the USD convert."
+    },
+    "notes": "index 0: currently active in live scene"
+  },
+  {
+    "name": "sc_port_1",
+    "category": "static_structure",
+    "role": "SC fiber-optic port (index 1/1) — a flush rectangular socket on the task board for SC plug insertion",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/SC Port/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/SC Port/sc_port_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/urdf/task_board.urdf.xacro lines 180-188 (anchor: x=-0.075+translation, y=0.0705, z=0.0165, rpy=(1.57+roll, pitch, 1.57+yaw))",
+      "default_pose": "local-to-base x=-0.075 y=0.0705 z=0.0165 rpy=(1.57,0,1.57)",
+      "visual_uri": "sc_port_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        15.0,
+        23.3,
+        19.5
+      ],
+      "collision_type": "8+ box colliders + cylinder; including sc_port_base_link child link for the actual insertion socket cavity. Surface friction tuned (torsional 0.5, bullet 0.5).",
+      "scoring_references": "/scoring/tf publishes task_board/sc_port_1/sc_port_link AND sc_port_base_link. anchor_target_offsets.yaml lists sc_port anchor → sc_port_base transform (translation 0, -0.002, 0)."
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_spawn_sc_port @ line 4165",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _SC_PORT_ANCHOR_X=-0.075, _Z=0.0165, Y_BY_INDEX=(0.0295, 0.0705) (lines 4013-4016)",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _SC_PORT_RPY_OFFSET_RAD=(1.57, 0.0, 1.57) (line 4016)"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/assets/SC Port/sc_port.usd",
+        "exts/aic-dt/assets/assets/SC Port/sc_port_visual.usd"
+      ],
+      "spawn_prim_path": "/World/TaskBoard/SCPort_1",
+      "current_live_pose": null,
+      "scale_op": "(identity)",
+      "known_divergences": "GLB AABB 15.0 x 23.3 x 19.5 — likely mm-as-m (real SC port is ~15mm x 23mm x 19mm — these numbers match if interpreted as mm). The vendored sc_port.usd was converted; whether the converter unit-normalized is unverified. Index 1 not spawned this session. Collision footprint differs from Gazebo: Gazebo has 8+ boxes including a sc_port_base_link child for the actual receptacle; Isaac Sim uses whatever fell out of the USD convert."
+    },
+    "notes": "index 1: not spawned in current trial"
+  },
+  {
+    "name": "lc_mount_rail_0",
+    "category": "static_structure",
+    "role": "LC MOUNT rail (index 0/1) — a fixed rail on the task board that a mount can slide along (Y axis translation, ±0.094m range)",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/LC Mount/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/LC Mount/lc_mount_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/urdf/task_board.urdf.xacro joint origin (x=0.01, y=-0.10625+translation, z=0.012)",
+      "default_pose": "local-to-base x=0.01 y=-0.10625 z=0.012",
+      "visual_uri": "lc_mount_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        51.0,
+        25.0,
+        14.75
+      ],
+      "collision_type": "7-10 box colliders forming the rail clamp geometry",
+      "scoring_references": "/scoring/tf publishes task_board/lc_mount_rail_0/lc_mount_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_spawn_lc_mount_rail @ line 4098",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _LC_MOUNT_ANCHOR_X=0.01 _Z=0.012 lines 3994-3995"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/assets/LC Mount/lc_mount_visual.usd"
+      ],
+      "spawn_prim_path": "/World/TaskBoard/LCMountRail_0",
+      "current_live_pose": "(0.1400, -0.1137, 1.1520)",
+      "scale_op": "(identity — but see GLB AABB note)",
+      "known_divergences": "GLB AABB [51.0, 25.0, 14.75] — units may be mm (SC Mount, LC Mount show 21 x 8.5 x 8.5 and 51 x 25 x 14.75 respectively, plausibly mm). SFP Mount GLB AABB 0.051 x 0.018 x 0.036 looks correct (meters). Inconsistent unit convention across mount family. Spawned."
+    },
+    "notes": "Mount can hold a *_mount child entity (lc_mount, sfp_mount, sc_mount per trial), but the rail itself is just the receptacle. index 0 active"
+  },
+  {
+    "name": "lc_mount_rail_1",
+    "category": "static_structure",
+    "role": "LC MOUNT rail (index 1/1) — a fixed rail on the task board that a mount can slide along (Y axis translation, ±0.094m range)",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/LC Mount/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/LC Mount/lc_mount_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/urdf/task_board.urdf.xacro joint origin (x=0.01, y=+0.10625+translation, z=0.012)",
+      "default_pose": "local-to-base x=0.01 y=+0.10625 z=0.012",
+      "visual_uri": "lc_mount_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        51.0,
+        25.0,
+        14.75
+      ],
+      "collision_type": "7-10 box colliders forming the rail clamp geometry",
+      "scoring_references": "/scoring/tf publishes task_board/lc_mount_rail_1/lc_mount_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_spawn_lc_mount_rail @ line 4098",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _LC_MOUNT_ANCHOR_X=0.01 _Z=0.012 lines 3994-3995"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/assets/LC Mount/lc_mount_visual.usd"
+      ],
+      "spawn_prim_path": "/World/TaskBoard/LCMountRail_1",
+      "current_live_pose": "(0.1400, -0.2962, 1.1520)",
+      "scale_op": "(identity — but see GLB AABB note)",
+      "known_divergences": "GLB AABB [51.0, 25.0, 14.75] — units may be mm (SC Mount, LC Mount show 21 x 8.5 x 8.5 and 51 x 25 x 14.75 respectively, plausibly mm). SFP Mount GLB AABB 0.051 x 0.018 x 0.036 looks correct (meters). Inconsistent unit convention across mount family. Spawned."
+    },
+    "notes": "Mount can hold a *_mount child entity (lc_mount, sfp_mount, sc_mount per trial), but the rail itself is just the receptacle. index 1 active"
+  },
+  {
+    "name": "sfp_mount_rail_0",
+    "category": "static_structure",
+    "role": "SFP MOUNT rail (index 0/1) — a fixed rail on the task board that a mount can slide along (Y axis translation, ±0.094m range)",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/SFP Mount/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/SFP Mount/sfp_mount_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/urdf/task_board.urdf.xacro joint origin (x=0.055, y=-0.10625+translation, z=0.01)",
+      "default_pose": "local-to-base x=0.055 y=-0.10625 z=0.01",
+      "visual_uri": "sfp_mount_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        0.051,
+        0.018,
+        0.036
+      ],
+      "collision_type": "7-10 box colliders forming the rail clamp geometry",
+      "scoring_references": "/scoring/tf publishes task_board/sfp_mount_rail_0/sfp_mount_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_spawn_sfp_mount_rail @ line 4120",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _SFP_MOUNT_ANCHOR_X=0.055 _Z=0.01 lines 3996-3997"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/assets/SFP Mount/sfp_mount_visual.usd"
+      ],
+      "spawn_prim_path": "/World/TaskBoard/SFPMountRail_0",
+      "current_live_pose": "(0.0950, -0.1237, 1.1500)",
+      "scale_op": "(identity — but see GLB AABB note)",
+      "known_divergences": "GLB AABB [0.051, 0.018, 0.036] — units may be mm (SC Mount, LC Mount show 21 x 8.5 x 8.5 and 51 x 25 x 14.75 respectively, plausibly mm). SFP Mount GLB AABB 0.051 x 0.018 x 0.036 looks correct (meters). Inconsistent unit convention across mount family. Spawned."
+    },
+    "notes": "Mount can hold a *_mount child entity (lc_mount, sfp_mount, sc_mount per trial), but the rail itself is just the receptacle. index 0 active"
+  },
+  {
+    "name": "sfp_mount_rail_1",
+    "category": "static_structure",
+    "role": "SFP MOUNT rail (index 1/1) — a fixed rail on the task board that a mount can slide along (Y axis translation, ±0.094m range)",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/SFP Mount/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/SFP Mount/sfp_mount_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/urdf/task_board.urdf.xacro joint origin (x=0.055, y=+0.10625+translation, z=0.01)",
+      "default_pose": "local-to-base x=0.055 y=+0.10625 z=0.01",
+      "visual_uri": "sfp_mount_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        0.051,
+        0.018,
+        0.036
+      ],
+      "collision_type": "7-10 box colliders forming the rail clamp geometry",
+      "scoring_references": "/scoring/tf publishes task_board/sfp_mount_rail_1/sfp_mount_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_spawn_sfp_mount_rail @ line 4120",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _SFP_MOUNT_ANCHOR_X=0.055 _Z=0.01 lines 3996-3997"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/assets/SFP Mount/sfp_mount_visual.usd"
+      ],
+      "spawn_prim_path": "/World/TaskBoard/SFPMountRail_1",
+      "current_live_pose": null,
+      "scale_op": "(identity — but see GLB AABB note)",
+      "known_divergences": "GLB AABB [0.051, 0.018, 0.036] — units may be mm (SC Mount, LC Mount show 21 x 8.5 x 8.5 and 51 x 25 x 14.75 respectively, plausibly mm). SFP Mount GLB AABB 0.051 x 0.018 x 0.036 looks correct (meters). Inconsistent unit convention across mount family. NOT spawned in current trial."
+    },
+    "notes": "Mount can hold a *_mount child entity (lc_mount, sfp_mount, sc_mount per trial), but the rail itself is just the receptacle. index 1 not spawned"
+  },
+  {
+    "name": "sc_mount_rail_0",
+    "category": "static_structure",
+    "role": "SC MOUNT rail (index 0/1) — a fixed rail on the task board that a mount can slide along (Y axis translation, ±0.094m range)",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/SC Mount/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/SC Mount/sc_mount_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/urdf/task_board.urdf.xacro joint origin (x=0.1 (i=0) / 0.0985 (i=1), y=-0.10625+translation, z=0.012)",
+      "default_pose": "local-to-base x=0.1 (i=0) / 0.0985 (i=1) y=-0.10625 z=0.012",
+      "visual_uri": "sc_mount_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        21.0,
+        8.5,
+        8.5
+      ],
+      "collision_type": "7-10 box colliders forming the rail clamp geometry",
+      "scoring_references": "/scoring/tf publishes task_board/sc_mount_rail_0/sc_mount_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_spawn_sc_mount_rail @ line 4142",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _SC_MOUNT_ANCHOR_X_0=0.1 _X_1=0.0985 _Z_0=0.012 _Z_1=0.01 lines 3998-4001"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/assets/SC Mount/sc_mount_visual.usd"
+      ],
+      "spawn_prim_path": "/World/TaskBoard/SCMountRail_0",
+      "current_live_pose": "(0.0500, -0.0737, 1.1520)",
+      "scale_op": "(identity — but see GLB AABB note)",
+      "known_divergences": "GLB AABB [21.0, 8.5, 8.5] — units may be mm (SC Mount, LC Mount show 21 x 8.5 x 8.5 and 51 x 25 x 14.75 respectively, plausibly mm). SFP Mount GLB AABB 0.051 x 0.018 x 0.036 looks correct (meters). Inconsistent unit convention across mount family. Spawned."
+    },
+    "notes": "Mount can hold a *_mount child entity (lc_mount, sfp_mount, sc_mount per trial), but the rail itself is just the receptacle. index 0 active"
+  },
+  {
+    "name": "sc_mount_rail_1",
+    "category": "static_structure",
+    "role": "SC MOUNT rail (index 1/1) — a fixed rail on the task board that a mount can slide along (Y axis translation, ±0.094m range)",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/SC Mount/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/SC Mount/sc_mount_visual.glb"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/urdf/task_board.urdf.xacro joint origin (x=0.1 (i=0) / 0.0985 (i=1), y=+0.10625+translation, z=0.01)",
+      "default_pose": "local-to-base x=0.1 (i=0) / 0.0985 (i=1) y=+0.10625 z=0.01",
+      "visual_uri": "sc_mount_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        21.0,
+        8.5,
+        8.5
+      ],
+      "collision_type": "7-10 box colliders forming the rail clamp geometry",
+      "scoring_references": "/scoring/tf publishes task_board/sc_mount_rail_1/sc_mount_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_spawn_sc_mount_rail @ line 4142",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _SC_MOUNT_ANCHOR_X_0=0.1 _X_1=0.0985 _Z_0=0.012 _Z_1=0.01 lines 3998-4001"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/assets/SC Mount/sc_mount_visual.usd"
+      ],
+      "spawn_prim_path": "/World/TaskBoard/SCMountRail_1",
+      "current_live_pose": null,
+      "scale_op": "(identity — but see GLB AABB note)",
+      "known_divergences": "GLB AABB [21.0, 8.5, 8.5] — units may be mm (SC Mount, LC Mount show 21 x 8.5 x 8.5 and 51 x 25 x 14.75 respectively, plausibly mm). SFP Mount GLB AABB 0.051 x 0.018 x 0.036 looks correct (meters). Inconsistent unit convention across mount family. NOT spawned in current trial."
+    },
+    "notes": "Mount can hold a *_mount child entity (lc_mount, sfp_mount, sc_mount per trial), but the rail itself is just the receptacle. index 1 not spawned"
+  },
+  {
+    "name": "nic_card_link_pcb",
+    "category": "static_structure",
+    "role": "The physical PCB (printed circuit board) inside each nic_card_mount — visual + collision body. Holds two SFP-shaped ports (sfp_port_0/1).",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/nic_card_visual.glb (composed via SDF child link 'nic_card_link' in NIC Card Mount/model.sdf line ~102)",
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card/model.sdf (standalone variant 'PCIe_NIC_Card')"
+      ],
+      "world_pose_source": "NIC Card Mount/model.sdf: nic_card_link <pose>-0.002 -0.01785 0.0899 -1.57 0 0</pose>",
+      "default_pose": "local-to-mount: (-0.002, -0.01785, 0.0899) rpy=(-1.57, 0, 0)",
+      "visual_uri": "nic_card_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        0.121,
+        0.145,
+        0.058
+      ],
+      "collision_type": "8+ box colliders (PCB body, brackets) + 2 cylinder mounting bushings + per-port contact_collision boxes for insertion detection",
+      "scoring_references": "/scoring/tf publishes task_board/nic_card_mount_N/nic_card_link AND nested sfp_port_0_link / sfp_port_1_link frames"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: inline composition in _cmd_spawn_nic_card_mount @ lines 4288-4324"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/assets/NIC Card Mount/nic_card_visual.usd",
+        "exts/aic-dt/assets/assets/NIC Card/nic_card_visual.usd"
+      ],
+      "spawn_prim_path": "/World/TaskBoard/NICCardMount_<i>/nic_card_link",
+      "current_live_pose": "(0.1974, -0.0077, 1.2419)",
+      "scale_op": "Scale(0.01, 0.01, 0.01) — APPLIED because the USD asset has vertex coords 100x too big per extension.py comment line 4306. Original GLB is correct meters; the .usd conversion broke it.",
+      "known_divergences": "(1) PCB physically present but visually appears disconnected from the mount bracket because the bracket asset (nic_card_mount_visual.usd) is empty (only an M2 screw). (2) The 100x scale bug on nic_card_visual.usd is being worked around inline — fragile. (3) No collision authoring — only the bare USD reference, no UsdPhysics.CollisionAPI applied. The Gazebo PCB has 8+ collision shapes. (4) Pose vs Gazebo: (-0.002, -0.01785, 0.0899) rpy=(-1.57,0,0) is reproduced correctly per the extension.py code."
+    },
+    "notes": "This is the 'disconnected PCB' the user mentioned — the bracket geometry is missing from the USD, so the PCB appears to float relative to the rail."
+  },
+  {
+    "name": "sfp_port_0_collider",
+    "category": "perception_target",
+    "role": "Insertion-target sphere collider for SFP plug into NIC card port (index 0 — closer to outside edge of NIC card). The 'goal' for CheatCode.",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/model.sdf (sfp_port_0_link child link)"
+      ],
+      "world_pose_source": "NIC Card Mount/model.sdf: sfp_port_0_link relative to nic_card_link at (0.01295, -0.031572, 0.00501); Gazebo TouchPlugin uses contact_collision boxes at (0.012963, -0.0305, 0.002845).",
+      "default_pose": "Per anchor_target_offsets.yaml: anchor→port translation_xyz_m=(0.01095, -0.012865, 0.121476) relative to nic_card_mount_link",
+      "visual_uri": "(no visual — TouchPlugin sensor only)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "TouchPlugin contact_collision_01 + _02 boxes — 8mm x 0.25mm contact sensors",
+      "scoring_references": "/scoring/tf publishes task_board/nic_card_mount_<i>/sfp_port_0_link. /scoring/insertion_event fires on plug-in-port contact. CheatCode policy targets this frame."
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: inline authoring in _cmd_spawn_nic_card_mount @ lines 4221-4286 (port_offsets dict line 4266)"
+      ],
+      "usd_asset_paths": [],
+      "spawn_prim_path": "/World/TaskBoard/NICCardMount_<i>/sfp_port_0",
+      "current_live_pose": "(0.1845, -0.0126, 1.2735)",
+      "scale_op": "Sphere radius 0.012m (12mm 'generous target') — UsdPhysics.CollisionAPI applied",
+      "known_divergences": "(1) Replaces Gazebo's 8x0.25mm contact box pair with a single 12mm sphere — more generous, easier for CheatCode to hit, but does not match Gazebo's contact dynamics exactly. (2) Offset uses exact anchor_target_offsets.yaml value (0.01095, -0.012865, 0.121476) which is the CV-detected runtime offset — that's the right number for scoring parity. (3) Critical bug-fix comment in code: DO NOT set Purpose=guide on the sphere (would silently exclude from PhysX contact discovery)."
+    },
+    "notes": "CheatCode plugs INTO this. Insertion event fires when plug_proxy sphere overlaps this sphere."
+  },
+  {
+    "name": "sfp_port_1_collider",
+    "category": "perception_target",
+    "role": "Insertion-target sphere collider for SFP plug into NIC card port (index 1 — closer to inside of NIC card)",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/NIC Card Mount/model.sdf (sfp_port_1_link child link)"
+      ],
+      "world_pose_source": "NIC Card Mount/model.sdf: sfp_port_1_link relative to nic_card_link at (-0.01025, -0.031572, 0.00501)",
+      "default_pose": "Isaac Sim derives X delta from SDF (port_0 X=0.01295, port_1 X=-0.01025, Δ=-0.0232m), applies to anchor_target_offsets.yaml port_0 X (0.01095) → port_1 X = -0.01225",
+      "visual_uri": "(no visual)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "TouchPlugin contact_collision pair",
+      "scoring_references": "/scoring/tf task_board/nic_card_mount_<i>/sfp_port_1_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: port_offsets[1] = (-0.01225, -0.012865, 0.121476) @ line 4268"
+      ],
+      "usd_asset_paths": [],
+      "spawn_prim_path": "/World/TaskBoard/NICCardMount_<i>/sfp_port_1",
+      "current_live_pose": "(0.2077, -0.0126, 1.2735)",
+      "scale_op": "Sphere radius 0.012m",
+      "known_divergences": "port_1 offset NOT in anchor_target_offsets.yaml (the CV pipeline only resolved port_0 in trial recordings). The Δ-derivation may have residual error — if CheatCode targets port_1 in a future trial, may need re-verification against live Gazebo TF."
+    },
+    "notes": "Not exercised by trial_1/2/3 in sample_config.yaml (only port_0 is targeted), but authored for completeness."
+  },
+  {
+    "name": "sc_port_base_collider",
+    "category": "perception_target",
+    "role": "Insertion-target for SC plug into SC port — the cavity inside the sc_port that the plug tip lands in",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/SC Port/model.sdf (sc_port_base_link)"
+      ],
+      "world_pose_source": "anchor_target_offsets.yaml: sc_port anchor → sc_port_base translation (0, -0.002, 0)",
+      "default_pose": "local-to-sc_port (0, -0.002, 0)",
+      "visual_uri": "(no separate)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Surface friction tuned (torsional 0.5)",
+      "scoring_references": "/scoring/tf task_board/sc_port_<i>/sc_port_base_link. trial_3 targets sc_port_1."
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [],
+      "spawn_prim_path": "(none discrete — relies on whatever falls out of sc_port.usd)",
+      "current_live_pose": null,
+      "scale_op": null,
+      "known_divergences": "NO EXPLICIT sphere collider authored for sc_port_base equivalent to sfp_port_0/1 spheres. trial_3 (SC insertion) relies on whatever collision geometry sc_port.usd brings from convert. If sc_port.usd lacks colliders, trial_3 insertion detection is undefined. Audit this asset."
+    },
+    "notes": "Visible gap in the implementation — sc_port path has no symmetric sphere-collider pattern."
+  },
+  {
+    "name": "ur5e",
+    "category": "robot",
+    "role": "UR5e 6-DOF industrial robot arm — the manipulator. Carries the Axia80-M20 F/T sensor, camera mount + 3 wrist cameras, and Robotiq Hand-E gripper.",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro",
+        "/home/aaugus11/Documents/aic/aic_assets/models/Axia80 M20/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/Camera Mount/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/Basler Camera/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/Robotiq Hand-E/model.sdf"
+      ],
+      "world_pose_source": "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro lines 50-55 (xacro args x/y/z/roll/pitch/yaw default 0); aic_bringup launch overrides to (-0.2, 0.2, 1.14) yaw=-π",
+      "default_pose": "Gazebo: (-0.2, 0.2, 1.14) yaw=-π",
+      "visual_uri": "Per-link GLBs from ur_description package (not aic_assets) + axia_ft_sensor_visual.glb + cam_mount_visual.glb + basler_cam_visual.glb + hande_base_visual.glb + hande_finger_visual.glb",
+      "visual_glb_aabb_raw_m": {
+        "axia_ft_sensor_visual.glb": [
+          8.2,
+          9.12,
+          2.54
+        ],
+        "basler_cam_visual.glb": [
+          91.6,
+          33.5,
+          31.0
+        ],
+        "cam_mount_visual.glb": [
+          20.83,
+          16.89,
+          4.21
+        ],
+        "hande_base_visual.glb": [
+          0.085,
+          0.085,
+          0.125
+        ],
+        "hande_finger_visual.glb": [
+          4.52,
+          3.14,
+          6.19
+        ]
+      },
+      "collision_type": "Per-link convex hulls (UR meshes) + 2x cylinder gripper-base colliders + 4x box gripper-finger colliders. F/T sensor and camera mount have visual-only meshes.",
+      "scoring_references": "/joint_states (6 DOF), /tf (full kinematic tree), /fts_broadcaster/wrench (ATI tool_link), /tcp_pose_broadcaster/pose (gripper/tcp)"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: load_robot @ line 1255",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: self._robot_position = (-0.18, -0.122, 0.0) @ line 558 (legacy — note differs from Gazebo (-0.2, 0.2, 1.14))",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: self._articulation_root_prim_path = '/World/UR5e/aic_unified_robot' @ line 555",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _configure_arm_drives @ line 1635 (stiffness=2000, damping=100, max_force=87)"
+      ],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (single compound USD: arm + gripper + cable subtree)"
+      ],
+      "spawn_prim_path": "/World/UR5e (xform), articulation root at /World/UR5e/aic_unified_robot",
+      "current_live_pose": "/World/UR5e world=(-0.2000, 0.2000, 1.1400), articulation root world=(-0.1971, 0.2020, 1.1400)",
+      "scale_op": "(identity — meters)",
+      "known_divergences": "Live pose matches Gazebo: (-0.2, 0.2, 1.14). The hardcoded default in extension.py self._robot_position=(-0.18,-0.122,0) is LEGACY and overridden by load_robot params at quick_start time. Joint drives explicitly tuned per AIC Isaac Lab config (per code comment line 1640). Articulation root is a CHILD of /World/UR5e — TF publishing walks from there."
+    },
+    "notes": "All 6 arm joints + gripper + cameras + F/T sensor live under /World/UR5e/aic_unified_robot/. This is a single 'unified' USD, not piecewise reference composition."
+  },
+  {
+    "name": "ur5e_link__base_link",
+    "category": "robot",
+    "role": "Robot base, fixed to world frame via mount",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro (references ur_description URDF macros)"
+      ],
+      "world_pose_source": "Computed from UR5e kinematic chain (joint angles + base pose)",
+      "default_pose": "(forward-kinematics dependent)",
+      "visual_uri": "(per-link mesh from ur_description package)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Convex hull from URDF",
+      "scoring_references": "/tf frame: base_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (composed)"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/base_link",
+      "current_live_pose": null,
+      "scale_op": "(identity)",
+      "known_divergences": "Confirmed present in live stage probe (children of /World/UR5e/aic_unified_robot). Geometry source: vendored unified USD asset."
+    },
+    "notes": ""
+  },
+  {
+    "name": "ur5e_link__base_link_inertia",
+    "category": "robot",
+    "role": "Inertial frame for base",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro (references ur_description URDF macros)"
+      ],
+      "world_pose_source": "Computed from UR5e kinematic chain (joint angles + base pose)",
+      "default_pose": "(forward-kinematics dependent)",
+      "visual_uri": "(per-link mesh from ur_description package)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Convex hull from URDF",
+      "scoring_references": "/tf frame: base_link_inertia"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (composed)"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/base_link_inertia",
+      "current_live_pose": null,
+      "scale_op": "(identity)",
+      "known_divergences": "Confirmed present in live stage probe (children of /World/UR5e/aic_unified_robot). Geometry source: vendored unified USD asset."
+    },
+    "notes": ""
+  },
+  {
+    "name": "ur5e_link__shoulder_link",
+    "category": "robot",
+    "role": "Shoulder pan joint (DOF 1)",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro (references ur_description URDF macros)"
+      ],
+      "world_pose_source": "Computed from UR5e kinematic chain (joint angles + base pose)",
+      "default_pose": "(forward-kinematics dependent)",
+      "visual_uri": "(per-link mesh from ur_description package)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Convex hull from URDF",
+      "scoring_references": "/tf frame: shoulder_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (composed)"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/shoulder_link",
+      "current_live_pose": null,
+      "scale_op": "(identity)",
+      "known_divergences": "Confirmed present in live stage probe (children of /World/UR5e/aic_unified_robot). Geometry source: vendored unified USD asset."
+    },
+    "notes": ""
+  },
+  {
+    "name": "ur5e_link__upper_arm_link",
+    "category": "robot",
+    "role": "Shoulder lift joint child (DOF 2)",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro (references ur_description URDF macros)"
+      ],
+      "world_pose_source": "Computed from UR5e kinematic chain (joint angles + base pose)",
+      "default_pose": "(forward-kinematics dependent)",
+      "visual_uri": "(per-link mesh from ur_description package)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Convex hull from URDF",
+      "scoring_references": "/tf frame: upper_arm_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (composed)"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/upper_arm_link",
+      "current_live_pose": null,
+      "scale_op": "(identity)",
+      "known_divergences": "Confirmed present in live stage probe (children of /World/UR5e/aic_unified_robot). Geometry source: vendored unified USD asset."
+    },
+    "notes": ""
+  },
+  {
+    "name": "ur5e_link__forearm_link",
+    "category": "robot",
+    "role": "Elbow joint child (DOF 3)",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro (references ur_description URDF macros)"
+      ],
+      "world_pose_source": "Computed from UR5e kinematic chain (joint angles + base pose)",
+      "default_pose": "(forward-kinematics dependent)",
+      "visual_uri": "(per-link mesh from ur_description package)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Convex hull from URDF",
+      "scoring_references": "/tf frame: forearm_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (composed)"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/forearm_link",
+      "current_live_pose": null,
+      "scale_op": "(identity)",
+      "known_divergences": "Confirmed present in live stage probe (children of /World/UR5e/aic_unified_robot). Geometry source: vendored unified USD asset."
+    },
+    "notes": ""
+  },
+  {
+    "name": "ur5e_link__wrist_1_link",
+    "category": "robot",
+    "role": "Wrist 1 joint child (DOF 4)",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro (references ur_description URDF macros)"
+      ],
+      "world_pose_source": "Computed from UR5e kinematic chain (joint angles + base pose)",
+      "default_pose": "(forward-kinematics dependent)",
+      "visual_uri": "(per-link mesh from ur_description package)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Convex hull from URDF",
+      "scoring_references": "/tf frame: wrist_1_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (composed)"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/wrist_1_link",
+      "current_live_pose": null,
+      "scale_op": "(identity)",
+      "known_divergences": "Confirmed present in live stage probe (children of /World/UR5e/aic_unified_robot). Geometry source: vendored unified USD asset."
+    },
+    "notes": ""
+  },
+  {
+    "name": "ur5e_link__wrist_2_link",
+    "category": "robot",
+    "role": "Wrist 2 joint child (DOF 5)",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro (references ur_description URDF macros)"
+      ],
+      "world_pose_source": "Computed from UR5e kinematic chain (joint angles + base pose)",
+      "default_pose": "(forward-kinematics dependent)",
+      "visual_uri": "(per-link mesh from ur_description package)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Convex hull from URDF",
+      "scoring_references": "/tf frame: wrist_2_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (composed)"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/wrist_2_link",
+      "current_live_pose": null,
+      "scale_op": "(identity)",
+      "known_divergences": "Confirmed present in live stage probe (children of /World/UR5e/aic_unified_robot). Geometry source: vendored unified USD asset."
+    },
+    "notes": ""
+  },
+  {
+    "name": "ur5e_link__wrist_3_link",
+    "category": "robot",
+    "role": "Wrist 3 joint child (DOF 6)",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro (references ur_description URDF macros)"
+      ],
+      "world_pose_source": "Computed from UR5e kinematic chain (joint angles + base pose)",
+      "default_pose": "(forward-kinematics dependent)",
+      "visual_uri": "(per-link mesh from ur_description package)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Convex hull from URDF",
+      "scoring_references": "/tf frame: wrist_3_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (composed)"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/wrist_3_link",
+      "current_live_pose": null,
+      "scale_op": "(identity)",
+      "known_divergences": "Confirmed present in live stage probe (children of /World/UR5e/aic_unified_robot). Geometry source: vendored unified USD asset."
+    },
+    "notes": ""
+  },
+  {
+    "name": "ur5e_link__flange",
+    "category": "robot",
+    "role": "End-of-arm mounting flange",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro (references ur_description URDF macros)"
+      ],
+      "world_pose_source": "Computed from UR5e kinematic chain (joint angles + base pose)",
+      "default_pose": "(forward-kinematics dependent)",
+      "visual_uri": "(per-link mesh from ur_description package)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Convex hull from URDF",
+      "scoring_references": "/tf frame: flange"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (composed)"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/flange",
+      "current_live_pose": null,
+      "scale_op": "(identity)",
+      "known_divergences": "Confirmed present in live stage probe (children of /World/UR5e/aic_unified_robot). Geometry source: vendored unified USD asset."
+    },
+    "notes": ""
+  },
+  {
+    "name": "ur5e_link__tool0",
+    "category": "robot",
+    "role": "Standard UR tool0 frame",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro (references ur_description URDF macros)"
+      ],
+      "world_pose_source": "Computed from UR5e kinematic chain (joint angles + base pose)",
+      "default_pose": "(forward-kinematics dependent)",
+      "visual_uri": "(per-link mesh from ur_description package)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Convex hull from URDF",
+      "scoring_references": "/tf frame: tool0"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (composed)"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/tool0",
+      "current_live_pose": null,
+      "scale_op": "(identity)",
+      "known_divergences": "Confirmed present in live stage probe (children of /World/UR5e/aic_unified_robot). Geometry source: vendored unified USD asset."
+    },
+    "notes": ""
+  },
+  {
+    "name": "ur5e_link__ati_base_link",
+    "category": "robot",
+    "role": "ATI Axia80 F/T sensor base, mounted on tool0",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro (references ur_description URDF macros)"
+      ],
+      "world_pose_source": "Computed from UR5e kinematic chain (joint angles + base pose)",
+      "default_pose": "(forward-kinematics dependent)",
+      "visual_uri": "(per-link mesh from ur_description package)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Convex hull from URDF",
+      "scoring_references": "/tf frame: ati_base_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (composed)"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/ati_base_link",
+      "current_live_pose": null,
+      "scale_op": "(identity)",
+      "known_divergences": "Confirmed present in live stage probe (children of /World/UR5e/aic_unified_robot). Geometry source: vendored unified USD asset."
+    },
+    "notes": ""
+  },
+  {
+    "name": "ur5e_link__ati_tool_link",
+    "category": "robot",
+    "role": "ATI F/T sensor tool side — wrench frame for /fts_broadcaster/wrench",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro (references ur_description URDF macros)"
+      ],
+      "world_pose_source": "Computed from UR5e kinematic chain (joint angles + base pose)",
+      "default_pose": "(forward-kinematics dependent)",
+      "visual_uri": "(per-link mesh from ur_description package)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Convex hull from URDF",
+      "scoring_references": "/tf frame: ati_tool_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (composed)"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/ati_tool_link",
+      "current_live_pose": null,
+      "scale_op": "(identity)",
+      "known_divergences": "Confirmed present in live stage probe (children of /World/UR5e/aic_unified_robot). Geometry source: vendored unified USD asset."
+    },
+    "notes": ""
+  },
+  {
+    "name": "ur5e_link__ft_frame",
+    "category": "robot",
+    "role": "F/T sensor measurement frame",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro (references ur_description URDF macros)"
+      ],
+      "world_pose_source": "Computed from UR5e kinematic chain (joint angles + base pose)",
+      "default_pose": "(forward-kinematics dependent)",
+      "visual_uri": "(per-link mesh from ur_description package)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Convex hull from URDF",
+      "scoring_references": "/tf frame: ft_frame"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (composed)"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/ft_frame",
+      "current_live_pose": null,
+      "scale_op": "(identity)",
+      "known_divergences": "Confirmed present in live stage probe (children of /World/UR5e/aic_unified_robot). Geometry source: vendored unified USD asset."
+    },
+    "notes": ""
+  },
+  {
+    "name": "ur5e_link__cam_mount_cam_mount_link",
+    "category": "robot",
+    "role": "Camera mount bracket attached to wrist",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro (references ur_description URDF macros)"
+      ],
+      "world_pose_source": "Computed from UR5e kinematic chain (joint angles + base pose)",
+      "default_pose": "(forward-kinematics dependent)",
+      "visual_uri": "(per-link mesh from ur_description package)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Convex hull from URDF",
+      "scoring_references": "/tf frame: cam_mount_cam_mount_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd (composed)"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/cam_mount_cam_mount_link",
+      "current_live_pose": null,
+      "scale_op": "(identity)",
+      "known_divergences": "Confirmed present in live stage probe (children of /World/UR5e/aic_unified_robot). Geometry source: vendored unified USD asset."
+    },
+    "notes": ""
+  },
+  {
+    "name": "robotiq_hande_gripper",
+    "category": "robot",
+    "role": "Robotiq Hand-E parallel gripper — 2 finger links (left/right), drives via /gripper_command (String). Mounts to ati_tool_link.",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/Robotiq Hand-E/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/Robotiq Hand-E/hande_base_visual.glb",
+        "/home/aaugus11/Documents/aic/aic_assets/models/Robotiq Hand-E/hande_finger_visual.glb"
+      ],
+      "world_pose_source": "Composed via ur_gz.urdf.xacro inclusion of robotiq_hande_macro.xacro",
+      "default_pose": "Mounted at ATI Axia80 tool side; finger pose offset 3.14159 yaw (left finger mirror of right)",
+      "visual_uri": "hande_base_visual.glb (base body) + hande_finger_visual.glb (both fingers share the same mesh)",
+      "visual_glb_aabb_raw_m": {
+        "hande_base_visual.glb": [
+          0.085,
+          0.085,
+          0.125
+        ],
+        "hande_finger_visual.glb": [
+          4.52,
+          3.14,
+          6.19
+        ]
+      },
+      "collision_type": "Base: 2x cylinder (body + connector). Each finger: 4x box (finger pad, tip, side rails)",
+      "scoring_references": "/gripper_command, /gripper_status, /gripper_width (Float32), /gripper_grasp_detected, /gripper_motion_ongoing, /gripper_width_offset"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: gripper_initial_pos parameter on load_robot/attach_cable_to_gripper @ ~line 232",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: D-09 note: 'Hand-E finger joint is a FixedJoint zero-DOF in our USD' @ line 1627"
+      ],
+      "usd_asset_paths": [
+        "Embedded in exts/aic-dt/assets/robot/aic_unified_robot_cable_sdf.usd"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/gripper_hande_base_link + /gripper_hande_finger_link_l + /gripper_hande_finger_link_r + /gripper_tcp",
+      "current_live_pose": "finger_link_l world=(0.1693, 0.0074, 1.6414)",
+      "scale_op": "(identity)",
+      "known_divergences": "MAJOR: per D-09, the Hand-E fingers are authored as a FixedJoint with zero DOF in the unified USD — the gripper does NOT actually open/close in sim. /gripper_command parameter is recorded for parity but has no physical effect. Gazebo gripper has 2 prismatic finger joints. Cable attachment uses plug_proxy hierarchy trick instead of physical grasping. hande_finger_visual.glb AABB 4.52x3.14x6.19 indicates the GLB is in mm (real finger is ~45x31x62 mm)."
+    },
+    "notes": "The gripper is essentially a static appendage carrying the plug_proxy. Real grasping is faked via plug_proxy USD-hierarchy parenting."
+  },
+  {
+    "name": "axia80_ft_sensor",
+    "category": "sensor",
+    "role": "ATI Axia80-M20 force/torque sensor — measures wrench at ati/tool_link. Used by aic_controller for compliance control.",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/Axia80 M20/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/Axia80 M20/axia_ft_sensor_visual.glb"
+      ],
+      "world_pose_source": "Composed onto UR5e tool0 via xacro (ati_tf_prefix='ati/')",
+      "default_pose": "Mounted at UR5e/tool0",
+      "visual_uri": "axia_ft_sensor_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        8.2,
+        9.12,
+        2.54
+      ],
+      "collision_type": "(visual-only, likely)",
+      "scoring_references": "/fts_broadcaster/wrench (geometry_msgs/WrenchStamped, frame_id=ati/tool_link); /aic_controller listens to this for compliance"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: setup_force_publish_action_graph (referenced @ line 1164)",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: 'fts_broadcaster/wrench' topic — Plan 04 rename per Phase 1"
+      ],
+      "usd_asset_paths": [
+        "Embedded in aic_unified_robot_cable_sdf.usd at /ati_base_link + /ati_tool_link + /ft_frame"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/ati_base_link, /ati_tool_link, /ft_frame",
+      "current_live_pose": null,
+      "scale_op": null,
+      "known_divergences": "Phase 1 PARITY-05 audit (per CLAUDE.md): wrench publisher passed structural smoke (rate=13.6Hz, frame_id=ati/tool_link) but emitted ALL ZEROS. The F/T sensor isn't actually measuring contact forces — the OmniGraph node may need a contact-aware sensor binding. GLB AABB 8.2x9.12x2.54 is in mm (real Axia80 is ~80x91x25mm)."
+    },
+    "notes": "Critical for impedance control and insertion-force scoring. Currently broken per Phase 1 audit."
+  },
+  {
+    "name": "workspace_camera",
+    "category": "sensor",
+    "role": "External workspace overview camera (640x480) — fixed pose outside the robot, observes the whole task area. Single Basler-equivalent.",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/Basler Camera/model.sdf"
+      ],
+      "world_pose_source": "Mounted via aic_description (likely cam_mount + basler_camera composition); topic /intel_camera_rgb_raw per live Gazebo audit",
+      "default_pose": "(per Gazebo cam_mount macro)",
+      "visual_uri": "basler_cam_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        91.6,
+        33.5,
+        31.0
+      ],
+      "collision_type": "(visual-only)",
+      "scoring_references": "(no ROS topic — Gazebo's <camera_pose> in aic.sdf is a MinimalScene GUI viewport, not bridged. Wrist cameras /left_camera/image, /center_camera/image, /right_camera/image are the policy data path — see wrist_cameras inventory entry.)"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: quick_start step 8 @ lines 1195-1237 — creates /World/workspace_camera at Gazebo-parity pose (0.95, -0.1, 1.3), quat xyzw=(0.5,0.5,0.5,0.5)",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: step 9 @ lines 1239-1249 — VIEWPORT-ONLY, no ROS publish for parity with Gazebo MinimalScene camera"
+      ],
+      "usd_asset_paths": [],
+      "spawn_prim_path": "/World/workspace_camera",
+      "current_live_pose": "(0.95, -0.1, 1.3) translate; orient quat(w,x,y,z)=(0.5,0.5,0.5,0.5). Verified live 2026-05-12 post-quick_start.",
+      "scale_op": "(camera intrinsics: HFOV 69.4°, VFOV 42.5°, fx via aperture math, fy derived)",
+      "known_divergences": "RESOLVED 2026-05-12. Pose+orientation now mirror Gazebo aic.sdf:32 (camera_pose 0.95 -0.1 1.3 0 0 π). No ROS topic published — matches Gazebo's MinimalScene <camera_pose> which is also viewport-only and not bridged. The wrist cameras (left/center/right_camera) are the policy-facing sensors and remain a separate concern (handled by setup_wrist_cameras)."
+    },
+    "notes": "Isaac Sim 'workspace_camera' is a human-review vantage that mirrors Gazebo's GUI MinimalScene 3D-View (aic.sdf:32). Neither sim publishes a ROS topic for it. The wrist-mounted Basler cameras (left/center/right_camera in URDF; /left_camera/image etc. via bridge config) are policy sensors and a separate inventory entry (wrist_cameras, idx 41).",
+    "audit_status": "RESOLVED 2026-05-12 (pose+orient parity + topic-mismatch resolved by making Isaac workspace_camera viewport-only matching Gazebo's GUI camera). extension.py:1195-1249."
+  },
+  {
+    "name": "wrist_cameras",
+    "category": "sensor",
+    "role": "3x wrist-mounted cameras (left/center/right stereo set) for close-range manipulation feedback",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro (lines 36-39: left/center/right camera tf_prefixes)"
+      ],
+      "world_pose_source": "Mounted on cam_mount link attached to wrist_3 / tool0 area",
+      "default_pose": "(per cam_mount_macro composition)",
+      "visual_uri": "(basler_cam_visual.glb x3?)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "(visual-only)",
+      "scoring_references": "Phase 1 live audit found NO separate wrist camera topics in Gazebo — only /intel_camera_rgb_raw. URDF declares three TF prefixes but they may not be publishing."
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: WRIST_CAMERAS dict @ line 112 (center/left/right with optical sublinks)",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: setup_wrist_cameras (referenced @ line 1159)",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_setup_wrist_cameras @ line 3951"
+      ],
+      "usd_asset_paths": [
+        "Embedded in unified USD: /World/UR5e/aic_unified_robot/center_camera_optical, left_camera_optical, right_camera_optical"
+      ],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/center_camera_optical/center_camera (+ left + right)",
+      "current_live_pose": "Optical xforms exist per live probe (center_camera_camera_link/sensor_link/optical, left_camera_*, right_camera_*)",
+      "scale_op": null,
+      "known_divergences": "Isaac Sim authors 3 wrist cameras publishing center_camera/image, left_camera/image, right_camera/image at 640x480. Gazebo audit shows only /intel_camera_rgb_raw is live — the three named topics in URDF may not be wired up on the Gazebo side. POSSIBLE OVER-COMPLEXITY in Isaac Sim relative to what scoring actually consumes."
+    },
+    "notes": "Confirm Gazebo wrist camera topics with running container. Currently Isaac Sim publishes more camera streams than scoring expects."
+  },
+  {
+    "name": "cable_root_xform",
+    "category": "cable_part",
+    "role": "Top-level cable subtree xform — contains the rope chain + plug visuals + sfp_module_visual. Loaded as part of unified robot USD.",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/cable.sdf.xacro",
+        "/home/aaugus11/Documents/aic/aic_assets/models/sfp_sc_cable/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/cable_base_c_rotated/model.sdf"
+      ],
+      "world_pose_source": "cable.sdf.xacro spawned via launch with attach_cable_to_gripper=True; CablePlugin connects to gripper",
+      "default_pose": "Per trial sample_config.yaml cables.cable_0.pose.gripper_offset (e.g. x=0, y=0.015385, z=0.04245) relative to gripper. Per aic_gz_bringup.launch.py: x=0.172, y=0.024, z=1.518 rpy=(0.4432, -0.48, 1.3303).",
+      "visual_uri": "(cable_base_c_rotated has its own visual; plus LC Plug + SC Plug + SFP Module GLBs)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Per-link sphere + cylinder colliders on the rope chain; plug bodies have box+cylinder colliders",
+      "scoring_references": "/scoring/tf publishes cable/cable_end_0, cable/cable_end_1, cable/link_<N> for each rope segment, cable/lc_plug_link, cable/sc_plug_link, cable/sfp_module_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: cable param block in load_robot @ lines 1255-1262",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: cable pose authoring + SetActive @ lines 1353-1408",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: SCENE_05_DISABLE env-var emergency rollback hook @ line 1404"
+      ],
+      "usd_asset_paths": [
+        "Embedded subtree of aic_unified_robot_cable_sdf.usd at /World/UR5e/cable"
+      ],
+      "spawn_prim_path": "/World/UR5e/cable",
+      "current_live_pose": "(-0.2000, 0.1846, 1.1825)",
+      "scale_op": "(identity — translation+rotation only)",
+      "known_divergences": "Pose at probe time (-0.20, 0.1846, 1.1825) — note this is RELATIVE to /World/UR5e parent xform which is at (-0.20, 0.20, 1.14), so cable world position = (-0.40, 0.385, 2.3) [approx — depends on rotation]. Live shows world translate (-0.2, 0.1846, 1.1825) meaning cable's WORLD translation matches the UR5e base location, NOT the gazebo-specified (0.172, 0.024, 1.518) world. Local offset (0, 0.0154, 0.0425) per gripper_offset is being applied as the LOCAL transform under /World/UR5e — i.e. cable pose is gripper-relative not world-absolute. Cable mass authored at density=5e-5 per author_cable_physics_offline.py."
+    },
+    "notes": "The cable's WORLD pose is the result of UR5e parent xform composition + cable local offset, which is the GAZEBO-LIKE convention."
+  },
+  {
+    "name": "cable_rope_chain_21_links",
+    "category": "cable_part",
+    "role": "21-segment articulated rope chain (link_0 .. link_20) connecting cable_end_0 and cable_end_1. The physical 'rope'.",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/cable_base_c_rotated/model.sdf (sets link_1..link_N and ball joints between)"
+      ],
+      "world_pose_source": "Each link's <pose> is a 6-vec relative to the previous. Joints are 'ball' type with stiffness=100M, damping=0.2.",
+      "default_pose": "link_1 starts at z=-0.024 relative to cable_end_0; each subsequent link offsets ~24mm down the cable axis",
+      "visual_uri": "(per-link sphere/cylinder visuals authored inline in cable_base_c_rotated/model.sdf)",
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": "Per-link sphere radius=0.002m (collision) + cylinder length=0.024m radius=0.002m. link_1 collision is OVERRIDDEN by sfp_sc_cable/model.sdf experimental:params (removed entirely to avoid gripper-palm intersect).",
+      "scoring_references": "/scoring/tf publishes cable/link_N for all 21 segments"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: comment refs at line 1346 ('21-segment cable rope chain')"
+      ],
+      "usd_asset_paths": [
+        "Embedded in unified USD at /World/UR5e/cable/Rope/Rope/link_0 .. link_20"
+      ],
+      "spawn_prim_path": "/World/UR5e/cable/Rope/Rope/link_<N>",
+      "current_live_pose": "link_0 world=(0.1780, 0.0055, 1.4681), link_20 world=(0.1479, 0.6713, 1.1443)",
+      "scale_op": "(identity)",
+      "known_divergences": "21 links present (link_0 .. link_20 confirmed in live probe). PhysX simulation of the rope is currently fragile — per CLAUDE.md cable note, mass=0/inertia=0 means PhysX treats links as kinematic and they DO NOT FALL UNDER GRAVITY. Authoring per author_cable_physics_offline.py applies density=5e-5 per link (per code comment line 1376). Live probe shows link_20 at world (0.148, 0.671, 1.144) — far from the gripper end (~0.17, 0.0, 1.64), which means the rope is hanging unphysically across the workspace rather than being held by the gripper. The plug_proxy USD-hierarchy trick replaces real grasping."
+    },
+    "notes": "Two fixedJoints at /World/UR5e/cable/Rope/fixedJoint and /fixedJoint2 anchor the rope endpoints. Number of links per probe = exactly 21."
+  },
+  {
+    "name": "cable_sc_plug_visual",
+    "category": "cable_part",
+    "role": "SC plug — one end of the cable. The 'female' connector that mates with sc_port_base. Visual-only in Isaac Sim under cable/sc_plug_visual.",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/SC Plug/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/SC Plug/sc_plug_visual.glb"
+      ],
+      "world_pose_source": "sfp_sc_cable/model.sdf: <include><pose relative_to='cable_connection_1'>0.052 0 0 0 0 0.0</pose></include>",
+      "default_pose": "0.052m offset along cable_connection_1 axis",
+      "visual_uri": "sc_plug_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        0.0574,
+        0.025,
+        0.0101
+      ],
+      "collision_type": "10+ box colliders forming the plug housing; some removed by sfp_sc_cable/model.sdf experimental:params (housing-vs-gripper intersect workaround)",
+      "scoring_references": "/scoring/tf cable/sc_plug_link; trial_3 task targets sc_tip plug into sc_port_base"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "exts/aic-dt/assets/assets/SC Plug/sc_plug_visual.usd; embedded in cable subtree of unified USD"
+      ],
+      "spawn_prim_path": "/World/UR5e/cable/sc_plug_visual",
+      "current_live_pose": null,
+      "scale_op": "(identity — GLB is in METERS, AABB 0.057x0.025x0.010 is correct for a real SC plug)",
+      "known_divergences": "Per code comment line 1547-1562: cross-articulation FixedJoint between sc_plug_visual and gripper finger CANNOT work (different articulation roots). sc_plug_visual is DECORATIVE in the cable subtree — it does not move with the gripper. The plug_proxy sphere child of finger_link_l is the actual collision body for scoring. sc_plug_visual drifts ~30mm under gripper motion because cable density=5e-5 has near-zero gravity coupling."
+    },
+    "notes": "The user's mental model 'gripper holds plug, plug inserts into port' is broken by USD physics constraints. plug_proxy is the workaround."
+  },
+  {
+    "name": "cable_lc_plug_visual",
+    "category": "cable_part",
+    "role": "LC plug — combined LC plug (small fiber connector) bundled with SFP module on the other end of the cable from sc_plug",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/LC Plug/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/LC Plug/lc_plug_visual.glb"
+      ],
+      "world_pose_source": "sfp_sc_cable/model.sdf: <include><pose relative_to='cable_connection_0'>-0.041 0 0 0 0 1.57079</pose></include>",
+      "default_pose": "-0.041m along cable_connection_0 axis, yaw=π/2",
+      "visual_uri": "lc_plug_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        0.019,
+        0.021,
+        0.036
+      ],
+      "collision_type": "10+ box+cylinder colliders; 6 of them REMOVED by sfp_sc_cable/model.sdf experimental:params (gripper finger intersect)",
+      "scoring_references": "/scoring/tf cable/lc_plug_link"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "Embedded in cable subtree at /World/UR5e/cable/sfp_module_visual/lc_plug_visual (NESTED under sfp_module_visual per live probe)"
+      ],
+      "spawn_prim_path": "/World/UR5e/cable/sfp_module_visual/lc_plug_visual",
+      "current_live_pose": null,
+      "scale_op": "(identity — GLB is meters)",
+      "known_divergences": "USD hierarchy nests lc_plug_visual UNDER sfp_module_visual — opposite of Gazebo where SFP Module is the child of LC Plug (per sfp_sc_cable/model.sdf line 'pose relative_to=lc_plug_link' on SFP Module include)."
+    },
+    "notes": "The SFP+LC plug combo is the 'sfp_tip' that CheatCode inserts into nic_card_mount/sfp_port_0 (trial_1/2)."
+  },
+  {
+    "name": "cable_sfp_module_visual",
+    "category": "cable_part",
+    "role": "SFP module — the transceiver that mates with sfp_port on the NIC card. Sibling of lc_plug.",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_assets/models/SFP Module/model.sdf",
+        "/home/aaugus11/Documents/aic/aic_assets/models/SFP Module/sfp_module_visual.glb"
+      ],
+      "world_pose_source": "sfp_sc_cable/model.sdf: <include><pose relative_to='lc_plug_link'>0 0.0384 0 0 3.14159 3.14159</pose></include>",
+      "default_pose": "(0, 0.0384, 0) rpy=(0, π, π) relative to lc_plug_link",
+      "visual_uri": "sfp_module_visual.glb",
+      "visual_glb_aabb_raw_m": [
+        0.0148,
+        0.0122,
+        0.0564
+      ],
+      "collision_type": "15+ box colliders for housing, latch, port, head — ALL REMOVED by sfp_sc_cable/model.sdf experimental:params (gripper interference)",
+      "scoring_references": "/scoring/tf cable/sfp_module_link; CheatCode 'sfp_tip' plug_name maps here"
+    },
+    "isaacsim": {
+      "extension_code_paths": [],
+      "usd_asset_paths": [
+        "Embedded in unified USD at /World/UR5e/cable/sfp_module_visual"
+      ],
+      "spawn_prim_path": "/World/UR5e/cable/sfp_module_visual",
+      "current_live_pose": null,
+      "scale_op": "(identity — GLB in meters)",
+      "known_divergences": "Live probe shows /World/UR5e/cable/sfp_module_visual has lc_plug_visual as a CHILD (inverted hierarchy vs Gazebo). All Gazebo collision boxes are REMOVED in cable.sdf.xacro experimental:params anyway, so divergence is moot for physics. Also: orphan FixedJoint at /World/UR5e/aic_unified_robot/gripper_hande_finger_link_r/FixedJoint formerly pointed to /World/UR5e/cable/sfp_module_visual — cleanup removes the phantom prim per code line 1605-1625."
+    },
+    "notes": "The 'plug' the gripper is supposed to hold. Replaced by plug_proxy for scoring."
+  },
+  {
+    "name": "plug_proxy",
+    "category": "cable_part",
+    "role": "ISAAC SIM ONLY — kinematic USD-hierarchy stand-in for the cable plug under the gripper finger. Provides the collision body that scoring uses for /scoring/insertion_event detection. Replaces cross-articulation FixedJoint which PhysX cannot cook.",
+    "gazebo": {
+      "source_files": [],
+      "world_pose_source": "(N/A — does not exist in Gazebo)",
+      "default_pose": null,
+      "visual_uri": null,
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": null,
+      "scoring_references": "(N/A in Gazebo — Gazebo uses CablePlugin + real fixedjoint)"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_attach_cable_to_gripper plug_proxy authoring @ lines 1563-1603",
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: plug_proxy USD path '/World/UR5e/aic_unified_robot/gripper_hande_finger_link_l/plug_proxy' @ line 3572"
+      ],
+      "usd_asset_paths": [],
+      "spawn_prim_path": "/World/UR5e/aic_unified_robot/gripper_hande_finger_link_l/plug_proxy",
+      "current_live_pose": "(0.1693, 0.0074, 1.6414)",
+      "scale_op": "Sphere collider radius=0.010m (10mm 'plug-tip size')",
+      "known_divergences": "ISAAC-ONLY ARCHITECTURAL ADDITION. Created at finger_link_l with zero local offset; gets the finger's world pose every frame for free via USD hierarchy composition. UsdPhysics.CollisionAPI applied to a sphere child. Code comment WARNS not to set Purpose=guide (silently excludes from PhysX contact discovery — broke trial_2 in iter 6). Gazebo equivalent is the CablePlugin + cross-body FixedJoint, which CANNOT be authored in Isaac without crossing articulation roots."
+    },
+    "notes": "The 'cheat': the gripper is its own plug for scoring purposes. The real cable visual is decorative."
+  },
+  {
+    "name": "cable_attach_joint",
+    "category": "cable_part",
+    "role": "In Gazebo: CablePlugin authors a real FixedJoint connecting cable plug-end link to gripper. In Isaac Sim: this joint is INTENTIONALLY NOT AUTHORED — replaced by plug_proxy hierarchy approach.",
+    "gazebo": {
+      "source_files": [
+        "/home/aaugus11/Documents/aic/aic_description/urdf/cable.sdf.xacro lines 28-35 (CablePlugin invocation)"
+      ],
+      "world_pose_source": "Runtime — CablePlugin creates joint at sim startup when attach_cable_to_gripper=true",
+      "default_pose": "(joint, no pose)",
+      "visual_uri": null,
+      "visual_glb_aabb_raw_m": null,
+      "collision_type": null,
+      "scoring_references": "Allows cable plug links to track gripper world pose for /scoring/tf"
+    },
+    "isaacsim": {
+      "extension_code_paths": [
+        "/home/aaugus11/Documents/isaac-sim-mcp/exts/aic-dt/aic_dt/extension.py: _cmd_attach_cable_to_gripper @ line 3327 — comment block at 1530+ explains why FixedJoint approach was abandoned"
+      ],
+      "usd_asset_paths": [],
+      "spawn_prim_path": "(not authored)",
+      "current_live_pose": null,
+      "scale_op": null,
+      "known_divergences": "ARCHITECTURAL DIVERGENCE: cross-articulation FixedJoint between /World/UR5e/cable/Rope/Rope/link_20 and /World/UR5e/aic_unified_robot/gripper_hande_finger_link_l wedges PhysX reduced-coordinate solver because it crosses articulation roots. excludeFromArticulation crashes during cook. excludeFromArticulation=False + localPos0/1=0 wedges asyncio. The 'Path (a') USD-hierarchy plug proxy' (Milestone 1 ship commit a31b3a1) is the chosen workaround."
+    },
+    "notes": "See git log a31b3a1 'M1 SHIPPED — all 3 trials pass' — the resolution that closed Milestone 1."
+  }
+]

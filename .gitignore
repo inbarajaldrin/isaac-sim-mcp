@@ -76,6 +76,9 @@ mcp_cache/
 
 # Resources (generated scene state files)
 resources/
+# but DO track the component-map's static reference data (inventory JSON, eval-cycle markdown)
+!exts/aic-dt/docs/component-map/resources/
+!exts/aic-dt/docs/component-map/resources/**
 
 # Video recordings
 **/videos/

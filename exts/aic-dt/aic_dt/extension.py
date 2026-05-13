@@ -1193,11 +1193,17 @@ class DigitalTwin(omni.ext.IExt):
             await app.next_update_async()
 
         # 8. Create workspace camera at 640x480
+        # Pose mirrors Gazebo GUI 3D-View camera from
+        # ~/Documents/aic/aic_description/world/aic.sdf:32
+        #   <camera_pose>0.95 -0.1 1.3 0.0 0.0 3.14</camera_pose>
+        # Gazebo body frame (+X fwd, +Y left, +Z up) at yaw=π → looks toward
+        # world -X. Conversion to USD camera frame (-Z fwd, +X right, +Y up)
+        # for this pose: q(x,y,z,w) = (0.5, 0.5, 0.5, 0.5) — cyclic axis perm.
         print("--- Creating Workspace Camera (640x480) ---")
         stage = omni.usd.get_context().get_stage()
         ws_prim_path = "/World/workspace_camera"
-        ws_position = (0.8572405778988392, -1.3321141046870788, 0.9906567613694909)
-        ws_quat_xyzw = (0.4714, 0.1994, 0.3347, 0.7912)
+        ws_position = (0.95, -0.1, 1.3)
+        ws_quat_xyzw = (0.5, 0.5, 0.5, 0.5)
         ws_width, ws_height = 640, 480
 
         camera_prim = UsdGeom.Camera.Define(stage, ws_prim_path)
@@ -1236,12 +1242,14 @@ class DigitalTwin(omni.ext.IExt):
             print(f"Workspace camera created at {ws_prim_path} with resolution {ws_width}x{ws_height}")
         await app.next_update_async()
 
-        # 9. Setup workspace camera action graph
-        print("--- Setting up Workspace Camera Action Graph ---")
-        self._create_camera_actiongraph(
-            ws_prim_path, ws_width, ws_height,
-            "workspace_camera", "WorkspaceCamera"
-        )
+        # 9. Workspace camera is a VIEWPORT-ONLY vantage (mirrors Gazebo's
+        # MinimalScene <camera_pose> in aic.sdf:32, which is also viewport-only
+        # and not bridged to ROS). The wrist cameras (left/center/right_camera)
+        # are the policy-facing sensors and are wired separately by
+        # setup_wrist_cameras. So we deliberately do NOT call
+        # _create_camera_actiongraph here — no ROS publish for parity with
+        # Gazebo's GUI camera.
+        print("--- Workspace camera is viewport-only (no ROS publish — matches Gazebo) ---")
         await app.next_update_async()
 
         # 10. Already playing from step 2b — no-op the original play() at the end.
