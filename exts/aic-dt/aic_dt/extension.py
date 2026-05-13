@@ -170,14 +170,14 @@ MCP_TOOL_REGISTRY = {
         "parameters": {}
     },
     "load_robot": {
-        "description": "Import the UR5e robot (with integrated Robotiq Hand-E gripper and cable) at /World/UR5e. SCENE-04: pose configurable via robot_x/y/z/roll/pitch/yaw and cable_x/y/z/roll/pitch/yaw — parameter names match aic_gz_bringup.launch.py. Cable params are wired through but produce no-op effect in Phase 1 (cable SetActive(False) per D-04).",
+        "description": "Import the UR5e robot (with integrated Robotiq Hand-E gripper and cable) at /World/UR5e. SCENE-04: pose configurable via robot_x/y/z/roll/pitch/yaw and cable_x/y/z/roll/pitch/yaw — parameter names + defaults match aic_gz_bringup.launch.py (Gazebo canonical). Cable params are wired through but produce no-op effect in Phase 1 (cable SetActive(False) per D-04).",
         "parameters": {
-            "robot_x": {"type": "float", "description": "Robot base X (meters). Default None → use historic Isaac Sim base position; pass -0.2 for Gazebo default."},
-            "robot_y": {"type": "float", "description": "Robot base Y (meters). Default None → use legacy; pass 0.2 for Gazebo default."},
-            "robot_z": {"type": "float", "description": "Robot base Z (meters). Default None → use legacy; pass 1.14 for Gazebo default."},
+            "robot_x": {"type": "float", "description": "Robot base X (meters). Default None → -0.2 (Gazebo canonical)."},
+            "robot_y": {"type": "float", "description": "Robot base Y (meters). Default None → 0.2 (Gazebo canonical)."},
+            "robot_z": {"type": "float", "description": "Robot base Z (meters). Default None → 1.14 (Gazebo canonical; sits on task-board mount surface)."},
             "robot_roll": {"type": "float", "description": "Robot base roll (radians). Default 0.0."},
             "robot_pitch": {"type": "float", "description": "Robot base pitch (radians). Default 0.0."},
-            "robot_yaw": {"type": "float", "description": "Robot base yaw (radians). Default 0.0; Gazebo default -3.141."},
+            "robot_yaw": {"type": "float", "description": "Robot base yaw (radians). Default None → -3.141 (Gazebo canonical; 180° flip facing -X)."},
             "cable_x": {"type": "float", "description": "Cable subtree X (meters). Default 0.172 (aic_gz_bringup.launch.py). No-op effect in Phase 1."},
             "cable_y": {"type": "float", "description": "Cable subtree Y. Default 0.024."},
             "cable_z": {"type": "float", "description": "Cable subtree Z. Default 1.518."},
@@ -554,8 +554,16 @@ class DigitalTwin(omni.ext.IExt):
         # downstream JointState publisher targetPrim relationships in Plan 06)
         self._articulation_root_prim_path = "/World/UR5e/aic_unified_robot"
 
-        # Robot position and orientation (identity - no rotation)
-        self._robot_position = (-0.18, -0.122, 0.0)
+        # Robot base pose — Gazebo canonical from aic_gz_bringup.launch.py
+        # (robot_x=-0.2, robot_y=0.2, robot_z=1.14, robot_yaw=-3.141).
+        # Z=1.14 sits the UR5e base on top of the task-board mount surface
+        # whose world Z is set by the enclosure authoring (load_scene).
+        # Pre-2026-05-13 this was (-0.18, -0.122, 0.0), which is the old
+        # Isaac-Sim-local frame and buries the robot below the new
+        # source-true enclosure floor. See CLAUDE.md "Scene-frame parity"
+        # for the multi-entity reconciliation rule.
+        self._robot_position = (-0.2, 0.2, 1.14)
+        self._robot_yaw = -3.141
 
         # AIC enclosure — at world origin per aic.sdf (no <pose> on Enclosure <include>).
         # Direct-GLB-reference wrapper (enclosure_visual.glb + enclosurewalls_visual.glb
@@ -1028,6 +1036,19 @@ class DigitalTwin(omni.ext.IExt):
         # the two GLBs locally (assets/Floor/floor.usda).
         self.import_floor()
 
+        # Floor material overrides (runtime patches, parity with Gazebo's
+        # ogre2 gltf import). Three things the split USD doesn't yet bake in:
+        #   1. Plane_003 (warehouse ceiling) ships with NO material binding in
+        #      the GLB → bind to Material_003.
+        #   2. Plane_003 face normal points +Z; camera below sees back-face
+        #      which gets culled (doubleSided=false default). Flip to true.
+        #   3. Material_003 has glTF-native `emissive_factor`+`emissive_strength`
+        #      that RTX's gltf importer ignores → author a UsdPreviewSurface
+        #      sibling shader with `emissiveColor` set, rewire Material's
+        #      `surface` output to it.
+        # TODO bake these into walls_split.usdc via the offline splitter.
+        self._apply_floor_material_overrides()
+
         # Switch viewport to "Stage Lights" mode so the /World/Lights/* prims
         # authored by `_setup_aic_lights()` actually contribute. The default
         # boot state hides scene-authored UsdLux while a rig (Default /
@@ -1174,6 +1195,68 @@ class DigitalTwin(omni.ext.IExt):
             xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.0))
             xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
             print(f"AIC floor imported at {prim_path}")
+
+    def _apply_floor_material_overrides(self):
+        """Runtime overrides on /World/AIC_Floor — three Gazebo-parity fixes
+        the GLB→USDC splitter pipeline doesn't yet bake into walls_split.usdc.
+
+        1. Bind Material_003 to Plane_003 (the warehouse ceiling Plane has no
+           material assigned by the gltf import — would render with the default
+           fallback material).
+        2. Set Plane_003 doubleSided=true (the face normal points +Z; viewport
+           camera at z=1.3 sees the back-face which is culled by default).
+        3. Author a UsdPreviewSurface sibling shader on Material_003 with
+           `emissiveColor` set, and rewire Material_003's `surface` output to
+           that shader. The original glTF-native shader has emissive_factor +
+           emissive_strength inputs which RTX's gltf importer doesn't read.
+           Without this the warehouse ceiling is dark in Isaac while bright
+           in Gazebo (which DOES read those glTF emissive attrs via ogre2).
+
+        Idempotent — safe to call multiple times. Future work: bake into the
+        offline splitter so the runtime patch becomes unnecessary.
+        """
+        stage = omni.usd.get_context().get_stage()
+        # Splitter flattens path /WallsVisual/Plane_003/Plane_003 → /WallsVisual/Plane_003_Plane_003
+        ceil_path = "/World/AIC_Floor/WallsVisual/Plane_003_Plane_003"
+        mat_path = "/World/AIC_Floor/WallsVisual/Looks/Material_003"
+
+        ceil_prim = stage.GetPrimAtPath(ceil_path)
+        mat_prim = stage.GetPrimAtPath(mat_path)
+        if not (ceil_prim and ceil_prim.IsValid()):
+            print(f"[AIC-DT] floor-overrides skipped: {ceil_path} not found")
+            return
+        if not (mat_prim and mat_prim.IsValid()):
+            print(f"[AIC-DT] floor-overrides skipped: {mat_path} not found")
+            return
+
+        # (1) Bind Material_003 to ceiling Plane_003
+        from pxr import UsdShade
+        mat = UsdShade.Material.Get(stage, mat_path)
+        UsdShade.MaterialBindingAPI(ceil_prim).Bind(mat)
+
+        # (2) doubleSided=true on the ceiling Mesh (face is normal-up; camera
+        #     looks up from below at z=1.3, so without doubleSided the back
+        #     side culls and we see straight through to the warehouse beyond)
+        mesh = UsdGeom.Mesh(ceil_prim)
+        mesh.CreateDoubleSidedAttr(True)
+
+        # (3) Add UsdPreviewSurface emissive shader as Material_003 child.
+        #     emissiveColor=(3,3,3) — modest to avoid RTX path-tracer fireflies
+        #     that we saw at 625. The original glTF strength=625 was tuned for
+        #     ogre2's emissive scaling, not RTX. Tune further if too dim.
+        ups_path = mat_path + "/Emissive_UPS"
+        existing = stage.GetPrimAtPath(ups_path)
+        if existing and existing.IsValid():
+            print(f"[AIC-DT] {ups_path} already authored, refreshing inputs")
+        ups = UsdShade.Shader.Define(stage, ups_path)
+        ups.CreateIdAttr("UsdPreviewSurface")
+        ups.CreateInput("diffuseColor",  Sdf.ValueTypeNames.Color3f).Set((0.8, 0.8, 0.8))
+        ups.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set((3.0, 3.0, 3.0))
+        ups.CreateInput("roughness",     Sdf.ValueTypeNames.Float).Set(0.5)
+        ups.CreateInput("metallic",      Sdf.ValueTypeNames.Float).Set(0.0)
+        ups.CreateOutput("surface", Sdf.ValueTypeNames.Token)
+        mat.CreateSurfaceOutput().ConnectToSource(ups.ConnectableAPI(), "surface")
+        print(f"[AIC-DT] floor-overrides applied: ceiling bound + doubleSided + emissive UPS")
 
     def _setup_workspace_camera(self):
         """Author /World/workspace_camera (Gazebo-parity GUI vantage).
@@ -1507,7 +1590,7 @@ class DigitalTwin(omni.ext.IExt):
 
     async def load_robot(self,
                          robot_x: float = None, robot_y: float = None, robot_z: float = None,
-                         robot_roll: float = 0.0, robot_pitch: float = 0.0, robot_yaw: float = 0.0,
+                         robot_roll: float = 0.0, robot_pitch: float = 0.0, robot_yaw: float = None,
                          cable_x: float = 0.172, cable_y: float = 0.024, cable_z: float = 1.518,
                          cable_roll: float = 0.4432, cable_pitch: float = -0.48, cable_yaw: float = 1.3303,
                          cable_type: str = "sfp_sc_cable",
@@ -1521,14 +1604,14 @@ class DigitalTwin(omni.ext.IExt):
         `robot_x/y/z/roll/pitch/yaw` and `cable_x/y/z/roll/pitch/yaw`).
 
         Defaults:
-          - robot_x/y/z = None → use the historic Isaac Sim base position
-            self._robot_position = (-0.18, -0.122, 0.0). This preserves
-            backwards compatibility for legacy callers (quick_start, UI button,
-            existing _cmd_load_robot with no params). To use the Gazebo-default
-            position (-0.2, 0.2, 1.14), pass robot_x=-0.2, robot_y=0.2,
-            robot_z=1.14 explicitly. The parameter SURFACE matches Gazebo;
-            only the no-arg fallback differs (because Isaac Sim's enclosure
-            is rooted at Z=-1.15 vs Gazebo's world Z=0).
+          - robot_x/y/z/yaw = None → use the Gazebo-canonical base pose held
+            in self._robot_position = (-0.2, 0.2, 1.14) and
+            self._robot_yaw = -3.141 (from aic_gz_bringup.launch.py).
+            Pre-2026-05-13 the legacy fallback was (-0.18, -0.122, 0.0)
+            yaw=0, which only made sense for the old Isaac-Sim-local frame
+            and buries the robot under the source-true enclosure floor.
+            The parameter SURFACE still matches Gazebo verbatim; the only
+            behavior change is the no-arg fallback now matches Gazebo too.
           - cable_x/y/z/roll/pitch/yaw = aic_gz_bringup.launch.py defaults
             (0.172, 0.024, 1.518, 0.4432, -0.48, 1.3303). Cable subtree is
             SetActive(False) per D-04 (cable physics is Phase 3 / SCENE-05),
@@ -1569,12 +1652,13 @@ class DigitalTwin(omni.ext.IExt):
         else:
             raise RuntimeError(f"Failed to load prim at {prim_path}")
 
-        # Resolve robot position: explicit kwargs override the historic
-        # self._robot_position legacy default. Mix-and-match is allowed
-        # (e.g. caller passes robot_z only).
+        # Resolve robot pose: explicit kwargs override the Gazebo-canonical
+        # fallback in self._robot_position + self._robot_yaw. Mix-and-match
+        # is allowed (e.g. caller passes robot_z only).
         rx = self._robot_position[0] if robot_x is None else float(robot_x)
         ry = self._robot_position[1] if robot_y is None else float(robot_y)
         rz = self._robot_position[2] if robot_z is None else float(robot_z)
+        ryaw = self._robot_yaw if robot_yaw is None else float(robot_yaw)
 
         # Apply translation + RPY rotation. AddRotateXYZOp is intrinsic XYZ
         # Euler matching Gazebo's -R -P -Y semantics — but USD's RotateXYZOp
@@ -1585,15 +1669,15 @@ class DigitalTwin(omni.ext.IExt):
         xform.ClearXformOpOrder()
         xform.AddTranslateOp().Set(Gf.Vec3d(rx, ry, rz))
         # If all RPY are zero, keep the existing identity-quaternion behavior
-        # (avoids any rounding drift in the legacy default path).
-        if (float(robot_roll), float(robot_pitch), float(robot_yaw)) == (0.0, 0.0, 0.0):
+        # (avoids any rounding drift in the no-rotation explicit-zero path).
+        if (float(robot_roll), float(robot_pitch), ryaw) == (0.0, 0.0, 0.0):
             xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(1, 0, 0, 0))
         else:
             roll_deg = math.degrees(float(robot_roll))
             pitch_deg = math.degrees(float(robot_pitch))
-            yaw_deg = math.degrees(float(robot_yaw))
+            yaw_deg = math.degrees(ryaw)
             xform.AddRotateXYZOp().Set(Gf.Vec3f(roll_deg, pitch_deg, yaw_deg))
-        print(f"Applied translation ({rx},{ry},{rz}) RPY=({robot_roll},{robot_pitch},{robot_yaw}) rad to {prim_path}")
+        print(f"Applied translation ({rx},{ry},{rz}) RPY=({robot_roll},{robot_pitch},{ryaw}) rad to {prim_path}")
 
         # Cable workaround: even when aic-dt is loaded post-startup (which lets PhysX
         # cook the cable + Body_005 SDF successfully — cache grows from 0 to ~113 MB),
@@ -2621,25 +2705,45 @@ class DigitalTwin(omni.ext.IExt):
         # author /World/TaskBoard/* — the namespace that load_trial + scoring
         # publishers + spawn_task_board.launch.py-parity all target. The legacy
         # /World/Objects/* path below is fallback-only (asset not vendored).
-        new_atoms_succeeded = False
+        #
+        # 2026-05-13 reconcile: pre-fix this method threaded AIC_OBJECTS["…"]["position"]
+        # values into the spawn-atom kwargs. Those values are OLD-frame world coords
+        # from when the robot was at the Isaac-Sim-local origin (-0.18, -0.122, 0);
+        # passing them as task-board-local "translation" kwargs put the board on the
+        # floor (z=0) with children scrambled. The spawn atoms now ship with
+        # Gazebo-canonical defaults verified against aic_gz_bringup.launch.py +
+        # task_board.urdf.xacro, so we invoke them no-arg and the parent pre-flight
+        # (_ensure_task_board_parent) lands the board on the workbench.
         try:
-            base_pos = AIC_OBJECTS["task_board_base"]["position"]
-            self._cmd_spawn_task_board_base(x=base_pos[0], y=base_pos[1], z=base_pos[2])
-            sc1_pos = AIC_OBJECTS["sc_port_1"]["position"]
-            sc1_rpy = self._quat_to_rpy(AIC_OBJECTS["sc_port_1"]["rotation"])
-            self._cmd_spawn_sc_port(index=0, present=True,
-                                    translation=sc1_pos[1],
-                                    roll=sc1_rpy[0], pitch=sc1_rpy[1], yaw=sc1_rpy[2])
-            sc2_pos = AIC_OBJECTS["sc_port_2"]["position"]
-            sc2_rpy = self._quat_to_rpy(AIC_OBJECTS["sc_port_2"]["rotation"])
-            self._cmd_spawn_sc_port(index=1, present=True,
-                                    translation=sc2_pos[1],
-                                    roll=sc2_rpy[0], pitch=sc2_rpy[1], yaw=sc2_rpy[2])
-            nic_pos = AIC_OBJECTS["nic_card"]["position"]
-            self._cmd_spawn_nic_card(present=True, translation=nic_pos[0])
+            # Full canonical task-board population — all 13 parts authored
+            # in spawn_task_board.launch.py / task_board.urdf.xacro. Pre-2026-05-13
+            # this method only spawned the 4-entry AIC_OBJECTS subset
+            # (task_board_base + 2 sc_ports + 1 standalone nic_card), missing the
+            # 5 nic_card_mounts + 6 mount rails (LC/SFP/SC × 0/1). The "Add All
+            # Objects" UI button now lives up to its name.
+            self._cmd_spawn_task_board_base()
+            for i in range(5):
+                self._cmd_spawn_nic_card_mount(index=i, present=True)
+            self._cmd_spawn_sc_port(index=0, present=True)
+            self._cmd_spawn_sc_port(index=1, present=True)
+            for i in (0, 1):
+                self._cmd_spawn_lc_mount_rail(index=i, present=True)
+                self._cmd_spawn_sfp_mount_rail(index=i, present=True)
+                self._cmd_spawn_sc_mount_rail(index=i, present=True)
+            # 2026-05-13: standalone NICCard spawn REMOVED from add_objects.
+            # AIC_OBJECTS["nic_card"] is a pre-Phase-4 legacy entry that
+            # duplicates the PCB already composed under each NICCardMount_<i>/
+            # nic_card_link block. spawn_task_board.launch.py has no
+            # nic_card_<n> family — only nic_card_mount_<0..4>. The standalone
+            # NICCard's referenced nic_card_visual.glb is the FULL nic card
+            # mount assembly (incl. long PCB element Plane_003/Plane_034) and
+            # was landing half-inside the base board when placed at task-board
+            # origin. The Spawn NIC Card UI button is preserved for callers
+            # that explicitly want the legacy standalone, but "Add All Objects"
+            # no longer fires it.
             # Cache initial orientations so randomize_object_poses still works
-            # for callers that invoke it post-spawn (it targets /World/Objects
-            # by default but accepts a folder_path override).
+            # for callers that invoke it post-spawn (legacy AIC_OBJECTS rotations
+            # remain the per-object identity quaternions used by randomization).
             for obj_name, obj_cfg in AIC_OBJECTS.items():
                 rot = obj_cfg.get("rotation")
                 if rot is not None:
@@ -2648,8 +2752,7 @@ class DigitalTwin(omni.ext.IExt):
                     )
                 else:
                     self._initial_orientations[obj_name] = Gf.Quatf(1, 0, 0, 0)
-            new_atoms_succeeded = True
-            print("[add_objects] Spawn atoms succeeded → /World/TaskBoard authored; skipping legacy /World/Objects duplicate path")
+            print("[add_objects] Spawn atoms succeeded → /World/TaskBoard authored at Gazebo canon; skipping legacy /World/Objects path")
             return True
         except Exception as exc:  # noqa: BLE001 — fall back to legacy path on failure
             print(f"[add_objects] Spawn-atom path failed: {exc} — falling through to legacy /World/Objects path")
@@ -2765,8 +2868,18 @@ class DigitalTwin(omni.ext.IExt):
         print(f"[add_objects] Added {len(AIC_OBJECTS)} AIC task board objects")
         return True
 
-    def delete_objects(self, folder_path="/World/Objects"):
-        """Delete the Objects folder from the scene."""
+    def delete_objects(self, folder_path="/World/TaskBoard"):
+        """Delete the task-board subtree (plus the legacy /World/Objects path).
+
+        2026-05-13 reconcile: default folder_path was /World/Objects pre-fix,
+        which is no longer where add_objects authors prims — the new spawn
+        atoms write to /World/TaskBoard. With the old default this method
+        was a no-op on anything spawned via "Add All Objects" / "Spawn …"
+        UI buttons. New default targets /World/TaskBoard so the "Delete
+        Objects" UI button does what its name implies. The legacy
+        /World/Objects path is still swept as a belt-and-suspenders
+        cleanup in case a fallback spawn left prims there.
+        """
         timeline = omni.timeline.get_timeline_interface()
         was_playing = timeline.is_playing()
         if was_playing:
@@ -2774,12 +2887,18 @@ class DigitalTwin(omni.ext.IExt):
             print("Stopped simulation before deleting objects")
 
         stage = omni.usd.get_context().get_stage()
-        prim = stage.GetPrimAtPath(folder_path)
-        if prim and prim.IsValid():
-            stage.RemovePrim(folder_path)
-            print(f"Deleted {folder_path}")
+        deleted = []
+        for path in (folder_path, "/World/Objects"):
+            if path == folder_path and not path:
+                continue
+            prim = stage.GetPrimAtPath(path)
+            if prim and prim.IsValid():
+                stage.RemovePrim(path)
+                deleted.append(path)
+        if deleted:
+            print(f"Deleted: {', '.join(deleted)}")
         else:
-            print(f"Warning: {folder_path} does not exist")
+            print(f"Warning: nothing to delete (neither {folder_path} nor /World/Objects exist)")
 
         # NOTE: pose-publisher cleanup retired alongside create_pose_publisher() in
         # Plan 04 Task 3 (D-09). The new TF/JointState publisher graphs created in
@@ -3492,7 +3611,7 @@ class DigitalTwin(omni.ext.IExt):
 
     def _cmd_load_robot(self,
                         robot_x: float = None, robot_y: float = None, robot_z: float = None,
-                        robot_roll: float = 0.0, robot_pitch: float = 0.0, robot_yaw: float = 0.0,
+                        robot_roll: float = 0.0, robot_pitch: float = 0.0, robot_yaw: float = None,
                         cable_x: float = 0.172, cable_y: float = 0.024, cable_z: float = 1.518,
                         cable_roll: float = 0.4432, cable_pitch: float = -0.48, cable_yaw: float = 1.3303
                         ) -> Dict[str, Any]:
@@ -4212,7 +4331,7 @@ class DigitalTwin(omni.ext.IExt):
     def _cmd_add_objects(self) -> Dict[str, Any]:
         try:
             self.add_objects()
-            return {"status": "success", "message": f"AIC task board objects added ({len(AIC_OBJECTS)} objects)"}
+            return {"status": "success", "message": "AIC task board populated: task_board_base + 5 nic_card_mounts (each w/ PCB child) + 2 sc_ports + 2 lc/sfp/sc mount rails (6 total) (13 prims)"}
         except Exception as e:
             carb.log_error(f"Error in add_objects: {e}")
             traceback.print_exc()
@@ -4384,6 +4503,33 @@ class DigitalTwin(omni.ext.IExt):
             traceback.print_exc()
             return {"status": "error", "message": f"spawn failed at {prim_path}: {e}"}
 
+    def _ensure_task_board_parent(self) -> None:
+        """Pre-flight: ensure /World/TaskBoard exists at Gazebo-canonical pose.
+
+        Called from every child spawn atom (lc/sfp/sc mount rails, sc_port,
+        nic_card_mount, nic_card) so a UI-button click in any order lands the
+        child at its correct world pose. Without this pre-flight,
+        _spawn_component_via_usd's "auto-create parent Xform if missing" path
+        silently creates /World/TaskBoard at the identity transform, and the
+        child ends up at world-frame = task-board-local coords (~10cm above
+        the floor near the workspace origin instead of on the workbench).
+
+        Idempotent: respects an existing /World/TaskBoard prim regardless of
+        how it was authored (explicit Spawn button, load_trial dispatcher, or
+        a prior child-spawn pre-flight). Detection is by presence of a USD
+        reference on the prim — distinguishes "fully-authored task-board"
+        from "empty auto-created identity Xform stub" that earlier code
+        could leave behind.
+        """
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return
+        tb = stage.GetPrimAtPath("/World/TaskBoard")
+        if tb.IsValid() and tb.HasAuthoredReferences():
+            return
+        print("[AIC-DT] /World/TaskBoard not authored — auto-spawning at Gazebo canonical pose (0.15, -0.2, 1.14, yaw=π)")
+        self._cmd_spawn_task_board_base()
+
     def _cmd_spawn_task_board_base(self, x: float = 0.15, y: float = -0.2, z: float = 1.14,
                                    roll: float = 0.0, pitch: float = 0.0, yaw: float = 3.1415) -> Dict[str, Any]:
         """SCENE-01: Spawn task board base.
@@ -4410,6 +4556,7 @@ class DigitalTwin(omni.ext.IExt):
             return {"status": "skipped", "message": f"lc_mount_rail_{index}_present=false"}
         if index not in (0, 1):
             return {"status": "error", "message": f"lc_mount_rail index must be 0 or 1, got {index}"}
+        self._ensure_task_board_parent()
         anchor_x = self._LC_MOUNT_ANCHOR_X
         anchor_y = -self._MOUNT_ANCHOR_Y if index == 0 else self._MOUNT_ANCHOR_Y
         local_pos = (anchor_x, anchor_y + float(translation), self._LC_MOUNT_ANCHOR_Z)
@@ -4432,6 +4579,7 @@ class DigitalTwin(omni.ext.IExt):
             return {"status": "skipped", "message": f"sfp_mount_rail_{index}_present=false"}
         if index not in (0, 1):
             return {"status": "error", "message": f"sfp_mount_rail index must be 0 or 1, got {index}"}
+        self._ensure_task_board_parent()
         anchor_x = self._SFP_MOUNT_ANCHOR_X
         anchor_y = -self._MOUNT_ANCHOR_Y if index == 0 else self._MOUNT_ANCHOR_Y
         local_pos = (anchor_x, anchor_y + float(translation), self._SFP_MOUNT_ANCHOR_Z)
@@ -4454,6 +4602,7 @@ class DigitalTwin(omni.ext.IExt):
             return {"status": "skipped", "message": f"sc_mount_rail_{index}_present=false"}
         if index not in (0, 1):
             return {"status": "error", "message": f"sc_mount_rail index must be 0 or 1, got {index}"}
+        self._ensure_task_board_parent()
         anchor_x = self._SC_MOUNT_ANCHOR_X_0 if index == 0 else self._SC_MOUNT_ANCHOR_X_1
         anchor_z = self._SC_MOUNT_ANCHOR_Z_0 if index == 0 else self._SC_MOUNT_ANCHOR_Z_1
         anchor_y = -self._MOUNT_ANCHOR_Y if index == 0 else self._MOUNT_ANCHOR_Y
@@ -4477,6 +4626,7 @@ class DigitalTwin(omni.ext.IExt):
             return {"status": "skipped", "message": f"sc_port_{index}_present=false"}
         if index not in (0, 1):
             return {"status": "error", "message": f"sc_port index must be 0 or 1, got {index}"}
+        self._ensure_task_board_parent()
         # URDF (task_board.urdf.xacro line ~150): sc_port_<i> at
         #   pose="${-0.075 + sc_port_<i>_translation} <Y[i]> 0.0165
         #          ${1.57 + roll} pitch ${1.57 + yaw}"
@@ -4506,6 +4656,7 @@ class DigitalTwin(omni.ext.IExt):
             return {"status": "skipped", "message": f"nic_card_mount_{index}_present=false"}
         if index not in (0, 1, 2, 3, 4):
             return {"status": "error", "message": f"nic_card_mount index must be 0..4, got {index}"}
+        self._ensure_task_board_parent()
         # URDF (task_board.urdf.xacro line ~130): nic_card_mount_<i> at
         #   pose="${-0.081418 + translation} <Y[i]> 0.012 roll pitch yaw"
         # Translation maps to X (rail direction); each of the 5 rails has a
@@ -4608,12 +4759,16 @@ class DigitalTwin(omni.ext.IExt):
             try:
                 card_uri = _local_asset("assets/NIC Card Mount/nic_card_visual.usd")
                 card_xform.GetPrim().GetReferences().AddReference(card_uri)
-                # Apply metersPerUnit auto-scale (same architectural fix as
-                # _spawn_component_via_usd). The asset declares mpu=0.01
-                # (centimeters) — the helper reads that and authors the right
-                # scale so the PCB renders at its true ~12cm size instead of
-                # being 100x too big from the m-stage's raw-vertex interpretation.
-                self._apply_meters_per_unit_scale(card_xform, card_uri, stage)
+                # 2026-05-13: _apply_meters_per_unit_scale call REMOVED.
+                # Was needed when nic_card_visual.usd was an omni.kit.asset_converter
+                # output with stage-level mpu=0.01 — the helper authored
+                # scale=0.01 to compensate for the cm→m interpretation. Now
+                # nic_card_visual.usd is a thin USD (mpu=1.0 default) that
+                # references nic_card_visual.glb directly, and the gltf SDF
+                # plugin handles mm→m conversion via its own runtime ops
+                # (scale=0.001 on the gltf-loaded Xform). Applying the helper
+                # on top stacks 0.01 × 0.001 = 1e-5 effective scale → PCB
+                # renders at ~1 µm and disappears. Drop it.
                 print(f"[AIC-DT] NIC card PCB composed at {card_path} (Gazebo SDF pose)")
             except FileNotFoundError as e:
                 print(f"[AIC-DT] NIC PCB asset not vendored: {e}")
@@ -4633,6 +4788,7 @@ class DigitalTwin(omni.ext.IExt):
         """
         if not present:
             return {"status": "skipped", "message": "nic_card_present=false"}
+        self._ensure_task_board_parent()
         local_pos = (float(translation), 0.0, 0.0)
         prim_path = "/World/TaskBoard/NICCard"
         return self._spawn_component_via_usd(prim_path,
@@ -4643,7 +4799,7 @@ class DigitalTwin(omni.ext.IExt):
     def _cmd_delete_objects(self) -> Dict[str, Any]:
         try:
             self.delete_objects()
-            return {"status": "success", "message": "Objects deleted from /World/Objects"}
+            return {"status": "success", "message": "Objects deleted (swept /World/TaskBoard + /World/Objects)"}
         except Exception as e:
             carb.log_error(f"Error in delete_objects: {e}")
             traceback.print_exc()
