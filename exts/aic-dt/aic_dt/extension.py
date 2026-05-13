@@ -108,10 +108,14 @@ AIC_RANDOMIZATION = {
     },
 }
 
-# Wrist cameras built into the robot USD
+# Wrist cameras built into the robot USD.
+# prim_suffix is appended to self._robot_prim_path (= /World/UR5e). The optical
+# frame Xforms live UNDER the articulation root (aic_unified_robot/), which is
+# why the legacy "/World/UR5e/center_camera_optical/..." paths silently
+# skipped during setup_wrist_cameras (STATE.md Finding #3 root cause).
 WRIST_CAMERAS = {
     "center_camera": {
-        "prim_suffix": "center_camera_optical/center_camera",
+        "prim_suffix": "aic_unified_robot/center_camera_optical/center_camera",
         "topic": "center_camera/image",
         "info_topic": "center_camera/camera_info",
         "frame_id": "center_camera_optical",
@@ -119,7 +123,7 @@ WRIST_CAMERAS = {
         "height": 480,
     },
     "left_camera": {
-        "prim_suffix": "left_camera_optical/left_camera",
+        "prim_suffix": "aic_unified_robot/left_camera_optical/left_camera",
         "topic": "left_camera/image",
         "info_topic": "left_camera/camera_info",
         "frame_id": "left_camera_optical",
@@ -127,7 +131,7 @@ WRIST_CAMERAS = {
         "height": 480,
     },
     "right_camera": {
-        "prim_suffix": "right_camera_optical/right_camera",
+        "prim_suffix": "aic_unified_robot/right_camera_optical/right_camera",
         "topic": "right_camera/image",
         "info_topic": "right_camera/camera_info",
         "frame_id": "right_camera_optical",
@@ -252,8 +256,32 @@ MCP_TOOL_REGISTRY = {
         }
     },
     "setup_wrist_cameras": {
-        "description": "Create ROS2 action graphs for all 3 built-in wrist cameras (center, left, right) publishing RGB and CameraInfo.",
+        "description": "Create ROS2 action graphs for all 3 built-in wrist cameras (center, left, right) publishing RGB and CameraInfo. Legacy convenience — for per-camera control prefer spawn_wrist_camera + start_wrist_camera_stream.",
         "parameters": {}
+    },
+    "spawn_wrist_camera": {
+        "description": "Author a Camera prim under the named wrist camera's _optical Xform (e.g. /World/UR5e/aic_unified_robot/center_camera_optical/center_camera). Applies ROS-optical to Isaac-camera quaternion + intrinsics from WRIST_CAMERAS. Idempotent — re-authors if prim already exists.",
+        "parameters": {
+            "name": {"type": "string", "description": "Camera name (key in WRIST_CAMERAS dict): 'center_camera', 'left_camera', or 'right_camera'."},
+        }
+    },
+    "remove_wrist_camera": {
+        "description": "Delete the Camera prim under the named wrist camera's _optical Xform. Does NOT remove the parent _optical Xform (that's part of the unified robot USD). Stops any active stream for this camera first.",
+        "parameters": {
+            "name": {"type": "string", "description": "Camera name from WRIST_CAMERAS dict."},
+        }
+    },
+    "start_wrist_camera_stream": {
+        "description": "Create the ROS2 action graph that publishes RGB + CameraInfo for the named wrist camera. Idempotent — replaces existing graph for the same camera. Other wrist cameras' streams are NOT affected (each runs independently).",
+        "parameters": {
+            "name": {"type": "string", "description": "Camera name from WRIST_CAMERAS dict."},
+        }
+    },
+    "stop_wrist_camera_stream": {
+        "description": "Tear down the named wrist camera's ROS2 action graph. The Camera prim itself stays in place — call remove_wrist_camera to remove that too.",
+        "parameters": {
+            "name": {"type": "string", "description": "Camera name from WRIST_CAMERAS dict."},
+        }
     },
     "add_objects": {
         "description": "Add AIC task board objects (base, SC ports, NIC card) to the scene at their default positions. Backwards-compatible clubbing — invokes the per-component spawn atoms (spawn_task_board_base, spawn_sc_port, spawn_nic_card) with AIC_OBJECTS defaults.",
@@ -418,6 +446,10 @@ MCP_HANDLERS = {
     # Phase 4 — trial loader (Plan 04-02; TRIAL-01/02)
     "load_trial": "_cmd_load_trial",
     "setup_wrist_cameras": "_cmd_setup_wrist_cameras",
+    "spawn_wrist_camera": "_cmd_spawn_wrist_camera",
+    "remove_wrist_camera": "_cmd_remove_wrist_camera",
+    "start_wrist_camera_stream": "_cmd_start_wrist_camera_stream",
+    "stop_wrist_camera_stream": "_cmd_stop_wrist_camera_stream",
     "add_objects": "_cmd_add_objects",
     # SCENE-01 / DX-02 — Per-component spawn atoms
     "spawn_task_board_base": "_cmd_spawn_task_board_base",
@@ -644,7 +676,27 @@ class DigitalTwin(omni.ext.IExt):
             # 4. Cameras
             with ui.CollapsableFrame(title="Cameras", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
-                    ui.Button("Setup Wrist Cameras", width=200, height=35, clicked_fn=self.setup_wrist_cameras)
+                    # Wrist cameras — ComboBox-driven per-camera lifecycle.
+                    # ComboBox is populated from WRIST_CAMERAS.keys(); adding
+                    # a 4th/5th camera to the dict auto-extends this UI.
+                    with ui.CollapsableFrame(title="Wrist Cameras", collapsed=False, height=0):
+                        with ui.VStack(spacing=5, height=0):
+                            _wrist_names = list(WRIST_CAMERAS.keys())
+                            with ui.HStack(spacing=5):
+                                ui.Label("Camera:", alignment=ui.Alignment.LEFT, width=80)
+                                self._wrist_camera_combo = ui.ComboBox(0, *_wrist_names, width=200)
+                            with ui.HStack(spacing=5):
+                                ui.Button("Spawn Camera Prim", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_spawn_wrist_camera(self._selected_wrist_camera_name()))
+                                ui.Button("Remove Camera Prim", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_remove_wrist_camera(self._selected_wrist_camera_name()))
+                            with ui.HStack(spacing=5):
+                                ui.Button("Start ROS Stream", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_start_wrist_camera_stream(self._selected_wrist_camera_name()))
+                                ui.Button("Stop ROS Stream", width=180, height=30,
+                                          clicked_fn=lambda: self._cmd_stop_wrist_camera_stream(self._selected_wrist_camera_name()))
+                            ui.Button("Setup All Wrist Cameras (legacy)", width=300, height=30,
+                                      clicked_fn=self.setup_wrist_cameras)
 
                     # Additional Camera
                     with ui.CollapsableFrame(title="Additional Camera", collapsed=True, height=0):
@@ -2454,76 +2506,343 @@ class DigitalTwin(omni.ext.IExt):
                 print(f"Warning: Camera prim not found at {camera_prim_path}, skipping {cam_name}")
                 continue
 
-            graph_suffix = cam_name.replace("_", " ").title().replace(" ", "")
-            self._create_camera_actiongraph(
+            self._attach_camera_ros2_writers(
                 camera_prim_path,
                 cam_cfg["width"],
                 cam_cfg["height"],
                 cam_cfg["topic"],
-                graph_suffix,
+                cam_name,
                 frame_id=cam_cfg["frame_id"],
                 info_topic=cam_cfg["info_topic"],
             )
             created += 1
 
-        print(f"Setup {created}/{len(WRIST_CAMERAS)} wrist camera action graphs")
+        print(f"Setup {created}/{len(WRIST_CAMERAS)} wrist camera ROS2 writers")
 
-    def _create_camera_actiongraph(self, camera_prim, width, height, topic, graph_suffix,
-                                    frame_id="camera_link", info_topic="camera_info"):
-        """Helper method to create camera ActionGraph using og.Controller.edit()."""
-        graph_path = f"/Graph/ActionGraph_{graph_suffix}"
+    def _attach_camera_ros2_writers(self, camera_prim, width, height, topic, name,
+                                     frame_id="camera_link", info_topic="camera_info",
+                                     freq=30):
+        """Author a Helper-based ROS2 camera-publish ActionGraph.
 
+        Canonical layout (per project's action-graphs.md reference snippet):
+            OnPlaybackTick → ROS2CameraHelper.execIn         (per-frame publish)
+            OnPlaybackTick → ROS2CameraInfoHelper.execIn     (per-frame publish)
+            ROS2Context.outputs:context → both Helpers' inputs:context
+
+        Each Helper carries its own `inputs:cameraPrim` + `inputs:width` +
+        `inputs:height` and INTERNALLY creates its render product + SDG
+        annotator chain at first tick. The previously-attempted approach
+        (with a separate `IsaacCreateRenderProduct` node wired into the
+        Helpers' `inputs:renderProductPath`) caused an init-order race —
+        the Helper began its own RP setup and got partially overridden,
+        leaving the SDG annotator chain unspawned (width=0 on the
+        publisher, no data flowing). Verified live 2026-05-13 by probing
+        Replicator_NodeWriterWriter.inputs:width=0 after the
+        rep.writers.get + .attach pattern returned nominal success.
+
+        The pure-Python `rep.writers.get().attach()` API (tutorial pattern
+        for SimulationApp standalone scripts) doesn't init the ROS2
+        context inside extension context, leaving inputs:context=0.
+
+        State: per-camera ActionGraph paths tracked in
+        `self._wrist_camera_handles[name]` for clean teardown.
+        """
+        graph_path = self._wrist_camera_graph_path(name)
         stage = omni.usd.get_context().get_stage()
-        if stage.GetPrimAtPath(graph_path):
+
+        if not hasattr(self, "_wrist_camera_handles"):
+            self._wrist_camera_handles = {}
+
+        # Idempotent: tear down any existing graph for this name
+        if stage.GetPrimAtPath(graph_path).IsValid():
             stage.RemovePrim(graph_path)
-            print(f"Removed existing ActionGraph at {graph_path}")
+        self._wrist_camera_handles.pop(name, None)
 
-        print(f"Creating ActionGraph: {graph_path}")
-        print(f"Camera: {camera_prim}, Resolution: {width}x{height}, Topic: /{topic}")
-
+        # Pattern lifted verbatim from working ur5e-dt sibling extension
+        # (~/Documents/isaac-sim-mcp/exts/ur5e-dt/ur5e_dt/extension.py:3094).
+        # Critical wiring detail: Helpers' execIn comes from
+        # RenderProduct.outputs:execOut, NOT OnPlaybackTick. RenderProduct's
+        # execOut fires AFTER the render product is ready each frame. Feeding
+        # Helpers from OnPlaybackTick directly causes them to publish BEFORE
+        # the render product is populated → silent no-publish (verified live
+        # 2026-05-13: ROS2PublishImage on stage with topic + context + width
+        # but inputs:width=0 because annotator chain never received data).
         keys = og.Controller.Keys
+        og.Controller.edit(
+            {"graph_path": graph_path, "evaluator_name": "execution"},
+            {
+                keys.CREATE_NODES: [
+                    ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
+                    ("RunOnce", "isaacsim.core.nodes.OgnIsaacRunOneSimulationFrame"),
+                    ("RenderProduct", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
+                    ("ROS2Context", "isaacsim.ros2.bridge.ROS2Context"),
+                    ("InfoPublish", "isaacsim.ros2.bridge.ROS2CameraInfoHelper"),
+                    ("RGBPublish", "isaacsim.ros2.bridge.ROS2CameraHelper"),
+                ],
+                keys.SET_VALUES: [
+                    ("ROS2Context.inputs:useDomainIDEnvVar", True),
+                    ("RenderProduct.inputs:cameraPrim", camera_prim),
+                    ("RenderProduct.inputs:width", int(width)),
+                    ("RenderProduct.inputs:height", int(height)),
+                    ("InfoPublish.inputs:topicName", info_topic),
+                    ("InfoPublish.inputs:frameId", frame_id),
+                    ("InfoPublish.inputs:resetSimulationTimeOnStop", True),
+                    ("RGBPublish.inputs:topicName", topic),
+                    ("RGBPublish.inputs:type", "rgb"),
+                    ("RGBPublish.inputs:frameId", frame_id),
+                    ("RGBPublish.inputs:resetSimulationTimeOnStop", True),
+                ],
+                keys.CONNECT: [
+                    ("OnPlaybackTick.outputs:tick", "RunOnce.inputs:execIn"),
+                    ("RunOnce.outputs:step", "RenderProduct.inputs:execIn"),
+                    # Helpers fire on RenderProduct.execOut (every frame, AFTER RP ready)
+                    ("RenderProduct.outputs:execOut", "InfoPublish.inputs:execIn"),
+                    ("RenderProduct.outputs:execOut", "RGBPublish.inputs:execIn"),
+                    ("RenderProduct.outputs:renderProductPath", "InfoPublish.inputs:renderProductPath"),
+                    ("RenderProduct.outputs:renderProductPath", "RGBPublish.inputs:renderProductPath"),
+                    ("ROS2Context.outputs:context", "InfoPublish.inputs:context"),
+                    ("ROS2Context.outputs:context", "RGBPublish.inputs:context"),
+                ],
+            },
+        )
 
+        self._wrist_camera_handles[name] = {"graph_path": graph_path}
+        print(f"[AIC-DT] '{name}' camera publish graph authored at {graph_path}")
+        print(f"[AIC-DT] '{name}' topics: /{topic} + /{info_topic}")
+
+        # Kick the replicator orchestrator so Hydra actively renders the
+        # secondary IsaacCreateRenderProduct. Without this, the render product
+        # exists but Hydra never feeds RGBA pixels into the SDG annotator chain
+        # (verified live: inputs:width=0 on the auto-spawned ROS2PublishImage,
+        # no topic ever reaches the ROS bus). step_async drives a full render
+        # pass for all active render products + flushes the SDG pipeline →
+        # publishers fire. Inside a Kit extension the synchronous variant errors
+        # ("may not be made from within Kit"); the async one schedules onto the
+        # Kit event loop. We keep a single perpetual pump task alive while any
+        # camera stream is active; cancelled in _detach_camera_ros2_writers
+        # when the last stream tears down.
+        self._ensure_camera_pump_running()
+
+    def _detach_camera_ros2_writers(self, name: str):
+        """Tear down a wrist camera stream's ActionGraph. Idempotent.
+
+        Cancels the replicator orchestrator pump task if no other camera
+        streams remain active.
+        """
+        if not hasattr(self, "_wrist_camera_handles"):
+            self._wrist_camera_handles = {}
+        handles = self._wrist_camera_handles.pop(name, None)
+        graph_path = (handles or {}).get("graph_path") or self._wrist_camera_graph_path(name)
+        stage = omni.usd.get_context().get_stage()
+        p = stage.GetPrimAtPath(graph_path)
+        removed = False
+        if p.IsValid():
+            stage.RemovePrim(graph_path)
+            removed = True
+        # If no streams remain, cancel the pump
+        if not self._wrist_camera_handles:
+            self._cancel_camera_pump()
+        return removed
+
+    def _ensure_camera_pump_running(self):
+        """Start the replicator orchestrator pump if not already running.
+
+        The pump perpetually calls `rep.orchestrator.step_async` which drives
+        Hydra to render secondary `IsaacCreateRenderProduct` render products
+        each cycle. Required for camera streams to actually publish — without
+        it, the Helper graph executes and the SDG publishers exist with valid
+        wiring, but the annotator chain never receives RGBA data (publisher
+        inputs:width stays at 0, no topic on ROS bus).
+        """
+        if getattr(self, "_camera_pump_task", None) is not None:
+            return
+        import asyncio
+        import omni.kit.async_engine
+        import omni.replicator.core as rep
+
+        async def _pump():
+            while True:
+                try:
+                    await rep.orchestrator.step_async(rt_subframes=1)
+                except asyncio.CancelledError:
+                    break
+                except Exception as exc:
+                    print(f"[AIC-DT] camera pump exception (continuing): {exc}")
+                    await asyncio.sleep(0.5)
+
+        self._camera_pump_task = omni.kit.async_engine.run_coroutine(_pump())
+        print("[AIC-DT] replicator orchestrator pump started for camera streams")
+
+    def _cancel_camera_pump(self):
+        """Cancel the perpetual pump task. Idempotent."""
+        task = getattr(self, "_camera_pump_task", None)
+        if task is None:
+            return
         try:
-            (graph_handle, nodes, _, _) = og.Controller.edit(
-                {"graph_path": graph_path, "evaluator_name": "execution"},
-                {
-                    keys.CREATE_NODES: [
-                        ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
-                        ("RunOnce", "isaacsim.core.nodes.OgnIsaacRunOneSimulationFrame"),
-                        ("RenderProduct", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
-                        ("Context", "isaacsim.ros2.bridge.ROS2Context"),
-                        ("CameraInfoPublish", "isaacsim.ros2.bridge.ROS2CameraInfoHelper"),
-                        ("RGBPublish", "isaacsim.ros2.bridge.ROS2CameraHelper"),
-                    ],
-                    keys.SET_VALUES: [
-                        ("RenderProduct.inputs:cameraPrim", camera_prim),
-                        ("RenderProduct.inputs:width", width),
-                        ("RenderProduct.inputs:height", height),
-                        ("CameraInfoPublish.inputs:topicName", info_topic),
-                        ("CameraInfoPublish.inputs:frameId", frame_id),
-                        ("CameraInfoPublish.inputs:resetSimulationTimeOnStop", True),
-                        ("RGBPublish.inputs:topicName", topic),
-                        ("RGBPublish.inputs:type", "rgb"),
-                        ("RGBPublish.inputs:frameId", frame_id),
-                        ("RGBPublish.inputs:resetSimulationTimeOnStop", True),
-                    ],
-                    keys.CONNECT: [
-                        ("OnPlaybackTick.outputs:tick", "RunOnce.inputs:execIn"),
-                        ("RunOnce.outputs:step", "RenderProduct.inputs:execIn"),
-                        ("RenderProduct.outputs:execOut", "CameraInfoPublish.inputs:execIn"),
-                        ("RenderProduct.outputs:renderProductPath", "CameraInfoPublish.inputs:renderProductPath"),
-                        ("Context.outputs:context", "CameraInfoPublish.inputs:context"),
-                        ("RenderProduct.outputs:execOut", "RGBPublish.inputs:execIn"),
-                        ("RenderProduct.outputs:renderProductPath", "RGBPublish.inputs:renderProductPath"),
-                        ("Context.outputs:context", "RGBPublish.inputs:context"),
-                    ],
-                },
+            task.cancel()
+        except Exception:
+            pass
+        self._camera_pump_task = None
+        print("[AIC-DT] replicator orchestrator pump cancelled (no active streams)")
+
+    def _selected_wrist_camera_name(self) -> str:
+        """Read the current ComboBox selection. Falls back to the first
+        WRIST_CAMERAS key if the ComboBox isn't built yet (e.g., direct MCP).
+        """
+        names = list(WRIST_CAMERAS.keys())
+        if not hasattr(self, "_wrist_camera_combo") or self._wrist_camera_combo is None:
+            return names[0]
+        try:
+            idx = self._wrist_camera_combo.model.get_item_value_model().get_value_as_int()
+        except Exception:
+            idx = 0
+        return names[idx] if 0 <= idx < len(names) else names[0]
+
+    # ==================== Per-wrist-camera atoms (DX-02 4-surface) ====================
+    # Independent spawn/stream lifecycle per camera. Scales to any N cameras by
+    # adding entries to WRIST_CAMERAS — UI ComboBox + atoms pick them up
+    # automatically. Each stream runs independently; nothing in this layer
+    # enforces "only one at a time" (that's a user-side testing choice).
+
+    def _author_wrist_camera_prim(self, name: str):
+        """Author a Camera prim at WRIST_CAMERAS[name]['prim_suffix'] under the robot.
+
+        Applies ROS-optical→Isaac-camera quaternion (R_x 180° rotation: ROS optical
+        has +Z forward / +Y down; Isaac camera has -Z forward / +Y up; flipping
+        both Y and Z = 180° about X). Intrinsics derived from the same
+        configure_camera_properties pattern as create_additional_camera, scoped
+        to the per-camera (width, height) declared in WRIST_CAMERAS.
+
+        Returns the authored Camera prim path on success.
+        """
+        if name not in WRIST_CAMERAS:
+            raise ValueError(f"Unknown wrist camera '{name}'. Known: {list(WRIST_CAMERAS.keys())}")
+        cfg = WRIST_CAMERAS[name]
+        cam_path = f"{self._robot_prim_path}/{cfg['prim_suffix']}"
+        stage = omni.usd.get_context().get_stage()
+
+        # Parent _optical Xform must already exist (authored in the unified robot USD)
+        parent_path = "/".join(cam_path.split("/")[:-1])
+        if not stage.GetPrimAtPath(parent_path).IsValid():
+            raise RuntimeError(
+                f"Parent Xform {parent_path} missing — load_robot first."
             )
-            print(f"{graph_suffix} ActionGraph created successfully!")
-            print(f"Test with: ros2 topic echo /{topic}")
+
+        # Idempotent: remove existing Camera prim if any
+        existing = stage.GetPrimAtPath(cam_path)
+        if existing.IsValid():
+            stage.RemovePrim(cam_path)
+
+        cam = UsdGeom.Camera.Define(stage, cam_path)
+        cam_prim = cam.GetPrim()
+
+        # Pose: ROS-optical → Isaac-camera = R_x(180°). USD Quatd is (w, x, y, z).
+        # cos(90°)=0, sin(90°)=1 → quat = (0, 1, 0, 0).
+        xform = UsdGeom.Xformable(cam_prim)
+        xform.ClearXformOpOrder()
+        xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.0))
+        xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(0.0, 1.0, 0.0, 0.0))
+
+        # Intrinsics (mirror create_additional_camera's Intel-RealSense-ish HFoV/VFoV)
+        width, height = int(cfg.get("width", 640)), int(cfg.get("height", 480))
+        hfov_deg, vfov_deg = 69.4, 42.5
+        fx = width / (2 * np.tan(np.deg2rad(hfov_deg / 2)))
+        fy = height / (2 * np.tan(np.deg2rad(vfov_deg / 2)))
+        cx, cy = width * 0.5, height * 0.5
+        horizontal_aperture_mm = 36.0
+        focal_length_mm = fx * horizontal_aperture_mm / width
+        vertical_aperture_mm = height * focal_length_mm / fy
+        cam.CreateHorizontalApertureAttr().Set(horizontal_aperture_mm)
+        cam.CreateVerticalApertureAttr().Set(vertical_aperture_mm)
+        cam.CreateFocalLengthAttr().Set(focal_length_mm)
+        cam.CreateProjectionAttr().Set("perspective")
+        cam.CreateClippingRangeAttr().Set(Gf.Vec2f(0.01, 1000.0))
+        # OpenCV pinhole distortion attributes — zero distortion by default
+        cam_prim.CreateAttribute("omni:lensdistortion:model", Sdf.ValueTypeNames.String).Set("opencvPinhole")
+        cam_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:imageSize", Sdf.ValueTypeNames.Int2).Set(Gf.Vec2i(width, height))
+        cam_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:fx", Sdf.ValueTypeNames.Float).Set(float(fx))
+        cam_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:fy", Sdf.ValueTypeNames.Float).Set(float(fy))
+        cam_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:cx", Sdf.ValueTypeNames.Float).Set(float(cx))
+        cam_prim.CreateAttribute("omni:lensdistortion:opencvPinhole:cy", Sdf.ValueTypeNames.Float).Set(float(cy))
+        for attr_name in ("k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6", "s1", "s2", "s3", "s4"):
+            cam_prim.CreateAttribute(f"omni:lensdistortion:opencvPinhole:{attr_name}", Sdf.ValueTypeNames.Float).Set(0.0)
+
+        print(f"[AIC-DT] wrist camera '{name}' authored at {cam_path} ({width}x{height})")
+        return cam_path
+
+    def _wrist_camera_graph_path(self, name: str) -> str:
+        """Canonical /Graph path for a wrist camera's ROS publish graph."""
+        suffix = name.replace("_", " ").title().replace(" ", "")
+        return f"/Graph/ActionGraph_{suffix}"
+
+    def _cmd_spawn_wrist_camera(self, name: str) -> Dict[str, Any]:
+        try:
+            cam_path = self._author_wrist_camera_prim(name)
+            return {"status": "success",
+                    "message": f"Wrist camera '{name}' Camera prim authored at {cam_path}"}
         except Exception as e:
-            print(f"Error creating ActionGraph: {e}")
             traceback.print_exc()
+            return {"status": "error", "message": f"spawn_wrist_camera({name!r}) failed: {e}"}
+
+    def _cmd_remove_wrist_camera(self, name: str) -> Dict[str, Any]:
+        try:
+            if name not in WRIST_CAMERAS:
+                return {"status": "error", "message": f"Unknown wrist camera '{name}'"}
+            stage = omni.usd.get_context().get_stage()
+            cam_path = f"{self._robot_prim_path}/{WRIST_CAMERAS[name]['prim_suffix']}"
+            # Stop any active stream first (best-effort)
+            graph_path = self._wrist_camera_graph_path(name)
+            if stage.GetPrimAtPath(graph_path).IsValid():
+                stage.RemovePrim(graph_path)
+            cam_prim = stage.GetPrimAtPath(cam_path)
+            if cam_prim.IsValid():
+                stage.RemovePrim(cam_path)
+                return {"status": "success", "message": f"Removed Camera prim {cam_path} (and any active stream)"}
+            return {"status": "success", "message": f"Camera prim {cam_path} already absent"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": f"remove_wrist_camera({name!r}) failed: {e}"}
+
+    def _cmd_start_wrist_camera_stream(self, name: str) -> Dict[str, Any]:
+        try:
+            if name not in WRIST_CAMERAS:
+                return {"status": "error", "message": f"Unknown wrist camera '{name}'"}
+            cfg = WRIST_CAMERAS[name]
+            stage = omni.usd.get_context().get_stage()
+            cam_path = f"{self._robot_prim_path}/{cfg['prim_suffix']}"
+            # Auto-spawn the Camera prim if missing — convenience for "just start streaming"
+            if not stage.GetPrimAtPath(cam_path).IsValid():
+                print(f"[AIC-DT] '{name}' Camera prim absent; auto-spawning before stream start")
+                self._author_wrist_camera_prim(name)
+            self._attach_camera_ros2_writers(
+                cam_path, cfg["width"], cfg["height"],
+                cfg["topic"], name,
+                frame_id=cfg["frame_id"],
+                info_topic=cfg["info_topic"],
+            )
+            return {"status": "success",
+                    "message": f"Streaming '{name}' on /{cfg['topic']} + /{cfg['info_topic']}"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": f"start_wrist_camera_stream({name!r}) failed: {e}"}
+
+    def _cmd_stop_wrist_camera_stream(self, name: str) -> Dict[str, Any]:
+        try:
+            if name not in WRIST_CAMERAS:
+                return {"status": "error", "message": f"Unknown wrist camera '{name}'"}
+            detached = self._detach_camera_ros2_writers(name)
+            # Also tear down any legacy ActionGraph from prior Helper-based code path
+            stage = omni.usd.get_context().get_stage()
+            legacy = stage.GetPrimAtPath(self._wrist_camera_graph_path(name))
+            if legacy.IsValid():
+                stage.RemovePrim(legacy.GetPath())
+                detached = True
+            if detached:
+                return {"status": "success", "message": f"Stopped stream for '{name}'"}
+            return {"status": "success", "message": f"No active stream for '{name}' (nothing to stop)"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": f"stop_wrist_camera_stream({name!r}) failed: {e}"}
 
     # ==================== Additional Camera (workspace/custom) ====================
 
@@ -2613,7 +2932,12 @@ class DigitalTwin(omni.ext.IExt):
             if not stage.GetPrimAtPath("/World/workspace_camera"):
                 print("Error: Workspace camera not found. Create it first.")
             else:
-                self._create_camera_actiongraph("/World/workspace_camera", width, height, "workspace_camera", "WorkspaceCamera")
+                self._attach_camera_ros2_writers(
+                    "/World/workspace_camera", width, height,
+                    "workspace_camera", "workspace_camera",
+                    frame_id="workspace_camera",
+                    info_topic="workspace_camera_info",
+                )
 
         if is_custom:
             custom_prim_path = self._custom_camera_prim_field.model.get_value_as_string()
@@ -2624,11 +2948,16 @@ class DigitalTwin(omni.ext.IExt):
             if not topic_name or topic_name.strip() == "":
                 prim_name = custom_prim_path.split("/")[-1] if "/" in custom_prim_path else custom_prim_path
                 topic_name = prim_name.lower().replace(" ", "_").replace("-", "_")
-            graph_suffix = topic_name.replace("_", " ").replace("-", " ").title().replace(" ", "")
             if not stage.GetPrimAtPath(custom_prim_path):
                 print(f"Error: Camera prim not found at {custom_prim_path}. Create it first.")
             else:
-                self._create_camera_actiongraph(custom_prim_path, width, height, topic_name, graph_suffix)
+                handle_name = topic_name.replace("/", "_").strip("_")
+                self._attach_camera_ros2_writers(
+                    custom_prim_path, width, height,
+                    topic_name, handle_name,
+                    frame_id=handle_name,
+                    info_topic=f"{topic_name}_info",
+                )
 
     # ==================== Object Management ====================
 
