@@ -73,6 +73,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import shutil
 import sys
@@ -242,6 +243,81 @@ def swap_local_xforms(stage, prim_a_path: str, prim_b_path: str,
     return (prim_a_path, prim_b_path)
 
 
+def read_authored_trs(prim) -> dict:
+    """Return the authored translate/orient/scale attrs for a connector root."""
+    trs = {}
+    for attr_name in ("xformOp:translate", "xformOp:orient", "xformOp:scale"):
+        attr = prim.GetAttribute(attr_name)
+        if not attr.IsValid():
+            raise ValueError(f"Required attr {attr_name!r} missing on {prim.GetPath()}")
+        value = attr.Get()
+        if value is None:
+            raise ValueError(f"Required attr {attr_name!r} unauthored on {prim.GetPath()}")
+        trs[attr_name] = value
+    return trs
+
+
+def yaw_quat_radians(yaw_radians: float):
+    """Build a quaternion representing a yaw rotation about +Z."""
+    from pxr import Gf
+    half_yaw = yaw_radians * 0.5
+    return Gf.Quatd(math.cos(half_yaw), Gf.Vec3d(0.0, 0.0, math.sin(half_yaw)))
+
+
+def cast_quat_like(template_quat, quat_value):
+    """Cast a quaternion to the same precision/class as an authored orient value."""
+    imag = quat_value.GetImaginary()
+    return template_quat.__class__(
+        quat_value.GetReal(),
+        imag[0],
+        imag[1],
+        imag[2],
+    )
+
+
+def compose_orient_with_yaw(base_orient, yaw_radians: float):
+    """Compose an authored orient with a yaw correction in matching precision."""
+    yaw_correction = cast_quat_like(base_orient, yaw_quat_radians(yaw_radians))
+    return base_orient * yaw_correction
+
+
+def apply_end_anchor_reversal(stage, gripper_end_path: str, far_end_path: str) -> dict:
+    """Move each connector subtree to the opposite end using end-anchor TRS.
+
+    The end anchor translate/orient values come from the source USD's authored
+    connector root poses. Only the root translate/orient attrs are updated.
+    Scale stays untouched on each connector root, and child prim transforms are
+    left alone.
+    """
+    gripper_end_prim = stage.GetPrimAtPath(gripper_end_path)
+    far_end_prim = stage.GetPrimAtPath(far_end_path)
+    if not gripper_end_prim.IsValid():
+        raise ValueError(f"Prim not found: {gripper_end_path}")
+    if not far_end_prim.IsValid():
+        raise ValueError(f"Prim not found: {far_end_path}")
+
+    end_a_pose = read_authored_trs(gripper_end_prim)
+    end_b_pose = read_authored_trs(far_end_prim)
+
+    sc_at_gripper_orient = compose_orient_with_yaw(end_a_pose["xformOp:orient"], 3.14159)
+    sfp_at_far_orient = compose_orient_with_yaw(end_b_pose["xformOp:orient"], -1.57079)
+
+    far_end_prim.GetAttribute("xformOp:translate").Set(end_a_pose["xformOp:translate"])
+    far_end_prim.GetAttribute("xformOp:orient").Set(
+        cast_quat_like(end_b_pose["xformOp:orient"], sc_at_gripper_orient)
+    )
+
+    gripper_end_prim.GetAttribute("xformOp:translate").Set(end_b_pose["xformOp:translate"])
+    gripper_end_prim.GetAttribute("xformOp:orient").Set(
+        cast_quat_like(end_a_pose["xformOp:orient"], sfp_at_far_orient)
+    )
+
+    return {
+        gripper_end_path: read_authored_trs(gripper_end_prim),
+        far_end_path: read_authored_trs(far_end_prim),
+    }
+
+
 # --------------------------------------------------------------------------
 # Project-specific wrapper — builds the reversed cable USD by copying the
 # source USD and applying swap_local_xforms.
@@ -253,8 +329,12 @@ def build_cable_variant(source_usd: str, dest_usd: str, variant: str,
     """Produce a cable USD variant from the source USD.
 
     variant="sfp_sc_cable"          → byte-for-byte copy (identity)
-    variant="sfp_sc_cable_reversed" → copy + swap connector_a ↔ connector_b
-                                       local xforms
+    variant="sfp_sc_cable_reversed" → copy + apply end-anchor reversal:
+                                       SC root moved to the gripper end,
+                                       SFP+LC root moved to the far end,
+                                       orient composed from the destination
+                                       end anchor plus the per-end SDF yaw
+                                       correction, scale untouched
 
     Returns the absolute path of the written USD on success.
     """
@@ -276,17 +356,22 @@ def build_cable_variant(source_usd: str, dest_usd: str, variant: str,
     if variant == "sfp_sc_cable":
         return dest_usd  # identity copy — no swap
 
-    # Reversed variant — apply the connector swap.
+    # Reversed variant — apply the end-anchor reversal in place.
     from pxr import Usd
     stage = Usd.Stage.Open(dest_usd)
     if stage is None:
         raise RuntimeError(f"Failed to open {dest_usd} for editing")
 
-    swapped_paths = swap_local_xforms(stage, connector_a, connector_b)
+    final_trs = apply_end_anchor_reversal(stage, connector_a, connector_b)
     stage.GetRootLayer().Save()
-    print(f"[build_cable_variant] swapped local xforms on:\n"
-          f"                        {swapped_paths[0]}\n"
-          f"                        {swapped_paths[1]}")
+    print(f"[build_cable_variant] applied end-anchor reversal on:\n"
+          f"                        {connector_a}\n"
+          f"                        {connector_b}")
+    for prim_path, trs in final_trs.items():
+        print(f"[build_cable_variant] final TRS {prim_path}:")
+        print(f"                        translate={trs['xformOp:translate']}")
+        print(f"                        orient={trs['xformOp:orient']}")
+        print(f"                        scale={trs['xformOp:scale']}")
     print(f"[build_cable_variant] saved reversed variant: {dest_usd}")
     return dest_usd
 
