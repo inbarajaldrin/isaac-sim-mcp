@@ -2205,11 +2205,19 @@ class DigitalTwin(omni.ext.IExt):
                                                  local_rot_quat.GetImaginary()[0],
                                                  local_rot_quat.GetImaginary()[1],
                                                  local_rot_quat.GetImaginary()[2]))
-            except Exception:
-                # One bad tick should never crash the sim
-                pass
+            except Exception as exc:
+                # One bad tick should never crash the sim, but a silent
+                # except can hide a failed Set (GPT pose-diagnosis 2026-05-17).
+                # Log once per session to surface tracker errors during
+                # diagnostics; subsequent ticks stay silent.
+                if not getattr(self, "_tracker_error_logged", False):
+                    self._tracker_error_logged = True
+                    import traceback
+                    print(f"[AIC-DT] tcp-track-held-connector tick error: {exc!r}")
+                    traceback.print_exc()
 
         physx = omni.physx.acquire_physx_interface()
+        self._tracker_error_logged = False
         self._held_connector_sub = physx.subscribe_physics_step_events(_on_step)
         print(f"[AIC-DT] tcp-track-held-connector: subscribed physics-step tracker for {held_path} "
               f"(cable_type={cable_type!r}, rel_quat_xyzw={rel_quat_xyzw})")

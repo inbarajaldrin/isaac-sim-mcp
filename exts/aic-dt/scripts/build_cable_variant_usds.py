@@ -394,6 +394,56 @@ def swap_joint_endpoints_for_reversed_cable(stage,
     return results
 
 
+def remove_rope_end_fixed_joints(stage) -> list:
+    """Remove the two rope-end FixedJoints that anchor the kinematic connector
+    visuals to the rope-end RigidBody links.
+
+    Paths:
+      /World/cable/Rope/fixedJoint   (body1 = sfp_module_visual or sc_plug_visual)
+      /World/cable/Rope/fixedJoint2  (body1 = the other connector)
+
+    Why removed (2026-05-17, GPT pose diagnosis path-b):
+      fixedJoint authors physics:localRot0 = (0.499, -0.5, 0.5, -0.499) — a
+      non-identity ~90° quat between link_0's frame and the connector body's
+      frame. Once PhysX cooks the joint, the solver enforces
+        W_link_0 * Gf.Matrix(localRot0) == W_connector * Gf.Matrix(localRot1)
+      every tick, snapping the connector's pose to (link_0 pose) ∘ (90°). The
+      kinematic xform writes from _install_held_connector_tcp_tracker are
+      silently overridden by the joint solver, producing the ~90° orientation
+      delta observed in trial_3 sc_plug (rpy_deg=(-179.7,2.1,0.5) instead of
+      Gazebo's (91.7,63.4,-89.3)).
+
+      The cable rope is decorative for M1 — scoring is contact-based on
+      plug-end geometry through plug_proxy (a synthetic Xform on the gripper
+      finger), not on rope shape. Removing the rope-end joints frees the
+      kinematic plugs from the constraint fight; the rope links keep their
+      D6Joint chain to each other but dangle from their authored origin
+      without anchoring back to the connectors.
+
+      With physics:kinematicEnabled=True already authored on both connector
+      visuals (author_kinematic_on_connectors, Layer 2), and the per-tick
+      tracker at extension.py::_install_held_connector_tcp_tracker driving
+      pose for the held connector, removing these joints leaves the
+      tracker as the only pose authority for the held connector. The
+      non-held connector stays at its authored kinematic pose.
+
+    Returns the list of joint paths actually removed.
+    """
+    removed = []
+    for joint_path in (
+        "/World/cable/Rope/fixedJoint",
+        "/World/cable/Rope/fixedJoint2",
+    ):
+        prim = stage.GetPrimAtPath(joint_path)
+        if prim and prim.IsValid():
+            stage.RemovePrim(joint_path)
+            removed.append(joint_path)
+            print(f"[remove_rope_end_fixed_joints] removed {joint_path}")
+        else:
+            print(f"[remove_rope_end_fixed_joints] not present at {joint_path} — skipping")
+    return removed
+
+
 def author_kinematic_on_connectors(stage, prim_paths: Tuple[str, ...]) -> dict:
     """Author physics:kinematicEnabled=True on each given prim.
 
@@ -523,25 +573,31 @@ def build_cable_variant(source_usd: str, dest_usd: str, variant: str,
     # for the 2026-05-17 diagnostic trail.
     author_kinematic_on_connectors(stage, (connector_a, connector_b))
     remove_orphan_finger_r_joint(stage)
+    # 2026-05-17 GPT pose diagnosis path-b: remove rope-end FixedJoints so the
+    # per-tick TCP tracker is the sole pose authority for the held kinematic
+    # connector. The joints' non-identity localRot0 was overriding the
+    # tracker's xform Set, producing the trial_3 90° sc_plug delta.
+    rope_joints_removed = remove_rope_end_fixed_joints(stage)
 
+    # With rope-end joints gone, the reversed variant no longer needs a
+    # joint-endpoint swap — there is nothing to swap. The "which connector at
+    # which end" decision moves entirely into the runtime tracker (which holds
+    # the held connector at gripper_tcp per cable_kwargs.cable_type) plus the
+    # connectors' authored kinematic poses (the far connector stays where the
+    # source USD placed it). For trial_3 (sfp_sc_cable_reversed), the runtime
+    # tracker reads _HELD_CONNECTOR_POSE_OFFSETS[cable_type]['rel_quat_xyzw']
+    # to compose the right orient; the cable_type is set by load_trial. The
+    # source USD's connector positions remain valid for the non-held end.
     if variant == "sfp_sc_cable":
         stage.GetRootLayer().Save()
-        print(f"[build_cable_variant] saved identity variant (kinematic + orphan-joint removed): {dest_usd}")
+        print(f"[build_cable_variant] saved identity variant "
+              f"(kinematic + orphan-joint removed + {len(rope_joints_removed)} rope-end joints removed): {dest_usd}")
         return dest_usd
 
-    # Reversed variant — also swap which connector each cable-rope-end joint
-    # binds to. The orphan-joint swap is no longer needed (the joint is gone),
-    # but the fixedJoint/fixedJoint2 inside /World/cable/Rope/ still determine
-    # which connector visually lives at which rope end. For trial_3, SC must
-    # be at the gripper-end rope link, SFP at the far end.
-    joint_results = swap_joint_endpoints_for_reversed_cable(
-        stage, connector_a, connector_b
-    )
     stage.GetRootLayer().Save()
-    print(f"[build_cable_variant] applied joint-endpoint swap (rope-end bindings):")
-    for joint_path, changes in joint_results.items():
-        print(f"  {joint_path}: {changes}")
-    print(f"[build_cable_variant] saved reversed variant: {dest_usd}")
+    print(f"[build_cable_variant] saved reversed variant "
+          f"(kinematic + orphan-joint removed + {len(rope_joints_removed)} rope-end joints removed; "
+          f"runtime tracker now owns held-connector pose per cable_type): {dest_usd}")
     return dest_usd
 
 
