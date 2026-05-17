@@ -540,6 +540,67 @@ def remove_rope_end_fixed_joints(stage) -> list:
     return removed
 
 
+def author_inline_sfp_module_material(stage, sfp_path: str) -> bool:
+    """Author an inline UsdPreviewSurface for the SFP module subtree and bind
+    it on the parent prim so all child meshes inherit.
+
+    Why inline (vs reference like SC Plug):
+      The SC Plug has a vendored
+      assets/assets/SC Plug/sc_plug_visual.usd with a full Material +
+      texture stack — we just AddReference its Looks scope. The SFP Module
+      has only a source .glb (assets/aic_assets/models/SFP Module/sfp_module_visual.glb)
+      with no vendored USD counterpart, so we can't reference. Authoring
+      inline UsdPreviewSurface from the GLB's parsed materials is the
+      next-best step.
+
+    Source-of-truth (parsed via parse_glb_materials.py 2026-05-17 against
+    aic_assets/models/SFP Module/sfp_module_visual.glb):
+      - Material.005: baseColorFactor=(1,1,1,1) metallicFactor=1.0 roughnessFactor=1.0
+                      (the SFP housing — metallic white finish)
+      - Material.001: baseColorFactor=(1,1,1,1) metallicFactor=0    roughnessFactor=1.0
+                      (internal/decorative — non-metallic white, double-sided)
+
+    For M1 we author the DOMINANT material (Material.005, metallic white)
+    on the parent sfp_module_visual prim. Per-mesh material distinction
+    (Material.001 vs Material.005) is M2 work — requires per-child
+    material binding that mirrors the GLB primitives.material assignment,
+    and the inline cable USD doesn't preserve that GLB-side mesh→material
+    mapping.
+
+    Returns True on success.
+    """
+    from pxr import Sdf, UsdShade
+
+    sfp = stage.GetPrimAtPath(sfp_path)
+    if not sfp.IsValid():
+        print(f"[author_inline_sfp_module_material] missing: {sfp_path}")
+        return False
+
+    looks_path = f"{sfp_path}/Looks"
+    looks = stage.GetPrimAtPath(looks_path)
+    if not looks.IsValid():
+        looks = stage.DefinePrim(looks_path, "Scope")
+
+    mat_path = f"{looks_path}/Material_005"
+    material = UsdShade.Material.Define(stage, mat_path)
+    shader_path = f"{mat_path}/PreviewSurface"
+    shader = UsdShade.Shader.Define(stage, shader_path)
+    shader.CreateIdAttr("UsdPreviewSurface")
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set((1.0, 1.0, 1.0))
+    shader.CreateInput("metallic",     Sdf.ValueTypeNames.Float).Set(1.0)
+    shader.CreateInput("roughness",    Sdf.ValueTypeNames.Float).Set(1.0)
+    shader.CreateInput("opacity",      Sdf.ValueTypeNames.Float).Set(1.0)
+    shader.CreateInput("useSpecularWorkflow", Sdf.ValueTypeNames.Int).Set(0)
+    shader.CreateOutput("surface", Sdf.ValueTypeNames.Token)
+    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+
+    binding = UsdShade.MaterialBindingAPI.Apply(sfp)
+    binding.GetDirectBindingRel().SetTargets([Sdf.Path(mat_path)])
+    print(f"[author_inline_sfp_module_material] authored UsdPreviewSurface "
+          f"(metallic=1, roughness=1, white) at {mat_path}; bound on {sfp_path}")
+    return True
+
+
 def author_gripper_prismatic_joints(stage) -> dict:
     """Convert the Robotiq Hand-E finger joints from PhysicsFixedJoint to
     PhysicsPrismaticJoint with DriveAPI + symmetric mirror, so the gripper
@@ -857,6 +918,9 @@ def build_cable_variant(source_usd: str, dest_usd: str, variant: str,
         stage, connector_b,
         "../assets/SC Plug/sc_plug_visual.usd",
     )
+    # SFP module: no vendored USD (only source .glb); inline UsdPreviewSurface
+    # authored from parsed GLB materials (Material.005 — metallic white).
+    author_inline_sfp_module_material(stage, connector_a)
     # Gripper Hand-E 1-DOF prismatic conversion: both finger joints become
     # PhysicsPrismaticJoint + DriveAPI so the gripper width can vary per
     # trial (URDF mimic at runtime — extension.py writes both drive targets).

@@ -2035,12 +2035,18 @@ class DigitalTwin(omni.ext.IExt):
         except Exception as exc:
             print(f"[AIC-DT] orphan-finger_r-fixedjoint-cleanup failed: {exc!r}")
 
-        # Note: gripper_initial_pos applies to the gripper drive joint (NOT this
-        # FixedJoint). The Hand-E finger joint is a FixedJoint zero-DOF in our
-        # USD per D-09; gripper opening is via /gripper_command (String) elsewhere.
-        # Recorded for parity with Gazebo's parameter SURFACE.
-        if gripper_initial_pos != 0.00655:
-            print(f"[AIC-DT] SCENE-03 gripper_initial_pos={gripper_initial_pos} recorded (no DOF — see D-09)")
+        # gripper_initial_pos → fire the gripper_command MCP atom.
+        # D-09 has closed: the finger joints are now PhysicsPrismaticJoint with
+        # DriveAPI per build_cable_variant_usds.py::author_gripper_prismatic_joints,
+        # so we drive both fingers to the per-trial position. The atom writes
+        # drive:linear:physics:targetPosition directly (USD attribute layer);
+        # PhysX picks it up on the next solver step. Mimic semantics enforced
+        # at write — both fingers receive the same target.
+        try:
+            self._cmd_gripper_command(position=gripper_initial_pos)
+            print(f"[AIC-DT] gripper_initial_pos={gripper_initial_pos} → drive target applied to both fingers")
+        except Exception as exc:
+            print(f"[AIC-DT] gripper_command from load_robot failed: {exc!r}")
 
         # tcp-track-held-connector 2026-05-17 — mirror Gazebo CablePlugin behavior.
         # Diagnosis (this session, /tmp/bag_trial_3_*/*.mcap probe):
