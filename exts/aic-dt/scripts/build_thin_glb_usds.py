@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-# Reference: built per Phase 1 Plan 09 (SCENE-01); 2026-05-13 extended to
-# cover ALL 7 task-board-part visual assets (was just LC/SFP/SC mount rails).
+# Reference: built per Phase 1 Plan 09 (SCENE-01) as build_mount_rail_usds.py
+# for 3 mount-rail targets; 2026-05-13 (51a7267) extended to all 7 task-board-
+# part visuals; 2026-05-17 (b059074) extended to the 3 cable plugs (SC Plug,
+# SFP Module, LC Plug); 2026-05-17 renamed build_mount_rail_usds.py →
+# build_thin_glb_usds.py to match the actual scope.
+#
 # Replaces omni.kit.asset_converter outputs (the .usd files that shipped with
 # rotateX:unitsResolve+scale:unitsResolve xform ops baked into the wrapping
 # Xform, which composed wrong against spawn-atom RPYs for SC Port / NIC Card /
@@ -11,17 +15,24 @@
 # sibling textures preserved) and uses the `_local_asset` resolver shape
 # downstream extension code expects.
 """
-Author thin USD wrappers around ALL task-board-part mesh assets.
+Author thin USD wrappers around any GLB-source visual asset.
 
 The AIC source folders (~/Documents/aic/aic_assets/models/<X>/) ship
 .glb / .dae / .stl meshes — there are no pre-cooked USDs upstream. This
 script:
   1. Vendors any source GLB that's missing from the extension's
-     assets/assets/<X>/ folder (copies from AIC repo).
+     assets/assets/<X>/ folder (copies from AIC repo, creating the
+     target folder on-demand for new TARGETS).
   2. Emits one tiny USD per (folder, output_usd, source_glb) tuple that
      references the target GLB via a relative AddReference, so the
      extension's existing `_local_asset(...) + Sdf payload` flow loads it
      identically to the Plan-02 vendored mount-rail USDs.
+
+Coverage as of 2026-05-17 (11 TARGETS):
+  - 3 mount rails (LC / SFP / SC Mount)                  — Plan 09 original
+  - 5 task-board parts (SC Port, NIC Card, Task Board    — 51a7267 extension
+    Base, NIC Card Mount + NIC Card child under Mount)
+  - 3 cable plugs (SC Plug, SFP Module, LC Plug)         — b059074 extension
 
 The TARGETS list is explicit (folder, output_usd, source_glb) — necessary
 because folders like "NIC Card Mount" contain multiple GLBs and we need
@@ -29,7 +40,7 @@ to map each output USD to the right source.
 
 Usage (run with Isaac Sim's bundled python that ships pxr):
     ~/.local/share/ov/pkg/isaac-sim-4.2.0/python.sh \\
-        exts/aic-dt/scripts/build_mount_rail_usds.py exts/aic-dt/assets/assets
+        exts/aic-dt/scripts/build_thin_glb_usds.py exts/aic-dt/assets/assets
 
 Or any python with the `usd-core` package installed.
 """
@@ -96,7 +107,7 @@ def vendor_source_glb(folder_path: str, glb_name: str) -> None:
         )
     shutil.copyfile(src, dst)
     sz = os.path.getsize(dst)
-    print(f"[build_mount_rail_usds] vendored {glb_name} ({sz} B) "
+    print(f"[build_thin_glb_usds] vendored {glb_name} ({sz} B) "
           f"from AIC source → {folder_path}")
 
 
@@ -139,7 +150,7 @@ def author_mount_usd(folder: str, usd_name: str, glb_name: str = None) -> str:
     mesh_prim.GetReferences().AddReference(f"./{glb_name}")
     stage.SetDefaultPrim(root.GetPrim())
     stage.GetRootLayer().Save()
-    print(f"[build_mount_rail_usds] wrote {usd_path} "
+    print(f"[build_thin_glb_usds] wrote {usd_path} "
           f"({os.path.getsize(usd_path)} B) referencing {glb_name}")
     return usd_path
 
@@ -155,14 +166,14 @@ def main(argv):
         # authored fresh by this script run.
         if not os.path.isdir(folder):
             os.makedirs(folder, exist_ok=True)
-            print(f"[build_mount_rail_usds] created vendored folder: {folder}")
+            print(f"[build_thin_glb_usds] created vendored folder: {folder}")
         try:
             vendor_source_glb(folder, glb_name)
             author_mount_usd(folder, usd_name, glb_name)
             written += 1
         except Exception as exc:  # noqa: BLE001 — degrade gracefully per plan
-            print(f"[build_mount_rail_usds] WARN {folder_name}/{usd_name}: {exc}")
-    print(f"[build_mount_rail_usds] done — {written}/{len(TARGETS)} USDs authored")
+            print(f"[build_thin_glb_usds] WARN {folder_name}/{usd_name}: {exc}")
+    print(f"[build_thin_glb_usds] done — {written}/{len(TARGETS)} USDs authored")
     return 0
 
 

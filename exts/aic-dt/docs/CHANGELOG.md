@@ -102,10 +102,14 @@ PARITY-12, TEX-01, TEX-02, TEX-03, SCENE-01, SCENE-04, DX-01, DX-02.
   `aic_gz_bringup.launch.py` literals (`cable_x=0.172, cable_y=0.024, cable_z=1.518,
   cable_roll=0.4432, cable_pitch=-0.48, cable_yaw=1.3303`); cable subtree
   remains `SetActive(False)` per D-04 — pose surface is wired, physics is Phase 3.
-- **Mount-rail thin-USD wrappers** — `build_mount_rail_usds.py` authors one-line
-  payload USDs that reference upstream `.glb` meshes via relative `AddReference`,
-  for the LC / SFP / SC Mount components that ship as glTF (no pre-cooked USDs)
-  in `aic_assets/models/`.
+- **Mount-rail thin-USD wrappers** — `build_thin_glb_usds.py` (renamed
+  2026-05-17 from `build_mount_rail_usds.py` once scope grew beyond mount
+  rails) authors one-line payload USDs that reference upstream `.glb` meshes
+  via relative `AddReference`, originally for the LC / SFP / SC Mount
+  components that ship as glTF (no pre-cooked USDs) in `aic_assets/models/`.
+  Scope subsequently extended to all 7 task-board parts (51a7267) and the 3
+  cable plugs / SC Plug, SFP Module, LC Plug (b059074) — same one-line
+  pattern, 11 targets total.
 
 ### Changed
 

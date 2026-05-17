@@ -67,18 +67,52 @@ Try in order until one works:
 
 The matrix-order fix (`e13ec03`) is committed and correct in isolation. The remaining work is gating the PhysX writeback.
 
-### 2. ❌ Materials missing — `0/13 meshes` bound on `sc_plug_visual` subtree
+### 2. ✅ Materials missing — CLOSED 2026-05-17 (commit `b059074`)
 
-**Root cause traced this session**: The vendored `exts/aic-dt/assets/assets/SC Plug/sc_plug_visual.usd` HAS materials (Material `/World/Looks/DODGERBLUE3_001` with baseColor+metallicRoughness+occlusion textures, the canonical "dodger blue" SC connector color). But the project's `aic_unified_robot_cable_sdf.usd` was IMPORTED PRE-BUILT and uses the same mesh prim names INLINE without a Looks scope or material bindings.
+The path predicted in this section's "Concrete next actions" was the right
+one and shipped as `b059074 feat(cable-fidelity): plugs use thin-USD +
+GLB-reference (socket pattern)`. Summary of what landed:
 
-The cable USD's mesh prims are `Cube_002`, `Cylinder_005`, `Cylinder_007`, `Cylinder_009`, `Cylinder_011`, `ferula_Predeterminado_003`, `ferula_Predeterminado_005`, `HOUSING_BLUE_Predeterminado_005..011`, `PARTE_INTERNA_A_Predeterminado_003/005` — exactly matching the vendored USD's mesh names. So they came from the same source GLB but went through different pipelines.
+- `build_thin_glb_usds.py` (renamed from `build_mount_rail_usds.py` in
+  the same wave) gained 3 plug TARGETS — SC Plug / SFP Module / LC Plug —
+  with vendored `.glb` from `~/Documents/aic/aic_assets/models/<X>/` +
+  thin USD wrappers alongside.
+- `build_cable_variant_usds.py` gained
+  `replace_plug_subtree_with_glb_refs()` which wipes the inline
+  `sc_plug_visual` / `sfp_module_visual` subtrees and substitutes child
+  Xforms that `AddReference` the thin GLB-USDs. Parent prims (with
+  RigidBodyAPI + kinematic tracker writes) are preserved; only their
+  children and parent MaterialBinding are touched. For `sc_plug`, parent
+  `xformOp:scale` is reset 0.01→1.0 so the gltf-side meters-per-unit
+  scale doesn't double-apply.
+- Rope fixedJoint body1 paths needed no update — the parent connector
+  prim (`/World/cable/sc_plug_visual`, `/World/cable/sfp_module_visual`)
+  is the joint target and was preserved.
+- SFP body needed a parent-level fallback `UsdPreviewSurface` because
+  its source GLB's `Body.005` mesh has two GLB primitives sharing one
+  mesh, each with its own material — the gltf SDF plugin doesn't
+  synthesize UsdGeomSubset partitions to preserve that mapping, so the
+  imported mesh arrives unbound. We bind the dominant `Material.005`
+  (metallic white) on the `sfp_body` Xform; binding propagates down via
+  MaterialBindingAPI.
 
-**Concrete next actions:**
-1. Modify `build_cable_variant_usds.py` to REPLACE the inline `/World/cable/sc_plug_visual` subtree (and `sfp_module_visual` similarly) with a single `USD reference` to `assets/assets/SC Plug/sc_plug_visual.usd` (and `assets/SFP Module/sfp_module_visual.usd` if it exists). Pattern matches `build_mount_rail_usds.py` from Phase 1.
-2. Update the cable USD's rope `fixedJoint/fixedJoint2` body1 paths if the prim hierarchy changes (or use the same `/World/cable/sc_plug_visual` parent Xform that references the vendored sub-USD).
-3. Verify SC plug renders with the dodger-blue housing in Isaac Sim — should match the Gazebo wrist-cam image (`gazebo_GROUND_TRUTH_center.png` in the Share folder).
+Verified live (trial_3, post-restart with venv-activate +
+ROS_DOMAIN_ID=7):
 
-Same fix applies to `sfp_module_visual` if its vendored USD has materials and the inline cable USD subtree doesn't.
+| Connector | Resolved Material | Source |
+| --- | --- | --- |
+| `sc_plug` | `…/visual/Mesh/Looks/DODGERBLUE3_001` | GLB-side, full textures |
+| `sfp_body` | `…/sfp_body/Looks/Material_005` | inline fallback (M.005 metallic) |
+| `lc_plug` | `…/lc_plug/Mesh/Looks/Plastic_Blue_002` | GLB-side, full textures |
+
+Pose tracker preserved (sc_plug REL TCP angular delta still 0.000°,
+sfp_module far-end world pos still (+0.541, -0.018, +1.147) matching
+Gazebo trial_3 sfp_module_link).
+
+Residual M2 work (not blocking M1): per-GLB-primitive material distinction
+inside SFP body's `Body_005` mesh — the small `Material.001` facet needs
+`UsdGeomSubset` partitioning. Currently bound to `Material.005` (metallic
+white) as a uniform fallback.
 
 ### 3. ❌ Gripper finger separation — fixed at 17.3mm, doesn't adapt per cable
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Reference: built per "two-end cable parity" investigation 2026-05-16.
-# Mirrors the build_mount_rail_usds.py pattern (vendored-from-AIC + thin USD).
+# Mirrors the build_thin_glb_usds.py pattern (vendored-from-AIC + thin USD).
 # Pairs with the Gazebo source at:
 #   ~/Documents/aic/aic_description/urdf/cable.sdf.xacro
 # which uses a literal xacro:if on `cable_type` to swap which connector goes
@@ -474,7 +474,7 @@ def replace_plug_subtree_with_glb_refs(
 ) -> dict:
     """Wipe all children of the connector parent prim at plug_path, then add
     new child Xforms that AddReference the thin GLB-USDs built by
-    build_mount_rail_usds.py. Mirrors the socket-spawn pattern in
+    build_thin_glb_usds.py. Mirrors the socket-spawn pattern in
     extension.py::_spawn_component_via_usd so the gltf SDF plugin handles
     Y-up→Z-up axis conversion, meter-units conversion, and full GLB
     material + texture bindings at load time.
@@ -851,7 +851,7 @@ def build_cable_variant(source_usd: str, dest_usd: str, variant: str,
     rope_joints_authored = reauthor_rope_end_joints_identity(stage, variant=variant)
     # Visual parity fix (2026-05-17): replace the inline mesh subtrees under
     # both connector parents with thin-USD references to GLB-backed visuals
-    # built by build_mount_rail_usds.py. This mirrors the working socket-
+    # built by build_thin_glb_usds.py. This mirrors the working socket-
     # spawn pattern (extension.py::_spawn_component_via_usd) so the gltf SDF
     # plugin handles Y-up→Z-up + units conversion AND the full GLB material
     # texture stack at load time — no hand-authored UsdPreviewSurface, no
