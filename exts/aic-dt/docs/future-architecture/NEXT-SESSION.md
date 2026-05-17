@@ -14,6 +14,7 @@ Cable-fidelity work has moved through four commits this session:
 | `69b8b5c` | Remove orphan FixedJoint at `gripper_hande_finger_link_r/FixedJoint` from both USDs + add per-tick physics-step TCP tracker in `_attach_cable_to_gripper_impl` |
 | `6383881` | Add orientation tracking via Fabric (usdrt) writes — Fabric-only |
 | `bab929f` | **Dual USD+Fabric write** — Hydra needs USD-side value too, Fabric-only was silently ignored by the renderer |
+| `e13ec03` | **Quat compose order fix (GPT-diagnosed)** — `rel * tcp` not `tcp * rel` per Gf row-vector convention. Isolated math now gives 0.0° diff; runtime still 90° off due to PhysX Rope/fixedJoint override (the only remaining cause) |
 
 ## Confirmed status (numerical, post `bab929f`)
 
@@ -31,21 +32,40 @@ Position: now matches Gazebo within ~10mm. Plug IS between the gripper fingers.
 
 ## Three open gaps (priority order)
 
-### 1. ❌ Pose orientation — **the most important remaining problem**
+### 1. ❌ Pose orientation — **the most important remaining problem (NEARLY SOLVED)**
 
-**Symptom**: sc_plug_visual local orient = my computed value, but world orient = TCP's orient (rel_quat is silently dropped in composition).
+**Symptom**: sc_plug_visual local orient = my computed value, but world orient ≈ TCP's orient (rel_quat is silently dropped in composition).
 
-**Possible causes (ranked):**
-- (a) `xformOpOrder = [translate, orient, scale]` — Pixar composes T*R*S; if the parent's transformation chain composes T_parent * R_parent * S_parent, then world = T_p * R_p * S_p * T_c * R_c * S_c. If parent has scale that doesn't commute with my child rotation, the extraction order may zero it out. **Low confidence.**
-- (b) The two `/World/cable/Rope/fixedJoint{,2}` PhysX constraints — body0=link_0 / link_20, body1=sc_plug_visual or sfp_module_visual with non-identity `physics:localRot0` (e.g. (0.499,-0.5,0.5,-0.499)). Even with kinematic body1, PhysX may overwrite world pose to satisfy the constraint at each step. **High confidence.**
-- (c) `omni.physx.set_kinematic_target_transform` is the canonical API for kinematic body pose control; writing `xformOp:translate/orient` via Sdf/Fabric may not be the supported pathway. **Medium confidence.**
-- (d) The cable parent xform uses `AddRotateXYZOp` (Euler XYZ degrees) while child uses `xformOp:orient` (Quat). Mixed op-type composition may have quirks. **Low confidence.**
+**Root-cause diagnosis (via /ask-gpt 2026-05-17, result at `/tmp/gpt-pose-result-9174.txt`):**
+
+The PRIMARY bug was matrix composition order. OpenUSD `Gf` uses ROW-VECTOR convention where the LEFT matrix is MORE LOCAL. The prior code `tcp_rot_mat * rel_rot_mat` was column-vector style. Corrected in commit `e13ec03` to `rel_rot_mat * tcp_rot_mat`. Verified via isolated math: gives 0.0° diff to Gazebo target.
+
+But the SECONDARY bug remains: even with correct compose, the runtime world orient still ≈ TCP's orient. The `/World/UR5e/cable/Rope/fixedJoint` (body0=link_0, body1=sc_plug_visual, non-identity `physics:localRot0` ≈ (0.499,-0.5,0.5,-0.499)) overrides the kinematic body's xform Set every PhysX step. Rope/fixedJoint2 has the same pattern with link_20 and the other connector.
 
 **Concrete next actions:**
-1. Read `/tmp/gpt-pose-result-9174.txt` (GPT diagnosis launched at session end — may have arrived after wrap).
-2. Try the PhysX kinematic API: `omni.physx.set_kinematic_target_transform(prim_path, position, orientation)`. This is the *supported* way for kinematic bodies and should bypass the joint-constraint fight.
-3. If (2) doesn't work, REMOVE the `Rope/fixedJoint` and `Rope/fixedJoint2` from the cable USDs (in `build_cable_variant_usds.py`) entirely. The rope will dangle without anchors to the connectors, but for M1 the rope is decorative — the plug position+orient is what scoring cares about.
-4. If both (2) and (3) fail, the architecturally-correct fix is to reparent `sc_plug_visual` (and `sfp_module_visual`) under `gripper_tcp` via USD hierarchy at trial load time — so the renderer uses USD composition without any per-tick fight. This is a more invasive USD edit (changes prim paths, breaks joint references).
+
+Try in order until one works:
+
+1. **Use PhysX tensors API** (GPT's recommended pathway):
+   ```python
+   import omni.physics.tensors as tensors
+   import warp as wp, numpy as np
+   sim_view = tensors.create_simulation_view("warp")
+   rb_view = sim_view.create_rigid_body_view("/World/UR5e/cable/sc_plug_visual")
+   target = np.array([[x, y, z, qx, qy, qz, qw]], dtype=np.float32)
+   idx = wp.array([0], dtype=wp.int32, device="cpu")
+   rb_view.set_kinematic_targets(target, idx)
+   ```
+   Docs: https://docs.omniverse.nvidia.com/kit/docs/omni_physics/110.1/dev_guide/simulation_control/simulation_control.html
+   This is the supported pathway for kinematic body pose control — should bypass the joint-constraint fight.
+
+2. **Remove Rope/fixedJoint AND fixedJoint2** from both cable USDs in `build_cable_variant_usds.py`. The rope will dangle without anchors to the connectors, but for M1 the rope is decorative — only plug position+orient matters for scoring. This is the cheapest experiment.
+
+3. **Reparent `sc_plug_visual` (and `sfp_module_visual`) under `gripper_tcp`** via USD hierarchy at trial load time. The renderer uses USD composition with no per-tick fight. More invasive (changes prim paths, breaks joint references downstream) but architecturally cleanest.
+
+4. **Drop the bare `except: pass`** in `_install_held_connector_tcp_tracker._on_step` while diagnosing — GPT noted this can hide silent Set failures.
+
+The matrix-order fix (`e13ec03`) is committed and correct in isolation. The remaining work is gating the PhysX writeback.
 
 ### 2. ❌ Materials missing — `0/13 meshes` bound on `sc_plug_visual` subtree
 
