@@ -59,6 +59,18 @@ TARGETS = [
     # nic_card_visual.glb inside BOTH the NIC Card and NIC Card Mount
     # folders; here we point at the one in NIC Card Mount.
     ("NIC Card Mount",   "nic_card_visual.usd",         "nic_card_visual.glb"),
+    # Plug visuals (2026-05-17 visual-parity fix). The connector subtrees
+    # under /World/cable/{sc_plug_visual, sfp_module_visual} in the cable USD
+    # were inlined with empty Looks scopes (sc_plug) or hand-authored
+    # UsdPreviewSurface (sfp_module) — neither carried the GLB-side baseColor
+    # textures the AIC stack expects. The fix is to give each plug its own
+    # thin GLB-reference USD (same pattern as the sockets), then have
+    # build_cable_variant_usds.py replace the inline subtrees with references
+    # to these thin USDs. The gltf SDF plugin then handles axis/units +
+    # material textures + bindings at load time, restoring full Gazebo parity.
+    ("SC Plug",          "sc_plug_visual.usd",          "sc_plug_visual.glb"),
+    ("SFP Module",       "sfp_module_visual.usd",       "sfp_module_visual.glb"),
+    ("LC Plug",          "lc_plug_visual.usd",          "lc_plug_visual.glb"),
 ]
 
 # Source GLBs not yet vendored under the extension are copied from here.
@@ -137,9 +149,13 @@ def main(argv):
     written = 0
     for folder_name, usd_name, glb_name in TARGETS:
         folder = os.path.join(base, folder_name)
+        # Create the vendored folder on-demand. New plug TARGETS (SC Plug,
+        # SFP Module, LC Plug) don't have a pre-existing vendored folder
+        # under exts/aic-dt/assets/assets/ — the GLB and thin USD are both
+        # authored fresh by this script run.
         if not os.path.isdir(folder):
-            print(f"[build_mount_rail_usds] WARN folder missing: {folder}")
-            continue
+            os.makedirs(folder, exist_ok=True)
+            print(f"[build_mount_rail_usds] created vendored folder: {folder}")
         try:
             vendor_source_glb(folder, glb_name)
             author_mount_usd(folder, usd_name, glb_name)

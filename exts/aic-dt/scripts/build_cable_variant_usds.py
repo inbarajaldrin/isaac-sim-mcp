@@ -468,109 +468,149 @@ def remove_rope_end_fixed_joints(stage) -> list:
     return removed
 
 
-def _author_inline_preview_surface(stage, mat_path: str, diffuse, metallic, roughness):
-    """Author a single UsdPreviewSurface Material at the given path."""
-    from pxr import Sdf, UsdShade
-    material = UsdShade.Material.Define(stage, mat_path)
-    shader = UsdShade.Shader.Define(stage, f"{mat_path}/PreviewSurface")
-    shader.CreateIdAttr("UsdPreviewSurface")
-    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(diffuse)
-    shader.CreateInput("metallic",     Sdf.ValueTypeNames.Float).Set(metallic)
-    shader.CreateInput("roughness",    Sdf.ValueTypeNames.Float).Set(roughness)
-    shader.CreateInput("opacity",      Sdf.ValueTypeNames.Float).Set(1.0)
-    shader.CreateInput("useSpecularWorkflow", Sdf.ValueTypeNames.Int).Set(0)
-    shader.CreateOutput("surface", Sdf.ValueTypeNames.Token)
-    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
-    return material
+def replace_plug_subtree_with_glb_refs(
+    stage, plug_path: str, child_specs: list,
+    reset_parent_scale_to_identity: bool = False,
+) -> dict:
+    """Wipe all children of the connector parent prim at plug_path, then add
+    new child Xforms that AddReference the thin GLB-USDs built by
+    build_mount_rail_usds.py. Mirrors the socket-spawn pattern in
+    extension.py::_spawn_component_via_usd so the gltf SDF plugin handles
+    Y-up→Z-up axis conversion, meter-units conversion, and full GLB
+    material + texture bindings at load time.
 
+    Why this exists (2026-05-17 visual-parity fix):
+      The cable USD's connector visuals (/World/cable/sc_plug_visual and
+      /World/cable/sfp_module_visual) were inlined as raw mesh subtrees with
+      empty Looks scopes (sc_plug — fixed in b481385 via /Looks AddReference)
+      or hand-authored UsdPreviewSurface materials (sfp_module — e34ee5f).
+      Neither carried the GLB-side baseColor textures + normal maps + PBR
+      that the AIC source GLBs ship with, so the live render didn't match
+      the Gazebo reference. The sockets (sc_port, lc_mount, nic_card_mount,
+      etc.) use the clean thin-USD-AddReference pattern — let the gltf SDF
+      plugin do the work. This helper rewires the plugs to that same path.
 
-def author_inline_sfp_module_material(stage, sfp_path: str) -> bool:
-    """Author inline UsdPreviewSurface materials for the SFP module subtree
-    and bind per-sub-subtree so the SFP body and the LC plug child carry
-    their own correct materials.
+    The parent prim is preserved (it carries RigidBodyAPI + kinematicEnabled
+    plus the runtime trackers' xformOp:translate / xformOp:orient writes).
+    Only its children + MaterialBindingAPI are touched.
 
-    Inline cable USD structure under `{sfp_path}` (from probe 2026-05-17):
-      sfp_module_visual/
-        Looks/                     ← Material scope
-        sfp_module_visual/         ← inner Xform holding the SFP body mesh
-          Body_005     [Mesh]      ← SFP housing, source GLB material is
-                                     'Material.005' (metallic white)
-        lc_plug_visual/            ← entire LC plug subtree (Blender export)
-          Cube_010..022 / Cylinder_002 / FCA_FCFC_DPS1Z_ma1_AQUA_002 / ...
-                                     LC plug source GLB material is
-                                     'Plastic_Blue.002' (metallic white)
+    Args:
+      plug_path: e.g. "/World/cable/sc_plug_visual". The connector parent
+                 whose pose is owned by the runtime kinematic trackers
+                 (extension.py::_install_held_connector_tcp_tracker /
+                 _install_far_connector_world_tracker).
+      child_specs: list of dicts. Required keys:
+        - name: child Xform name under plug_path
+        - usd:  relative path to the thin GLB-USD from the cable USD's dir,
+                e.g. "../assets/SC Plug/sc_plug_visual.usd"
+        Optional keys:
+        - translate: (x,y,z) tuple in parent-frame meters (default (0,0,0))
+        - fallback_material: dict for cases where the gltf SDF plugin drops
+                material bindings on the imported subtree (e.g. SFP body
+                GLB whose Body.005 mesh ships with two GLB-primitive
+                materials that don't survive the gltf→USD bridge). When
+                present, an inline UsdPreviewSurface is authored under
+                the child Xform's own /Looks scope and bound on the child
+                via MaterialBindingAPI — propagates down to descendant
+                meshes that lack their own bindings. Schema:
+                  {"name": "Material_005",
+                   "diffuse": (1.0, 1.0, 1.0),
+                   "metallic": 1.0,
+                   "roughness": 1.0}
+      reset_parent_scale_to_identity: when True, sets the plug parent's
+        xformOp:scale to (1,1,1). Needed for sc_plug — the source cable USD
+        pre-flattened the GLB→meter 0.01 conversion onto the parent (each
+        of the 13 inline meshes had identity scale). The new GLB-reference
+        path lets the gltf SDF plugin apply its own meters-per-unit scale
+        inside the referenced subtree, so leaving the parent at 0.01 would
+        double-apply and shrink the plug 100×.
 
-    Source-of-truth (parsed via parse_glb_materials.py 2026-05-17):
-      SFP Module GLB
-        - Material.005 (primitive 0 of Body.005): baseColorFactor=(1,1,1,1),
-                                                   metallicFactor=1.0,
-                                                   roughnessFactor=1.0
-        - Material.001 (primitive 1 of Body.005): baseColorFactor=(1,1,1,1),
-                                                   metallicFactor=0,
-                                                   roughnessFactor=1.0
-          → Per-primitive distinction inside Body_005 requires UsdGeomSubset
-            partitions on the mesh; the inline cable USD doesn't preserve
-            the GLB-side primitives.material index mapping. We bind the
-            dominant Material.005 on the Body_005 carrier Xform. The
-            internal-feature Material.001 is authored inline (so a future
-            session can wire it via GeomSubsets) but currently unbound to
-            any geometry.
-      LC Plug GLB
-        - Plastic_Blue.002: baseColorFactor=(1,1,1,1), metallicFactor=1.0,
-                            roughnessFactor=1.0  → bound on the entire
-                            lc_plug_visual subtree (single material per
-                            the LC GLB).
-
-    Returns True on success.
+    Returns dict of {child_path: thin_usd_relpath} for verification.
     """
-    from pxr import Sdf, UsdShade
+    from pxr import Gf, Sdf, UsdGeom, UsdShade
 
-    sfp = stage.GetPrimAtPath(sfp_path)
-    if not sfp.IsValid():
-        print(f"[author_inline_sfp_module_material] missing: {sfp_path}")
-        return False
+    plug = stage.GetPrimAtPath(plug_path)
+    if not plug.IsValid():
+        print(f"[replace_plug_subtree_with_glb_refs] plug parent not found: {plug_path}")
+        return {}
 
-    looks_path = f"{sfp_path}/Looks"
-    looks = stage.GetPrimAtPath(looks_path)
-    if not looks.IsValid():
-        looks = stage.DefinePrim(looks_path, "Scope")
+    # Clear any parent-level MaterialBindingAPI direct binding. USD's
+    # MaterialBindingAPI semantics give parent bindings precedence over
+    # descendant bindings (via "direct" strength) unless the descendant
+    # binds with "strongerThanDescendants". The b481385/e34ee5f fixes both
+    # bound on the parent; that binding would mask the GLB-side material
+    # bindings the gltf SDF plugin authors on the imported mesh subtree.
+    if plug.HasAPI(UsdShade.MaterialBindingAPI):
+        binding = UsdShade.MaterialBindingAPI(plug)
+        binding.GetDirectBindingRel().ClearTargets(removeSpec=False)
+        print(f"[replace_plug_subtree_with_glb_refs] cleared parent MaterialBinding on {plug_path}")
 
-    # Author all three materials (M.005, M.001, Plastic_Blue_002) inline.
-    mat_005 = f"{looks_path}/Material_005"
-    mat_001 = f"{looks_path}/Material_001"
-    mat_pb  = f"{looks_path}/Plastic_Blue_002"
-    _author_inline_preview_surface(stage, mat_005, (1.0,1.0,1.0), 1.0, 1.0)
-    _author_inline_preview_surface(stage, mat_001, (1.0,1.0,1.0), 0.0, 1.0)
-    _author_inline_preview_surface(stage, mat_pb,  (1.0,1.0,1.0), 1.0, 1.0)
+    # Optional: reset parent scale. The runtime tracker writes only
+    # translate/orient, so scale survives the rebuild — must be 1 here
+    # (not 0.01) so the gltf-side units-resolve scale lands the GLB at the
+    # right meter size, no double-application.
+    if reset_parent_scale_to_identity:
+        xf = UsdGeom.Xformable(plug)
+        scale_op = None
+        for op in xf.GetOrderedXformOps():
+            if op.GetOpType() == UsdGeom.XformOp.TypeScale:
+                scale_op = op
+                break
+        if scale_op is None:
+            scale_op = xf.AddScaleOp(UsdGeom.XformOp.PrecisionDouble)
+        scale_op.Set(Gf.Vec3d(1.0, 1.0, 1.0))
+        print(f"[replace_plug_subtree_with_glb_refs] reset {plug_path} scale=(1,1,1)")
 
-    # Clear any prior parent-level binding (was uniform Material_005 covering
-    # both the SFP body AND the LC plug subtree — wrong for LC).
-    parent_binding = UsdShade.MaterialBindingAPI.Apply(sfp)
-    parent_binding.GetDirectBindingRel().ClearTargets(removeSpec=False)
+    # Wipe ALL children — the inline meshes + Looks scope + any nested
+    # Xforms. The runtime tracker doesn't iterate children; it writes only
+    # on the parent. Cable rope-end joints attach to the parent prim
+    # (per reauthor_rope_end_joints_identity), not its children, so this
+    # is safe for the rope chain too.
+    for child in list(plug.GetChildren()):
+        child_path = child.GetPath()
+        stage.RemovePrim(child_path)
+    print(f"[replace_plug_subtree_with_glb_refs] removed all children under {plug_path}")
 
-    # Bind Material.005 on the SFP-body carrier Xform (covers Body_005 mesh
-    # via descendant inheritance).
-    sfp_inner_path = f"{sfp_path}/sfp_module_visual"
-    sfp_inner = stage.GetPrimAtPath(sfp_inner_path)
-    if sfp_inner.IsValid():
-        UsdShade.MaterialBindingAPI.Apply(sfp_inner).GetDirectBindingRel().SetTargets([Sdf.Path(mat_005)])
-        print(f"[author_inline_sfp_module_material] bound {mat_005} on {sfp_inner_path} (SFP body)")
-    else:
-        # No sub-Xform — fall back to parent binding (legacy USD layout)
-        parent_binding.GetDirectBindingRel().SetTargets([Sdf.Path(mat_005)])
-        print(f"[author_inline_sfp_module_material] no inner Xform at {sfp_inner_path}; "
-              f"bound {mat_005} on parent {sfp_path} (fallback)")
+    out = {}
+    for spec in child_specs:
+        name = spec["name"]
+        usd_rel = spec["usd"]
+        translate = spec.get("translate", (0.0, 0.0, 0.0))
+        fallback = spec.get("fallback_material")
 
-    # Bind Plastic_Blue_002 on the LC plug subtree.
-    lc_path = f"{sfp_path}/lc_plug_visual"
-    lc = stage.GetPrimAtPath(lc_path)
-    if lc.IsValid():
-        UsdShade.MaterialBindingAPI.Apply(lc).GetDirectBindingRel().SetTargets([Sdf.Path(mat_pb)])
-        print(f"[author_inline_sfp_module_material] bound {mat_pb} on {lc_path} (LC plug subtree)")
-    else:
-        print(f"[author_inline_sfp_module_material] no LC plug subtree at {lc_path}; skipping")
+        child_path = f"{plug_path}/{name}"
+        child_xform = UsdGeom.Xform.Define(stage, child_path)
+        child_xform.ClearXformOpOrder()
+        if any(v != 0.0 for v in translate):
+            child_xform.AddTranslateOp().Set(Gf.Vec3d(*[float(v) for v in translate]))
+        child_xform.GetPrim().GetReferences().AddReference(usd_rel)
+        out[child_path] = usd_rel
+        print(f"[replace_plug_subtree_with_glb_refs] {child_path} → AddReference({usd_rel}) "
+              f"translate={tuple(translate)}")
 
-    return True
+        if fallback is not None:
+            mat_name = fallback["name"]
+            mat_path = f"{child_path}/Looks/{mat_name}"
+            looks_prim = stage.GetPrimAtPath(f"{child_path}/Looks")
+            if not looks_prim.IsValid():
+                stage.DefinePrim(f"{child_path}/Looks", "Scope")
+            material = UsdShade.Material.Define(stage, mat_path)
+            shader = UsdShade.Shader.Define(stage, f"{mat_path}/PreviewSurface")
+            shader.CreateIdAttr("UsdPreviewSurface")
+            shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
+                tuple(float(v) for v in fallback["diffuse"]))
+            shader.CreateInput("metallic",  Sdf.ValueTypeNames.Float).Set(float(fallback["metallic"]))
+            shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(float(fallback["roughness"]))
+            shader.CreateInput("opacity",   Sdf.ValueTypeNames.Float).Set(1.0)
+            shader.CreateInput("useSpecularWorkflow", Sdf.ValueTypeNames.Int).Set(0)
+            shader.CreateOutput("surface", Sdf.ValueTypeNames.Token)
+            material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+            UsdShade.MaterialBindingAPI.Apply(child_xform.GetPrim()).GetDirectBindingRel().SetTargets(
+                [Sdf.Path(mat_path)])
+            print(f"[replace_plug_subtree_with_glb_refs] {child_path} fallback material "
+                  f"{mat_name} (metallic={fallback['metallic']}, roughness={fallback['roughness']}) "
+                  f"bound — propagates to GLB descendants lacking own bindings")
+    return out
 
 
 def author_gripper_prismatic_joints(stage) -> dict:
@@ -667,78 +707,6 @@ def author_gripper_prismatic_joints(stage) -> dict:
               f"{orig_type} → PhysicsPrismaticJoint, axis=X, "
               f"flip={flip_axis}, limits=({LOWER},{UPPER}), target={INITIAL_POS}")
     return results
-
-
-def bind_sc_plug_dodgerblue_material(stage, plug_path: str,
-                                       vendored_sc_plug_usd_rel: str) -> bool:
-    """Reference the vendored SC Plug USD's Looks scope into the cable USD's
-    sc_plug_visual prim, then bind DODGERBLUE3_001 on the parent so all
-    descendant meshes inherit the dodger-blue housing + textures.
-
-    Why this is needed (2026-05-17, NEXT-SESSION.md §2):
-      The cable USD's sc_plug_visual subtree was IMPORTED from an upstream
-      pre-built file that has the right mesh prim names + geometry but
-      0/13 mesh material bindings. The vendored
-      assets/assets/SC Plug/sc_plug_visual.usd has the same 13 mesh names AND
-      a /World/Looks/DODGERBLUE3_001 Material with baseColor + metallicRoughness +
-      occlusion texture maps (the canonical AIC dodger-blue SC connector look).
-      Rather than inline-copy the Material + texture nodes into the cable USD,
-      we add a USD reference on the otherwise-empty
-      /World/cable/sc_plug_visual/Looks scope pointing at the vendored USD's
-      /World/Looks subtree. The reference resolves texture paths relative to
-      the vendored USD's location (preserves the existing texture file
-      layout under SC Plug/textures/).
-
-      We then apply MaterialBindingAPI on the sc_plug_visual parent prim with
-      directBinding -> .../Looks/DODGERBLUE3_001. USD MaterialBindingAPI
-      propagates through descendants, so all 13 mesh children inherit the
-      binding without per-mesh authoring.
-
-    Args:
-      plug_path: Cable-USD-internal path to the connector parent, e.g.
-                 "/World/cable/sc_plug_visual".
-      vendored_sc_plug_usd_rel: Relative path from this USD's location to the
-                 vendored SC Plug USD, e.g.
-                 "../assets/SC Plug/sc_plug_visual.usd"
-                 (relative because assets are co-vendored in-repo;
-                 absolute path would break under repo-relocation).
-
-    Returns True if the binding was authored, False if the plug parent prim
-    was missing.
-    """
-    from pxr import Sdf, UsdShade
-    plug = stage.GetPrimAtPath(plug_path)
-    if not plug.IsValid():
-        print(f"[bind_sc_plug_dodgerblue_material] plug parent not found: {plug_path}")
-        return False
-
-    looks_path = f"{plug_path}/Looks"
-    looks = stage.GetPrimAtPath(looks_path)
-    if not looks.IsValid():
-        looks = stage.DefinePrim(looks_path, "Scope")
-
-    # AddReference imports /World/Looks (and ONLY that subtree) from the
-    # vendored USD into our local Looks scope. Texture asset paths inside
-    # the referenced layer resolve relative to the vendored USD, so the
-    # existing textures/ directory next to the vendored sc_plug_visual.usd
-    # stays the texture source.
-    refs = looks.GetReferences()
-    refs.ClearReferences()  # idempotent rebuild
-    refs.AddReference(vendored_sc_plug_usd_rel, primPath="/World/Looks")
-    print(f"[bind_sc_plug_dodgerblue_material] referenced "
-          f"{vendored_sc_plug_usd_rel}::/World/Looks → {looks_path}")
-
-    # Apply MaterialBindingAPI + Bind on the plug parent. Descendants inherit
-    # the binding per USD's MaterialBindingAPI propagation rules.
-    material_path = Sdf.Path(f"{looks_path}/DODGERBLUE3_001")
-    binding_api = UsdShade.MaterialBindingAPI.Apply(plug)
-    # Direct-binding via relationship target avoids constructing the Material
-    # shader instance (which would require the reference to have already
-    # composed — order-dependent).
-    binding_api.GetDirectBindingRel().SetTargets([material_path])
-    print(f"[bind_sc_plug_dodgerblue_material] bound {material_path} on "
-          f"{plug_path} (inherits to descendants)")
-    return True
 
 
 def author_kinematic_on_connectors(stage, prim_paths: Tuple[str, ...]) -> dict:
@@ -881,18 +849,64 @@ def build_cable_variant(source_usd: str, dest_usd: str, variant: str,
     # wire is visible again (chains no longer drift off-scene).
     rope_joints_removed = remove_rope_end_fixed_joints(stage)
     rope_joints_authored = reauthor_rope_end_joints_identity(stage, variant=variant)
-    # Materials: bind the vendored DODGERBLUE3_001 to sc_plug_visual subtree.
-    # Inline mesh prims under /World/cable/sc_plug_visual have 0/13 bindings;
-    # vendored SC Plug USD has the same mesh names with full material + texture
-    # bindings. Reference the Looks scope across and bind on the parent. The
-    # SFP module subtree has no vendored counterpart; left as M2 work.
-    bind_sc_plug_dodgerblue_material(
+    # Visual parity fix (2026-05-17): replace the inline mesh subtrees under
+    # both connector parents with thin-USD references to GLB-backed visuals
+    # built by build_mount_rail_usds.py. This mirrors the working socket-
+    # spawn pattern (extension.py::_spawn_component_via_usd) so the gltf SDF
+    # plugin handles Y-up→Z-up + units conversion AND the full GLB material
+    # texture stack at load time — no hand-authored UsdPreviewSurface, no
+    # /Looks-only AddReference partial fix. Both prior approaches lost the
+    # GLB-side baseColor textures the AIC stack ships with; the live render
+    # didn't match Gazebo. The new path makes both ends source-of-truth.
+    #
+    # The plug parent prims themselves (their RigidBodyAPI + kinematicEnabled
+    # + runtime tracker xformOp writes) are preserved — only their children
+    # and parent MaterialBinding are touched.
+    replace_plug_subtree_with_glb_refs(
         stage, connector_b,
-        "../assets/SC Plug/sc_plug_visual.usd",
+        [{"name": "visual",
+          "usd":  "../assets/SC Plug/sc_plug_visual.usd"}],
+        # sc_plug_visual parent has scale=0.01 baked in (the source cable USD
+        # pre-flattened the GLB→meter conversion onto the parent). The new
+        # GLB-reference path lets the gltf SDF plugin apply meters-per-unit
+        # inside the referenced subtree, so leave parent at identity to
+        # avoid 100× double-application.
+        reset_parent_scale_to_identity=True,
     )
-    # SFP module: no vendored USD (only source .glb); inline UsdPreviewSurface
-    # authored from parsed GLB materials (Material.005 — metallic white).
-    author_inline_sfp_module_material(stage, connector_a)
+    replace_plug_subtree_with_glb_refs(
+        stage, connector_a,
+        [
+            # SFP body (housing) — same local origin as the parent. The GLB's
+            # Body.005 mesh has TWO GLB primitives sharing one mesh, each
+            # with its own material (Material.005 metallic + Material.001
+            # non-metallic) — the gltf SDF plugin can't synthesize
+            # UsdGeomSubset partitions to preserve that mapping, so the
+            # imported mesh arrives unbound (renders default gray). Author
+            # the dominant Material.005 (metallic white, per AIC source-GLB
+            # parse) inline as a fallback that propagates down via
+            # MaterialBindingAPI. Per-GLB-primitive distinction (the small
+            # Material.001 facet) is M2 work — needs UsdGeomSubset wiring.
+            {"name": "sfp_body",
+             "usd":  "../assets/SFP Module/sfp_module_visual.usd",
+             "fallback_material": {
+                 "name": "Material_005",
+                 "diffuse": (1.0, 1.0, 1.0),
+                 "metallic": 1.0,
+                 "roughness": 1.0,
+             }},
+            # LC plug (the LC duplex connector attached to the SFP housing's
+            # cable exit) — offset by the same translate the original inline
+            # sub-Xform carried, preserving the plug-tip position relative
+            # to the SFP body. The GLB ships with Plastic_Blue.002 bindings.
+            {"name": "lc_plug",
+             "usd":  "../assets/LC Plug/lc_plug_visual.usd",
+             "translate": (-0.0007481417293789746,
+                           -0.0013461820330080822,
+                           0.031288921)},
+        ],
+        # sfp_module_visual parent already has scale=1; no reset needed.
+        reset_parent_scale_to_identity=False,
+    )
     # Gripper Hand-E 1-DOF prismatic conversion: both finger joints become
     # PhysicsPrismaticJoint + DriveAPI so the gripper width can vary per
     # trial (URDF mimic at runtime — extension.py writes both drive targets).
