@@ -2750,11 +2750,38 @@ class DigitalTwin(omni.ext.IExt):
         cam = UsdGeom.Camera.Define(stage, cam_path)
         cam_prim = cam.GetPrim()
 
-        # Pose: ROS-optical → Isaac-camera = R_x(180°). USD Quatd is (w, x, y, z).
-        # cos(90°)=0, sin(90°)=1 → quat = (0, 1, 0, 0).
+        # Pose: R_x(180°) ROS-optical → USD camera convention + forward
+        # offset to escape the basler camera visual mesh's lens housing.
+        #
+        # Direction (R_x(180°)):
+        #   ROS-optical:    +Z forward, +Y down, +X right
+        #   USD/Isaac cam:  looks down LOCAL -Z, +Y up, +X right
+        #   To make USD camera's -Z = ROS-optical's +Z, rotate 180° around X.
+        #   USD Quatd is (w, x, y, z); cos(90°)=0, sin(90°)=1 → (0, 1, 0, 0).
+        #
+        # Position (translate +Z = +0.06m in optical frame, = forward past lens):
+        #   Per ~/Documents/aic/aic_assets/models/Basler Camera/basler_camera_macro.xacro:
+        #     - sensor / optical frame at camera_link +X = 21.74mm (the CCD)
+        #     - lens cylinder front face at camera_link +X = 70mm
+        #     - lens housing extends 48mm PAST the sensor surface
+        #   The URDF places the optical frame INSIDE the visible lens housing
+        #   mesh. Gazebo's <sensor> is virtual and ignores mesh occlusion;
+        #   Isaac Sim's Hydra rendering does NOT — the camera renders from
+        #   inside the lens body and everything is occluded, producing a pure
+        #   black image. Verified empirically 2026-05-16: image black at
+        #   hover pose despite correct down-pointing direction.
+        #
+        # Push the camera prim +0.06m along optical +Z (= 12mm past the lens
+        # front face) so it sits in free space outside the housing.
+        #
+        # NB: Isaac Lab's TiledCameraCfg(rot=(1,0,0,0), convention="ros") works
+        # because its TiledCamera renderer treats the camera as a virtual
+        # sensor that bypasses Hydra mesh-visibility checks for the parent
+        # mount (similar to Gazebo). Our raw UsdGeom.Camera authoring goes
+        # through standard Hydra and needs the physical clearance.
         xform = UsdGeom.Xformable(cam_prim)
         xform.ClearXformOpOrder()
-        xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.0))
+        xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.06))
         xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(0.0, 1.0, 0.0, 0.0))
 
         # Intrinsics (mirror create_additional_camera's Intel-RealSense-ish HFoV/VFoV)
