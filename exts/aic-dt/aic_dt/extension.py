@@ -2020,6 +2020,13 @@ class DigitalTwin(omni.ext.IExt):
         except Exception as exc:
             print(f"[AIC-DT] orphan-finger_r-fixedjoint-cleanup failed: {exc!r}")
 
+        # Note: gripper_initial_pos applies to the gripper drive joint (NOT this
+        # FixedJoint). The Hand-E finger joint is a FixedJoint zero-DOF in our
+        # USD per D-09; gripper opening is via /gripper_command (String) elsewhere.
+        # Recorded for parity with Gazebo's parameter SURFACE.
+        if gripper_initial_pos != 0.00655:
+            print(f"[AIC-DT] SCENE-03 gripper_initial_pos={gripper_initial_pos} recorded (no DOF — see D-09)")
+
         # tcp-track-held-connector 2026-05-17 — mirror Gazebo CablePlugin behavior.
         # Diagnosis (this session, /tmp/bag_trial_3_*/*.mcap probe):
         #   Gazebo trial_3 cable_1/sc_plug_link world Z = 1.4545 (essentially at
@@ -2051,13 +2058,44 @@ class DigitalTwin(omni.ext.IExt):
         except Exception as exc:
             print(f"[AIC-DT] tcp-track-held-connector install failed: {exc!r}")
 
+    # Held-connector pose offsets relative to gripper_tcp, sourced from Gazebo
+    # /tf bags (trial_3 captured 2026-05-17 from bag_trial_3_20260517_082306_946;
+    # trial_1 captured same day from bag_trial_1_*). Each entry has:
+    #   rel_translate_world: position offset in WORLD frame (constant under
+    #     Gazebo's gripper hover pose; converted to TCP-local at runtime).
+    #   rel_quat_xyzw: orientation relative to TCP (held_world_quat =
+    #     tcp_world_quat * rel_quat_xyzw).
+    # The TCP-local translation is recomputed from the world offset per tick
+    # because the offset is small (sub-cm) and the rotation alignment matters
+    # more than absolute world offset.
+    _HELD_CONNECTOR_POSE_OFFSETS = {
+        "sfp_sc_cable_reversed": {
+            # held = sc_plug_visual; observed Gazebo trial_3 hover pose
+            "rel_translate_world": (0.0003, -0.0079, -0.0057),
+            "rel_quat_xyzw": (0.68471, -0.15624, 0.69152, -0.16912),
+        },
+        # trial_1 SFP module captured 2026-05-17 from
+        # bag_trial_1_20260517_085246_597. The Gazebo body frame for the held
+        # connector in sfp_sc_cable variant is sfp_module_link (held=SFP+LC,
+        # which in Isaac Sim's USD lives under /World/cable/sfp_module_visual
+        # with lc_plug_visual as a child).
+        "sfp_sc_cable": {
+            "rel_translate_world": (0.0, -0.0124, -0.032),
+            "rel_quat_xyzw": (-0.56979, 0.02292, -0.0158, 0.82132),
+        },
+    }
+
     def _install_held_connector_tcp_tracker(self, held_path: str) -> None:
-        """Install a physics-step callback that pins held_path to gripper_tcp world pose.
+        """Install a physics-step callback that pins held_path to gripper_tcp pose.
+
+        Sets both POSITION and ORIENTATION every tick so the connector visually
+        matches Gazebo's CablePlugin behavior (orientation matters as much as
+        position — the plug must point INTO the port for insertion realism).
 
         Idempotent: removes any prior subscription before installing a new one.
-        The callback is light — one XformCache lookup + one Set per tick — and
-        only operates on the named prim. Safe to run alongside parity publishers
-        and AicControllerLoop physics-step callbacks.
+        Light per-tick cost: one XformCache lookup + one Transform compose +
+        translate/orient Set per tick. Safe alongside parity publishers and
+        AicControllerLoop physics-step callbacks.
         """
         import omni.physx
         from pxr import UsdGeom, Gf
@@ -2071,6 +2109,35 @@ class DigitalTwin(omni.ext.IExt):
                 pass
             self._held_connector_sub = None
 
+        cable_type = getattr(self, "_held_connector_cable_type", "sfp_sc_cable")
+        offset = self._HELD_CONNECTOR_POSE_OFFSETS.get(
+            cable_type, self._HELD_CONNECTOR_POSE_OFFSETS["sfp_sc_cable"]
+        )
+        rel_quat_xyzw = offset["rel_quat_xyzw"]
+        rel_xyz_world = offset["rel_translate_world"]
+        # Gf.Quatd takes (real, imaginary) = (w, x, y, z)
+        rel_quat = Gf.Quatd(rel_quat_xyzw[3], rel_quat_xyzw[0],
+                            rel_quat_xyzw[1], rel_quat_xyzw[2])
+
+        # Fabric (usdrt) provides the runtime scene representation that PhysX
+        # writes back to each step. Writing directly to USD attributes during
+        # a physics step is overridden by PhysX's Fabric writeback for any
+        # body with RigidBodyAPI (even kinematic). Write to Fabric instead so
+        # the tracker's pose wins.
+        try:
+            import usdrt
+            from usdrt import Gf as RtGf
+            stage_id = omni.usd.get_context().get_stage_id()
+            fstage = usdrt.Usd.Stage.Attach(stage_id)
+            fprim = fstage.GetPrimAtPath(held_path)
+            has_fabric = bool(fprim and fprim.IsValid())
+        except Exception as exc:
+            print(f"[AIC-DT] tcp-track-held-connector: Fabric (usdrt) unavailable, "
+                  f"falling back to USD-level Set: {exc!r}")
+            has_fabric = False
+            fprim = None
+            RtGf = None
+
         def _on_step(dt: float) -> None:
             try:
                 stage = omni.usd.get_context().get_stage()
@@ -2080,27 +2147,61 @@ class DigitalTwin(omni.ext.IExt):
                 if not (held and held.IsValid() and tcp and tcp.IsValid()):
                     return
                 xc = UsdGeom.XformCache()
-                tcp_world = xc.GetLocalToWorldTransform(tcp).ExtractTranslation()
-                parent_world = xc.GetLocalToWorldTransform(held.GetParent())
-                local_pos = parent_world.GetInverse().Transform(tcp_world)
-                tr_attr = held.GetAttribute("xformOp:translate")
-                if tr_attr.IsValid():
-                    tr_attr.Set(Gf.Vec3d(local_pos[0], local_pos[1], local_pos[2]))
+                # Build desired held world transform (matrix, not quat — avoids
+                # scale-shear discrepancies when parent has scale).
+                tcp_wtm = xc.GetLocalToWorldTransform(tcp)
+                tcp_world_pos = tcp_wtm.ExtractTranslation()
+                tcp_rot_mat = tcp_wtm.ExtractRotationMatrix()
+                rel_rot_mat = Gf.Matrix3d().SetRotate(rel_quat)
+                held_rot_mat = tcp_rot_mat * rel_rot_mat
+                held_world_pos = Gf.Vec3d(tcp_world_pos[0] + rel_xyz_world[0],
+                                           tcp_world_pos[1] + rel_xyz_world[1],
+                                           tcp_world_pos[2] + rel_xyz_world[2])
+                # Convert held world → held local via parent inverse.
+                parent_wtm = xc.GetLocalToWorldTransform(held.GetParent())
+                parent_wtm_inv = parent_wtm.GetInverse()
+                held_wtm = Gf.Matrix4d().SetIdentity()
+                held_wtm.SetRotateOnly(held_rot_mat)
+                held_wtm.SetTranslateOnly(held_world_pos)
+                held_local_mat = held_wtm * parent_wtm_inv
+                local_pos = held_local_mat.ExtractTranslation()
+                local_rot_quat = held_local_mat.ExtractRotation().GetQuat()
+
+                if has_fabric:
+                    # Write to Fabric so PhysX' writeback doesn't override us.
+                    ftr = fprim.GetAttribute("xformOp:translate")
+                    forn = fprim.GetAttribute("xformOp:orient")
+                    if ftr.IsValid():
+                        ftr.Set(RtGf.Vec3d(local_pos[0], local_pos[1], local_pos[2]))
+                    if forn.IsValid():
+                        forn.Set(RtGf.Quatf(local_rot_quat.GetReal(),
+                                            local_rot_quat.GetImaginary()[0],
+                                            local_rot_quat.GetImaginary()[1],
+                                            local_rot_quat.GetImaginary()[2]))
+                else:
+                    # USD-level fallback (won't survive PhysX writeback but keeps
+                    # the scene authoring sane for non-physics readers).
+                    tr_attr = held.GetAttribute("xformOp:translate")
+                    or_attr = held.GetAttribute("xformOp:orient")
+                    if tr_attr.IsValid():
+                        tr_attr.Set(Gf.Vec3d(local_pos[0], local_pos[1], local_pos[2]))
+                    if or_attr.IsValid():
+                        type_str = str(or_attr.GetTypeName()).lower()
+                        if "quatf" in type_str:
+                            or_attr.Set(Gf.Quatf(local_rot_quat.GetReal(),
+                                                 local_rot_quat.GetImaginary()[0],
+                                                 local_rot_quat.GetImaginary()[1],
+                                                 local_rot_quat.GetImaginary()[2]))
+                        else:
+                            or_attr.Set(local_rot_quat)
             except Exception:
                 # One bad tick should never crash the sim
                 pass
 
         physx = omni.physx.acquire_physx_interface()
         self._held_connector_sub = physx.subscribe_physics_step_events(_on_step)
-        print(f"[AIC-DT] tcp-track-held-connector: subscribed physics-step tracker for {held_path}")
-
-        # Note: gripper_initial_pos applies to the gripper drive joint (NOT this
-        # FixedJoint). The Hand-E finger joint is a FixedJoint zero-DOF in our
-        # USD per D-09; gripper opening is via /gripper_command (String) elsewhere.
-        # Recorded for parity with Gazebo's parameter SURFACE.
-        if gripper_initial_pos != 0.00655:
-            print(f"[AIC-DT] SCENE-03 gripper_initial_pos={gripper_initial_pos} recorded (no DOF — see D-09)")
-        return joint_path
+        print(f"[AIC-DT] tcp-track-held-connector: subscribed physics-step tracker for {held_path} "
+              f"(cable_type={cable_type!r}, rel_quat_xyzw={rel_quat_xyzw})")
 
     def _configure_arm_drives(self, stage, prim_path: str) -> None:
         """Author USD DriveAPI + PhysxArticulationAPI on the unified-robot arm.
