@@ -75,6 +75,9 @@ PRESENT_ATOMS = [
     "setup_offlimit_contacts",
     # New in Phase 4 (Plan 04-02 — TRIAL-01/02 trial loader + ground_truth gate)
     "load_trial",
+    # Cable fidelity / gripper authoring (D-09 closure 2026-05-17): Hand-E
+    # 1-DOF prismatic finger conversion + runtime drive-target write.
+    "gripper_command",
 ]
 
 # Atoms expected to be ABSENT — all 4 surfaces removed (Plan 04 / DX-01).

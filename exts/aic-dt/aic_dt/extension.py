@@ -255,6 +255,15 @@ MCP_TOOL_REGISTRY = {
             }
         }
     },
+    "gripper_command": {
+        "description": "Set the Robotiq Hand-E gripper width by writing drive:linear:physics:targetPosition on both finger prismatic joints (URDF mimic enforced at write — both joints share the same target). Position is the per-finger joint coordinate in meters, range 0..0.025 per URDF grip_pos_max. URDF default is 0.00655.",
+        "parameters": {
+            "position": {
+                "type": "number",
+                "description": "Per-finger joint coordinate in meters. Each finger travels 'position' along its axis; total jaw gap delta = 2 * position relative to the URDF-authored neutral. Range 0..0.025. Default 0.00655 (matches sample_config gripper_initial_pos default)."
+            }
+        }
+    },
     "setup_wrist_cameras": {
         "description": "Create ROS2 action graphs for all 3 built-in wrist cameras (center, left, right) publishing RGB and CameraInfo. Legacy convenience — for per-camera control prefer spawn_wrist_camera + start_wrist_camera_stream.",
         "parameters": {}
@@ -445,6 +454,9 @@ MCP_HANDLERS = {
     "attach_cable_to_gripper": "_cmd_attach_cable_to_gripper",
     # Phase 4 — trial loader (Plan 04-02; TRIAL-01/02)
     "load_trial": "_cmd_load_trial",
+    # Robotiq Hand-E 1-DOF runtime control (paired with prismatic gripper authoring
+    # in build_cable_variant_usds.py::author_gripper_prismatic_joints)
+    "gripper_command": "_cmd_gripper_command",
     "setup_wrist_cameras": "_cmd_setup_wrist_cameras",
     "spawn_wrist_camera": "_cmd_spawn_wrist_camera",
     "remove_wrist_camera": "_cmd_remove_wrist_camera",
@@ -668,6 +680,9 @@ class DigitalTwin(omni.ext.IExt):
                                   clicked_fn=lambda: self._cmd_setup_offlimit_contacts())
                         ui.Button("Attach Cable to Gripper", width=220, height=35,
                                   clicked_fn=lambda: self._cmd_attach_cable_to_gripper())
+                        # Hand-E 1-DOF gripper width — default 0.00655 m per URDF
+                        ui.Button("Gripper Command default 0.00655", width=220, height=35,
+                                  clicked_fn=lambda: self._cmd_gripper_command(position=0.00655))
                         # Phase 4 / Plan 04-02 — TRIAL-01/02 trial loader (default trial_1, ground_truth=True)
                         ui.Button("Load Trial sample_config trial_1", width=320, height=35,
                                   clicked_fn=lambda: asyncio.ensure_future(
@@ -4266,6 +4281,90 @@ class DigitalTwin(omni.ext.IExt):
         except Exception as e:
             traceback.print_exc()
             return {"status": "error", "message": f"setup_offlimit_contacts failed: {str(e)}"}
+
+    # Gripper finger joint paths (paired with build_cable_variant_usds.py::
+    # author_gripper_prismatic_joints — both joints converted from
+    # PhysicsFixedJoint to PhysicsPrismaticJoint + DriveAPI).
+    _GRIPPER_FINGER_JOINT_PATHS = (
+        "/World/UR5e/aic_unified_robot/joints/gripper_left_finger_joint",
+        "/World/UR5e/aic_unified_robot/joints/gripper_right_finger_joint",
+    )
+
+    def _cmd_gripper_command(self, position: float = 0.00655) -> Dict[str, Any]:
+        """MCP atom — set Robotiq Hand-E gripper width by writing drive target
+        on both finger prismatic joints.
+
+        Mimic semantics: URDF defines right_finger_joint as <mimic joint=left
+        multiplier=1 offset=0>, but USD/PhysX has no mimic concept. This atom
+        enforces mimic at write — both joints receive the same target.
+
+        Write strategy: direct USD attribute Set on
+        `drive:linear:physics:targetPosition`. PhysX picks up the new target
+        on the next solver step (same pattern as _configure_arm_drives). This
+        is the safe path because Isaac Sim 5.0 Articulation DOF ordering is
+        NOT documented (per nvidia-suite-docs consultation 2026-05-17; forum
+        topic 330417 shows URDF→USD ordering is not preserved and no NVIDIA
+        staff has documented the rule). USD-attribute writes bypass the
+        index-lookup ambiguity entirely.
+
+        Args:
+          position: Per-finger joint coordinate in meters. URDF range
+            [grip_pos_min=0, grip_pos_max=0.025]. Default 0.00655 matches
+            sample_config.yaml's gripper_initial_pos default. Right finger
+            mirrors left via authored localRot0 = 180°-about-Z.
+
+        Returns success with the position actually applied. Out-of-range
+        values are clamped with a warning; the URDF limits authored on both
+        prismatic joints make PhysX clamp anyway, but we surface it at the
+        atom layer for caller diagnostics.
+        """
+        try:
+            # Clamp to URDF grip_pos_min/max
+            clamped = max(0.0, min(0.025, float(position)))
+            if clamped != float(position):
+                print(f"[AIC-DT][gripper] position {position} clamped to [0, 0.025] → {clamped}")
+            stage = omni.usd.get_context().get_stage()
+            if stage is None:
+                return {"status": "error", "message": "no stage"}
+            n_set = 0
+            n_missing = 0
+            for joint_path in self._GRIPPER_FINGER_JOINT_PATHS:
+                joint = stage.GetPrimAtPath(joint_path)
+                if not joint.IsValid():
+                    print(f"[AIC-DT][gripper] joint missing: {joint_path} — "
+                          f"USD likely pre-prismatic-conversion (rebuild cable USD)")
+                    n_missing += 1
+                    continue
+                attr = joint.GetAttribute("drive:linear:physics:targetPosition")
+                if not attr.IsValid():
+                    print(f"[AIC-DT][gripper] drive:linear:physics:targetPosition "
+                          f"missing on {joint_path} — DriveAPI not applied "
+                          f"(rebuild cable USD via author_gripper_prismatic_joints)")
+                    n_missing += 1
+                    continue
+                attr.Set(clamped)
+                n_set += 1
+            if n_set == 0:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"No gripper drive targets written ({n_missing} joint(s) missing). "
+                        f"Rebuild the cable USD via "
+                        f"exts/aic-dt/scripts/build_cable_variant_usds.py to author "
+                        f"PhysicsPrismaticJoint + DriveAPI."
+                    ),
+                }
+            return {
+                "status": "success",
+                "message": (
+                    f"Gripper drive target set to {clamped:.5f} m on {n_set} "
+                    f"finger joint(s); mirror via authored localRot0=180°Z."
+                ),
+                "position": clamped,
+            }
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": f"gripper_command failed: {str(e)}"}
 
     def _cmd_attach_cable_to_gripper(self,
                                      plug_link_path: str = "/World/UR5e/cable/Rope/Rope/link_20",
