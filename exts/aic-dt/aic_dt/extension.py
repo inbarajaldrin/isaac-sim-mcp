@@ -695,8 +695,6 @@ class DigitalTwin(omni.ext.IExt):
                                           clicked_fn=lambda: self._cmd_start_wrist_camera_stream(self._selected_wrist_camera_name()))
                                 ui.Button("Stop ROS Stream", width=180, height=30,
                                           clicked_fn=lambda: self._cmd_stop_wrist_camera_stream(self._selected_wrist_camera_name()))
-                            ui.Button("Setup All Wrist Cameras (legacy)", width=300, height=30,
-                                      clicked_fn=self.setup_wrist_cameras)
 
                     # Additional Camera
                     with ui.CollapsableFrame(title="Additional Camera", collapsed=True, height=0):
