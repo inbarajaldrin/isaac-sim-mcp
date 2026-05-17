@@ -88,31 +88,35 @@ GLB-reference (socket pattern)`. Summary of what landed:
 - Rope fixedJoint body1 paths needed no update — the parent connector
   prim (`/World/cable/sc_plug_visual`, `/World/cable/sfp_module_visual`)
   is the joint target and was preserved.
-- SFP body needed a parent-level fallback `UsdPreviewSurface` because
-  its source GLB's `Body.005` mesh has two GLB primitives sharing one
-  mesh, each with its own material — the gltf SDF plugin doesn't
-  synthesize UsdGeomSubset partitions to preserve that mapping, so the
-  imported mesh arrives unbound. We bind the dominant `Material.005`
-  (metallic white) on the `sfp_body` Xform; binding propagates down via
-  MaterialBindingAPI.
+- **SFP body multi-primitive material handling (initially flagged as M2,
+  later confirmed automatic):** the SFP source GLB's `Body.005` mesh has
+  two GLB primitives sharing one mesh with different materials
+  (`Material.005` metallic + `Material.001` non-metallic). `b059074`
+  added a parent-level fallback `UsdPreviewSurface` on `sfp_body` on
+  the assumption the gltf SDF plugin wouldn't synthesize per-primitive
+  partitions. Live probe disproved that: at load time Isaac Sim 5.0's
+  gltf SDF plugin authors
+    `Body_005/Material_005`  GeomSubset family=materialBind faces[0..6683]   → Material_005
+    `Body_005/Material_001`  GeomSubset family=materialBind faces[6684..6867] → Material_001
+  and both subsets bind to inline Materials at `…/sfp_body/Mesh/Looks/`
+  authored from the GLB's own material definitions. Subsets cover 100%
+  of faces (6684 + 184 = 6868), so the fallback never propagated
+  anywhere. `<followup_commit>` dropped both the unused fallback call
+  for `sfp_body` and the `fallback_material` capability from the helper.
 
 Verified live (trial_3, post-restart with venv-activate +
 ROS_DOMAIN_ID=7):
 
-| Connector | Resolved Material | Source |
-| --- | --- | --- |
-| `sc_plug` | `…/visual/Mesh/Looks/DODGERBLUE3_001` | GLB-side, full textures |
-| `sfp_body` | `…/sfp_body/Looks/Material_005` | inline fallback (M.005 metallic) |
-| `lc_plug` | `…/lc_plug/Mesh/Looks/Plastic_Blue_002` | GLB-side, full textures |
+| Connector | Faces | Resolved Material | Source |
+| --- | --- | --- | --- |
+| `sc_plug` | full mesh | `…/visual/Mesh/Looks/DODGERBLUE3_001` | GLB-side, full textures |
+| `sfp_body` subset 0 | 6684 | `…/sfp_body/Mesh/Looks/Material_005` | gltf-SDF, GLB-side |
+| `sfp_body` subset 1 | 184  | `…/sfp_body/Mesh/Looks/Material_001` | gltf-SDF, GLB-side |
+| `lc_plug` | 10 meshes | `…/lc_plug/Mesh/Looks/Plastic_Blue_002` | GLB-side, full textures |
 
 Pose tracker preserved (sc_plug REL TCP angular delta still 0.000°,
 sfp_module far-end world pos still (+0.541, -0.018, +1.147) matching
 Gazebo trial_3 sfp_module_link).
-
-Residual M2 work (not blocking M1): per-GLB-primitive material distinction
-inside SFP body's `Body_005` mesh — the small `Material.001` facet needs
-`UsdGeomSubset` partitioning. Currently bound to `Material.005` (metallic
-white) as a uniform fallback.
 
 ### 3. ❌ Gripper finger separation — fixed at 17.3mm, doesn't adapt per cable
 

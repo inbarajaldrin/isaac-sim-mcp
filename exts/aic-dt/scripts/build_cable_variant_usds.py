@@ -505,18 +505,6 @@ def replace_plug_subtree_with_glb_refs(
                 e.g. "../assets/SC Plug/sc_plug_visual.usd"
         Optional keys:
         - translate: (x,y,z) tuple in parent-frame meters (default (0,0,0))
-        - fallback_material: dict for cases where the gltf SDF plugin drops
-                material bindings on the imported subtree (e.g. SFP body
-                GLB whose Body.005 mesh ships with two GLB-primitive
-                materials that don't survive the gltf→USD bridge). When
-                present, an inline UsdPreviewSurface is authored under
-                the child Xform's own /Looks scope and bound on the child
-                via MaterialBindingAPI — propagates down to descendant
-                meshes that lack their own bindings. Schema:
-                  {"name": "Material_005",
-                   "diffuse": (1.0, 1.0, 1.0),
-                   "metallic": 1.0,
-                   "roughness": 1.0}
       reset_parent_scale_to_identity: when True, sets the plug parent's
         xformOp:scale to (1,1,1). Needed for sc_plug — the source cable USD
         pre-flattened the GLB→meter 0.01 conversion onto the parent (each
@@ -527,7 +515,7 @@ def replace_plug_subtree_with_glb_refs(
 
     Returns dict of {child_path: thin_usd_relpath} for verification.
     """
-    from pxr import Gf, Sdf, UsdGeom, UsdShade
+    from pxr import Gf, UsdGeom, UsdShade
 
     plug = stage.GetPrimAtPath(plug_path)
     if not plug.IsValid():
@@ -576,7 +564,6 @@ def replace_plug_subtree_with_glb_refs(
         name = spec["name"]
         usd_rel = spec["usd"]
         translate = spec.get("translate", (0.0, 0.0, 0.0))
-        fallback = spec.get("fallback_material")
 
         child_path = f"{plug_path}/{name}"
         child_xform = UsdGeom.Xform.Define(stage, child_path)
@@ -587,29 +574,6 @@ def replace_plug_subtree_with_glb_refs(
         out[child_path] = usd_rel
         print(f"[replace_plug_subtree_with_glb_refs] {child_path} → AddReference({usd_rel}) "
               f"translate={tuple(translate)}")
-
-        if fallback is not None:
-            mat_name = fallback["name"]
-            mat_path = f"{child_path}/Looks/{mat_name}"
-            looks_prim = stage.GetPrimAtPath(f"{child_path}/Looks")
-            if not looks_prim.IsValid():
-                stage.DefinePrim(f"{child_path}/Looks", "Scope")
-            material = UsdShade.Material.Define(stage, mat_path)
-            shader = UsdShade.Shader.Define(stage, f"{mat_path}/PreviewSurface")
-            shader.CreateIdAttr("UsdPreviewSurface")
-            shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
-                tuple(float(v) for v in fallback["diffuse"]))
-            shader.CreateInput("metallic",  Sdf.ValueTypeNames.Float).Set(float(fallback["metallic"]))
-            shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(float(fallback["roughness"]))
-            shader.CreateInput("opacity",   Sdf.ValueTypeNames.Float).Set(1.0)
-            shader.CreateInput("useSpecularWorkflow", Sdf.ValueTypeNames.Int).Set(0)
-            shader.CreateOutput("surface", Sdf.ValueTypeNames.Token)
-            material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
-            UsdShade.MaterialBindingAPI.Apply(child_xform.GetPrim()).GetDirectBindingRel().SetTargets(
-                [Sdf.Path(mat_path)])
-            print(f"[replace_plug_subtree_with_glb_refs] {child_path} fallback material "
-                  f"{mat_name} (metallic={fallback['metallic']}, roughness={fallback['roughness']}) "
-                  f"bound — propagates to GLB descendants lacking own bindings")
     return out
 
 
@@ -879,21 +843,20 @@ def build_cable_variant(source_usd: str, dest_usd: str, variant: str,
             # SFP body (housing) — same local origin as the parent. The GLB's
             # Body.005 mesh has TWO GLB primitives sharing one mesh, each
             # with its own material (Material.005 metallic + Material.001
-            # non-metallic) — the gltf SDF plugin can't synthesize
-            # UsdGeomSubset partitions to preserve that mapping, so the
-            # imported mesh arrives unbound (renders default gray). Author
-            # the dominant Material.005 (metallic white, per AIC source-GLB
-            # parse) inline as a fallback that propagates down via
-            # MaterialBindingAPI. Per-GLB-primitive distinction (the small
-            # Material.001 facet) is M2 work — needs UsdGeomSubset wiring.
+            # non-metallic). Initially (b059074) we added a parent-level
+            # fallback UsdPreviewSurface here on the assumption the gltf SDF
+            # plugin couldn't synthesize per-primitive partitions. Live probe
+            # disproved that: at load time the plugin authors
+            #   Body_005/Material_005   GeomSubset family=materialBind faces[0..6683]   → Material_005
+            #   Body_005/Material_001   GeomSubset family=materialBind faces[6684..6867] → Material_001
+            # and both subsets bind to inline Materials at .../sfp_body/Mesh/Looks/
+            # that the plugin authors from the GLB's material definitions.
+            # Subsets cover 100% of faces (6684 + 184 = 6868), so any parent-
+            # level fallback never propagates anywhere — it was pure
+            # redundancy. Dropped. Multi-primitive distinction lives directly
+            # in the imported subtree.
             {"name": "sfp_body",
-             "usd":  "../assets/SFP Module/sfp_module_visual.usd",
-             "fallback_material": {
-                 "name": "Material_005",
-                 "diffuse": (1.0, 1.0, 1.0),
-                 "metallic": 1.0,
-                 "roughness": 1.0,
-             }},
+             "usd":  "../assets/SFP Module/sfp_module_visual.usd"},
             # LC plug (the LC duplex connector attached to the SFP housing's
             # cable exit) — offset by the same translate the original inline
             # sub-Xform carried, preserving the plug-tip position relative
