@@ -1669,17 +1669,22 @@ class DigitalTwin(omni.ext.IExt):
             visible effect in Phase 1. Phase 3 enables physics, at which
             point these params start mattering.
         """
-        asset_path = _local_asset("robot/aic_unified_robot_cable_sdf.usd")
-        prim_path = self._robot_prim_path
-
-        # SCENE-02 Plan 03-03: cable_type variants. Same vendored cable USD;
-        # sfp_sc_cable_reversed = cable_yaw rotated π.
+        # Cable USD selection by cable_type (2026-05-16: two-end fidelity fix).
+        # Until 2026-05-16 the only USD was aic_unified_robot_cable_sdf.usd which
+        # had the LC plug at the gripper end and the SC plug at the far end.
+        # CheatCode trial_3 (cable_type=sfp_sc_cable_reversed) wants the SC end
+        # held by the gripper — visually wrong before the fix. exts/aic-dt/scripts/
+        # build_cable_variant_usds.py produces _reversed.usd by surgically
+        # swapping the connector-visual subtree transforms on the source USD;
+        # see that script's docstring for the why/how/limits.
         if cable_type == "sfp_sc_cable_reversed":
-            import math as _math
-            cable_yaw = float(cable_yaw) + _math.pi
-            print(f"SCENE-02: cable_type=sfp_sc_cable_reversed → cable_yaw rotated π → {cable_yaw:.4f}")
-        elif cable_type != "sfp_sc_cable":
-            print(f"[AIC-DT] Unknown cable_type {cable_type!r}; defaulting to sfp_sc_cable")
+            asset_path = _local_asset("robot/aic_unified_robot_cable_sdf_reversed.usd")
+            print(f"[AIC-DT] cable_type=sfp_sc_cable_reversed → loading {asset_path}")
+        else:
+            asset_path = _local_asset("robot/aic_unified_robot_cable_sdf.usd")
+            if cable_type != "sfp_sc_cable":
+                print(f"[AIC-DT] Unknown cable_type {cable_type!r}; defaulting to sfp_sc_cable")
+        prim_path = self._robot_prim_path
 
         # Ensure World exists
         world = World.instance()
