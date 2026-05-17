@@ -281,6 +281,80 @@ def compose_orient_with_yaw(base_orient, yaw_radians: float):
     return base_orient * yaw_correction
 
 
+def swap_joint_endpoints_for_reversed_cable(stage,
+                                              connector_a_path: str,
+                                              connector_b_path: str) -> dict:
+    """Swap the cable's joint endpoints so the OTHER connector ends up at the gripper.
+
+    The reversed-cable variant is NOT a transform swap (the connector visual
+    transforms are irrelevant because PhysX joint constraints dominate
+    position). It's a JOINT ENDPOINT swap: change which connector visual is
+    bound to which rope-end + which is bound to the gripper-finger orphan
+    joint.
+
+    Joints touched (paths fixed in the unified-robot cable USD):
+      /World/aic_unified_robot/gripper_hande_finger_link_r/FixedJoint
+          body0: connector_a → connector_b   (gripper anchor)
+      /World/cable/Rope/fixedJoint
+          body1: connector_a → connector_b   (rope link_0 end)
+      /World/cable/Rope/fixedJoint2
+          body1: connector_b → connector_a   (rope link_20 end)
+
+    After the swap, in the reversed USD:
+      - connector_b (sc_plug_visual) is pulled to gripper_finger_r AND to
+        rope link_0 (the gripper-end of the rope) — SC plug visually at
+        gripper.
+      - connector_a (sfp_module_visual) is pulled to rope link_20 (the far
+        end) — SFP+LC visually at the far end of the cable.
+
+    Why this is the right layer:
+      The connector visuals are PhysX RigidBody prims; their final world
+      pose is dictated by the joint constraints, not the authored
+      xformOp:translate. Swapping translates (the prior Layer 1 fix) was a
+      no-op because every tick PhysX overwrites the translate to satisfy
+      the joint pulls. Swapping the joint endpoints in the USD authoring is
+      the only way to change which connector ends up at which end.
+
+    The connector visual prim PATHS within /World/cable/ stay the same in
+    both variants. The extension code (extension.py:_attach_cable_to_gripper_impl,
+    _compute_trial_tf_frames, scoring publishers) references the prim paths
+    directly — swapping at the joint layer preserves those references.
+
+    Translates of sfp_module_visual + sc_plug_visual remain as-authored
+    in the source USD (we don't touch them). Kinematic flag is authored
+    separately by author_kinematic_on_connectors.
+
+    Returns a dict mapping joint path → list of new body0/body1 target paths
+    for verification.
+    """
+    from pxr import Sdf
+    swaps = [
+        ("/World/aic_unified_robot/gripper_hande_finger_link_r/FixedJoint",
+         "physics:body0", connector_a_path, connector_b_path),
+        ("/World/cable/Rope/fixedJoint",
+         "physics:body1", connector_a_path, connector_b_path),
+        ("/World/cable/Rope/fixedJoint2",
+         "physics:body1", connector_b_path, connector_a_path),
+    ]
+    results = {}
+    for joint_path, rel_name, expected_old, expected_new in swaps:
+        joint = stage.GetPrimAtPath(joint_path)
+        if not joint.IsValid():
+            raise ValueError(f"Joint not found: {joint_path}")
+        rel = joint.GetRelationship(rel_name)
+        if not rel.IsValid():
+            raise ValueError(f"Joint {joint_path} has no {rel_name}")
+        current = [str(t) for t in rel.GetTargets()]
+        if current != [expected_old]:
+            print(f"[swap_joint_endpoints] WARNING {joint_path}.{rel_name}: "
+                  f"expected {[expected_old]}, found {current} — applying swap anyway")
+        rel.SetTargets([Sdf.Path(expected_new)])
+        results[joint_path] = {rel_name: expected_new}
+        print(f"[swap_joint_endpoints] {joint_path}.{rel_name}: "
+              f"{current} → [{expected_new}]")
+    return results
+
+
 def author_kinematic_on_connectors(stage, prim_paths: Tuple[str, ...]) -> dict:
     """Author physics:kinematicEnabled=True on each given prim.
 
@@ -384,34 +458,52 @@ def build_cable_variant(source_usd: str, dest_usd: str, variant: str,
         raise FileNotFoundError(f"source USD missing: {source_usd}")
 
     os.makedirs(os.path.dirname(dest_usd) or ".", exist_ok=True)
-    shutil.copyfile(source_usd, dest_usd)
-    print(f"[build_cable_variant] copied {source_usd}\n"
-          f"                        → {dest_usd} "
-          f"({os.path.getsize(dest_usd)} B)")
+    # When source == dest, the caller is asking for an in-place patch of the
+    # existing USD (e.g. kinematic-flag retrofit on the original USD). Skip
+    # the copy; the modifications below land directly in the source file.
+    if os.path.realpath(source_usd) == os.path.realpath(dest_usd):
+        print(f"[build_cable_variant] in-place edit on {dest_usd}")
+    else:
+        shutil.copyfile(source_usd, dest_usd)
+        print(f"[build_cable_variant] copied {source_usd}\n"
+              f"                        → {dest_usd} "
+              f"({os.path.getsize(dest_usd)} B)")
 
-    if variant == "sfp_sc_cable":
-        return dest_usd  # identity copy — no swap
-
-    # Reversed variant — apply the end-anchor reversal in place.
     from pxr import Usd
     stage = Usd.Stage.Open(dest_usd)
     if stage is None:
         raise RuntimeError(f"Failed to open {dest_usd} for editing")
 
-    final_trs = apply_end_anchor_reversal(stage, connector_a, connector_b)
-    # Layer 2 fix: pin the connector visuals to their authored end-anchor poses
-    # by marking them kinematic. Without this, PhysX drifts the free rigid
-    # bodies (mass=0) toward the nearest rope link and undoes Layer 1's swap.
+    if variant == "sfp_sc_cable":
+        # Identity copy still needs the Layer 2 kinematic flag: without it,
+        # PhysX drifts the connector visuals during quick_start (which loads
+        # this USD) and writes new translates into the root anon layer.
+        # Those stale opinions then OVERRIDE the reversed USD's authored
+        # values when load_trial swaps the reference for trial_3. So both
+        # variants must carry the kinematic flag for the trial_3 reversed-end
+        # behavior to take effect.
+        author_kinematic_on_connectors(stage, (connector_a, connector_b))
+        stage.GetRootLayer().Save()
+        print(f"[build_cable_variant] saved identity variant (kinematic patched): {dest_usd}")
+        return dest_usd
+
+    # Reversed variant — swap joint endpoints so the OTHER connector ends up
+    # at the gripper. The prior Layer 1 translate-swap approach was a no-op
+    # because PhysX joint constraints dominate the connector visual poses;
+    # see swap_joint_endpoints_for_reversed_cable() docstring for the
+    # diagnostic trail (2026-05-16 live audit of trial_3 in Isaac Sim).
+    joint_results = swap_joint_endpoints_for_reversed_cable(
+        stage, connector_a, connector_b
+    )
+    # Kinematic flag still helps: even with correct joint endpoints, the
+    # connector visuals are RigidBody prims with mass=0 — PhysX integration
+    # can introduce micro-drift between physics steps. kin=True locks them to
+    # the joint-satisfied pose.
     author_kinematic_on_connectors(stage, (connector_a, connector_b))
     stage.GetRootLayer().Save()
-    print(f"[build_cable_variant] applied end-anchor reversal on:\n"
-          f"                        {connector_a}\n"
-          f"                        {connector_b}")
-    for prim_path, trs in final_trs.items():
-        print(f"[build_cable_variant] final TRS {prim_path}:")
-        print(f"                        translate={trs['xformOp:translate']}")
-        print(f"                        orient={trs['xformOp:orient']}")
-        print(f"                        scale={trs['xformOp:scale']}")
+    print(f"[build_cable_variant] applied joint-endpoint swap (3 joints touched):")
+    for joint_path, changes in joint_results.items():
+        print(f"  {joint_path}: {changes}")
     print(f"[build_cable_variant] saved reversed variant: {dest_usd}")
     return dest_usd
 
