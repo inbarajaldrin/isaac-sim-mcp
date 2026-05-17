@@ -444,6 +444,78 @@ def remove_rope_end_fixed_joints(stage) -> list:
     return removed
 
 
+def bind_sc_plug_dodgerblue_material(stage, plug_path: str,
+                                       vendored_sc_plug_usd_rel: str) -> bool:
+    """Reference the vendored SC Plug USD's Looks scope into the cable USD's
+    sc_plug_visual prim, then bind DODGERBLUE3_001 on the parent so all
+    descendant meshes inherit the dodger-blue housing + textures.
+
+    Why this is needed (2026-05-17, NEXT-SESSION.md §2):
+      The cable USD's sc_plug_visual subtree was IMPORTED from an upstream
+      pre-built file that has the right mesh prim names + geometry but
+      0/13 mesh material bindings. The vendored
+      assets/assets/SC Plug/sc_plug_visual.usd has the same 13 mesh names AND
+      a /World/Looks/DODGERBLUE3_001 Material with baseColor + metallicRoughness +
+      occlusion texture maps (the canonical AIC dodger-blue SC connector look).
+      Rather than inline-copy the Material + texture nodes into the cable USD,
+      we add a USD reference on the otherwise-empty
+      /World/cable/sc_plug_visual/Looks scope pointing at the vendored USD's
+      /World/Looks subtree. The reference resolves texture paths relative to
+      the vendored USD's location (preserves the existing texture file
+      layout under SC Plug/textures/).
+
+      We then apply MaterialBindingAPI on the sc_plug_visual parent prim with
+      directBinding -> .../Looks/DODGERBLUE3_001. USD MaterialBindingAPI
+      propagates through descendants, so all 13 mesh children inherit the
+      binding without per-mesh authoring.
+
+    Args:
+      plug_path: Cable-USD-internal path to the connector parent, e.g.
+                 "/World/cable/sc_plug_visual".
+      vendored_sc_plug_usd_rel: Relative path from this USD's location to the
+                 vendored SC Plug USD, e.g.
+                 "../assets/SC Plug/sc_plug_visual.usd"
+                 (relative because assets are co-vendored in-repo;
+                 absolute path would break under repo-relocation).
+
+    Returns True if the binding was authored, False if the plug parent prim
+    was missing.
+    """
+    from pxr import Sdf, UsdShade
+    plug = stage.GetPrimAtPath(plug_path)
+    if not plug.IsValid():
+        print(f"[bind_sc_plug_dodgerblue_material] plug parent not found: {plug_path}")
+        return False
+
+    looks_path = f"{plug_path}/Looks"
+    looks = stage.GetPrimAtPath(looks_path)
+    if not looks.IsValid():
+        looks = stage.DefinePrim(looks_path, "Scope")
+
+    # AddReference imports /World/Looks (and ONLY that subtree) from the
+    # vendored USD into our local Looks scope. Texture asset paths inside
+    # the referenced layer resolve relative to the vendored USD, so the
+    # existing textures/ directory next to the vendored sc_plug_visual.usd
+    # stays the texture source.
+    refs = looks.GetReferences()
+    refs.ClearReferences()  # idempotent rebuild
+    refs.AddReference(vendored_sc_plug_usd_rel, primPath="/World/Looks")
+    print(f"[bind_sc_plug_dodgerblue_material] referenced "
+          f"{vendored_sc_plug_usd_rel}::/World/Looks → {looks_path}")
+
+    # Apply MaterialBindingAPI + Bind on the plug parent. Descendants inherit
+    # the binding per USD's MaterialBindingAPI propagation rules.
+    material_path = Sdf.Path(f"{looks_path}/DODGERBLUE3_001")
+    binding_api = UsdShade.MaterialBindingAPI.Apply(plug)
+    # Direct-binding via relationship target avoids constructing the Material
+    # shader instance (which would require the reference to have already
+    # composed — order-dependent).
+    binding_api.GetDirectBindingRel().SetTargets([material_path])
+    print(f"[bind_sc_plug_dodgerblue_material] bound {material_path} on "
+          f"{plug_path} (inherits to descendants)")
+    return True
+
+
 def author_kinematic_on_connectors(stage, prim_paths: Tuple[str, ...]) -> dict:
     """Author physics:kinematicEnabled=True on each given prim.
 
@@ -578,6 +650,15 @@ def build_cable_variant(source_usd: str, dest_usd: str, variant: str,
     # connector. The joints' non-identity localRot0 was overriding the
     # tracker's xform Set, producing the trial_3 90° sc_plug delta.
     rope_joints_removed = remove_rope_end_fixed_joints(stage)
+    # Materials: bind the vendored DODGERBLUE3_001 to sc_plug_visual subtree.
+    # Inline mesh prims under /World/cable/sc_plug_visual have 0/13 bindings;
+    # vendored SC Plug USD has the same mesh names with full material + texture
+    # bindings. Reference the Looks scope across and bind on the parent. The
+    # SFP module subtree has no vendored counterpart; left as M2 work.
+    bind_sc_plug_dodgerblue_material(
+        stage, connector_b,
+        "../assets/SC Plug/sc_plug_visual.usd",
+    )
 
     # With rope-end joints gone, the reversed variant no longer needs a
     # joint-endpoint swap — there is nothing to swap. The "which connector at
