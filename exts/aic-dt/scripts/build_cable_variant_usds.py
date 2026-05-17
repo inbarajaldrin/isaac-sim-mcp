@@ -394,6 +394,102 @@ def swap_joint_endpoints_for_reversed_cable(stage,
     return results
 
 
+def reauthor_rope_end_joints_identity(stage, *, variant: str) -> list:
+    """Re-author the two rope-end FixedJoints with IDENTITY localRot0/Rot1.
+
+    Why this exists (2026-05-17 follow-up):
+      The ORIGINAL fixedJoint had non-identity localRot0 ≈ (0.5,-0.5,0.5,-0.5),
+      a 120° rotation between link_0's frame and sfp_module_visual's frame. PhysX
+      cooked that as a hard constraint and overrode the per-tick tracker's
+      kinematic xform writes, producing the trial_3 90° orientation offset.
+      Path-b removed both joints entirely — fixing the orientation fight but
+      leaving the 21-link mass≈0 rope chain unanchored, so PhysX integrator
+      drifted the rope ~10m off-scene (rope invisible in the wrist-cam render).
+
+      Restore both joints with IDENTITY localRot0/Rot1. The connector and the
+      anchored rope link share the SAME world frame at the joint origin —
+      no rotation differential, no constraint fight against the kinematic
+      pose. Keep the original localPos0/Pos1 sub-cm offsets so the rope
+      visually attaches at the right point on each connector mesh.
+
+    Variant routing (preserves the legacy body1-swap behavior of
+    swap_joint_endpoints_for_reversed_cable, but now baked into a single
+    function so the joint authoring is canonical):
+      - sfp_sc_cable          : link_0 ↔ sfp_module_visual, link_20 ↔ sc_plug_visual
+      - sfp_sc_cable_reversed : link_0 ↔ sc_plug_visual,    link_20 ↔ sfp_module_visual
+
+    Both bindings give the kinematic connector at the gripper-end its
+    corresponding rope-end link as a dependent (rope-end rope-link follows
+    the connector). The rope chain dangles between via its D6 joints.
+
+    Returns list of joint paths re-authored.
+    """
+    from pxr import UsdPhysics, Gf, Sdf
+
+    joint_left = "/World/cable/Rope/fixedJoint"   # was link_0 ↔ sfp_module_visual
+    joint_right = "/World/cable/Rope/fixedJoint2" # was link_20 ↔ sc_plug_visual
+
+    if variant == "sfp_sc_cable":
+        bindings = [
+            (joint_left,  "/World/cable/Rope/Rope/link_0",  "/World/cable/sfp_module_visual",
+             (-0.026749987, 0.0, 0.0)),  # original localPos0
+            (joint_right, "/World/cable/Rope/Rope/link_20", "/World/cable/sc_plug_visual",
+             (0.03325002, 0.0, 0.0)),
+        ]
+    elif variant == "sfp_sc_cable_reversed":
+        bindings = [
+            (joint_left,  "/World/cable/Rope/Rope/link_0",  "/World/cable/sc_plug_visual",
+             (-0.026749987, 0.0, 0.0)),
+            (joint_right, "/World/cable/Rope/Rope/link_20", "/World/cable/sfp_module_visual",
+             (0.03325002, 0.0, 0.0)),
+        ]
+    else:
+        raise ValueError(f"Unknown variant: {variant}")
+
+    authored = []
+    identity_quatf = Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0))
+    for jp, body0_path, body1_path, local_pos0 in bindings:
+        joint = stage.GetPrimAtPath(jp)
+        if not joint or not joint.IsValid():
+            joint = stage.DefinePrim(jp, "PhysicsFixedJoint")
+        else:
+            joint.SetTypeName("PhysicsFixedJoint")
+        # Set body0/body1
+        rel0 = joint.GetRelationship("physics:body0") or joint.CreateRelationship("physics:body0")
+        rel1 = joint.GetRelationship("physics:body1") or joint.CreateRelationship("physics:body1")
+        rel0.SetTargets([Sdf.Path(body0_path)])
+        rel1.SetTargets([Sdf.Path(body1_path)])
+        # IDENTITY localRot0/Rot1 — no rotation differential
+        for rot_attr, ptype in (("physics:localRot0", Sdf.ValueTypeNames.Quatf),
+                                 ("physics:localRot1", Sdf.ValueTypeNames.Quatf)):
+            a = joint.GetAttribute(rot_attr)
+            if not a.IsValid():
+                a = joint.CreateAttribute(rot_attr, ptype)
+            a.Set(identity_quatf)
+        # localPos0 from URDF authoring (sub-cm offsets)
+        pos0 = joint.GetAttribute("physics:localPos0")
+        if not pos0.IsValid():
+            pos0 = joint.CreateAttribute("physics:localPos0", Sdf.ValueTypeNames.Float3)
+        pos0.Set(Gf.Vec3f(*local_pos0))
+        pos1 = joint.GetAttribute("physics:localPos1")
+        if not pos1.IsValid():
+            pos1 = joint.CreateAttribute("physics:localPos1", Sdf.ValueTypeNames.Float3)
+        pos1.Set(Gf.Vec3f(0.0, 0.0, 0.0))
+        # Joint flags
+        je = joint.GetAttribute("physics:jointEnabled")
+        if not je.IsValid():
+            je = joint.CreateAttribute("physics:jointEnabled", Sdf.ValueTypeNames.Bool)
+        je.Set(True)
+        ce = joint.GetAttribute("physics:collisionEnabled")
+        if not ce.IsValid():
+            ce = joint.CreateAttribute("physics:collisionEnabled", Sdf.ValueTypeNames.Bool)
+        ce.Set(False)
+        authored.append(jp)
+        print(f"[reauthor_rope_end_joints_identity] {jp}: body0={body0_path} body1={body1_path} "
+              f"localPos0={local_pos0} localRot0=identity")
+    return authored
+
+
 def remove_rope_end_fixed_joints(stage) -> list:
     """Remove the two rope-end FixedJoints that anchor the kinematic connector
     visuals to the rope-end RigidBody links.
@@ -745,7 +841,13 @@ def build_cable_variant(source_usd: str, dest_usd: str, variant: str,
     # per-tick TCP tracker is the sole pose authority for the held kinematic
     # connector. The joints' non-identity localRot0 was overriding the
     # tracker's xform Set, producing the trial_3 90° sc_plug delta.
+    # First remove any pre-existing rope-end joints (idempotent cleanup), then
+    # re-author them with IDENTITY localRot0/Rot1 + per-variant body0/body1
+    # bindings. This pins the rope chain to the kinematic connectors without
+    # the orientation fight that path-b removal was avoiding — and the cable
+    # wire is visible again (chains no longer drift off-scene).
     rope_joints_removed = remove_rope_end_fixed_joints(stage)
+    rope_joints_authored = reauthor_rope_end_joints_identity(stage, variant=variant)
     # Materials: bind the vendored DODGERBLUE3_001 to sc_plug_visual subtree.
     # Inline mesh prims under /World/cable/sc_plug_visual have 0/13 bindings;
     # vendored SC Plug USD has the same mesh names with full material + texture
