@@ -2149,7 +2149,14 @@ class DigitalTwin(omni.ext.IExt):
                 tcp_world_pos = tcp_wtm.ExtractTranslation()
                 tcp_rot_mat = tcp_wtm.ExtractRotationMatrix()
                 rel_rot_mat = Gf.Matrix3d().SetRotate(rel_quat)
-                held_rot_mat = tcp_rot_mat * rel_rot_mat
+                # OpenUSD/Gf uses ROW-vector convention: the LEFT matrix is more
+                # local in composition. Desired held world rotation = TCP world
+                # rotation followed by the cable-asset rel rotation; in row-vector
+                # math the rel matrix must go on the LEFT of TCP.
+                # (Per GPT diagnosis 2026-05-17 via /ask-gpt — citing OpenUSD
+                # GfMatrix4d row-vector convention + UsdGeomXformable xform-op
+                # ordering docs.)
+                held_rot_mat = rel_rot_mat * tcp_rot_mat
                 held_world_pos = Gf.Vec3d(tcp_world_pos[0] + rel_xyz_world[0],
                                            tcp_world_pos[1] + rel_xyz_world[1],
                                            tcp_world_pos[2] + rel_xyz_world[2])
