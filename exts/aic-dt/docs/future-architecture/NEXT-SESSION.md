@@ -1,133 +1,123 @@
-# Next Session — Pickup Point
+# Next Session — Pickup Point (2026-05-17 wrap)
 
-> Written 2026-05-16 at session pause. Read this first when resuming.
+> Replaces the earlier 2026-05-16 NEXT-SESSION.md. Read this first when resuming.
 
-## Confirmed status (user verified 2026-05-16)
+## Where we ended this session
 
-**The cable-end visual in Isaac Sim trial_3 does NOT match the Gazebo docker
-launch of trial_3.** Docker trial_3 spawns the SC plug at the gripper for
-insertion into sc_port_base. Isaac Sim trial_3 currently spawns the SFP+LC
-end at the gripper instead — wrong visual identity.
+Cable-fidelity work has moved through four commits this session:
 
-**This is the priority fix for next session.**
+| SHA | What landed |
+|---|---|
+| `e131c36` | Layer 1: end-anchor pattern (no-op — superseded; translates of connector visuals are dominated by joint constraints) |
+| `e90d27a` | Layer 2: `physics:kinematicEnabled=True` on both connector visuals in build_cable_variant_usds.py |
+| `52d4eb9` | Swap joint endpoints in reversed USD (fixedJoint / fixedJoint2 body1 swap so the right connector binds to each rope-end) |
+| `69b8b5c` | Remove orphan FixedJoint at `gripper_hande_finger_link_r/FixedJoint` from both USDs + add per-tick physics-step TCP tracker in `_attach_cable_to_gripper_impl` |
+| `6383881` | Add orientation tracking via Fabric (usdrt) writes — Fabric-only |
+| `bab929f` | **Dual USD+Fabric write** — Hydra needs USD-side value too, Fabric-only was silently ignored by the renderer |
 
-## Where we left it
+## Confirmed status (numerical, post `bab929f`)
 
-The fix has two layers and we've completed only layer 1:
+| Frame | Gazebo trial_3 (truth) | Isaac Sim trial_3 (current) | Match? |
+|---|---|---|---|
+| sc_plug_visual world X | 0.1721 | 0.1747 | ✅ ~3mm off |
+| sc_plug_visual world Y | -0.0021 | -0.0005 | ✅ ~2mm off |
+| sc_plug_visual world Z | 1.4545 | 1.4637 | ✅ ~9mm off |
+| Plug X between finger_l/r | True | **True** | ✅ |
+| sc_plug rpy (deg) | (91.7, 63.4, -89.3) | (-179.7, 2.1, 0.5) | **❌ orientation still wrong** |
 
-### Layer 1: end-anchor authoring (DONE this session — commits not yet landed)
+Position: now matches Gazebo within ~10mm. Plug IS between the gripper fingers.
 
-- `exts/aic-dt/scripts/build_cable_variant_usds.py` — refactored by GPT to
-  the end-anchor pattern (composes per-end orient = base end orient × per-end
-  yaw from Gazebo SDF). Final TRS values applied to reversed USD:
-  - `/World/cable/sfp_module_visual`: translate=(1,0,0), orient=(0.707,0,0,-0.707), scale=(1,1,1)
-  - `/World/cable/sc_plug_visual`:    translate=(0,0,0), orient=(0.5,0.5,0.5,0.5), scale=(0.01,0.01,0.01)
-- `exts/aic-dt/aic_dt/extension.py` — load_robot branches on cable_type:
-  cable_type=sfp_sc_cable_reversed → loads `aic_unified_robot_cable_sdf_reversed.usd`
-- Kit log at trial-load time confirms the right USD is loaded:
-  `[AIC-DT] cable_type=sfp_sc_cable_reversed → loading file:///.../aic_unified_robot_cable_sdf_reversed.usd`
+**Orientation: still wrong.** The held SC plug visual ends up with TCP's orientation (≈180° about Y) instead of Gazebo's compound rotation (92°, 63°, -89°). My orient tracker writes the computed local_quat to BOTH USD and Fabric every tick, and probe confirms both stores have the right local value. But when world transform is composed via XformCache/Hydra, the result equals TCP's orientation as if the local orient was identity.
 
-### Layer 2: constrain free-rigid-body drift (NOT YET DONE — the actual fix needed)
+## Three open gaps (priority order)
 
-GPT's warning + verified live: the connector visuals are PhysX RigidBody
-prims with mass=0. PhysX reads the authored translate as INITIAL position
-at spawn, then drifts them toward whichever rope link they spawn near. So
-the end-anchor authoring is necessary but not sufficient — at runtime the
-SC plug visual still ends up near the FAR rope end (not the gripper end)
-because that's where the rope's free rigid body settles.
+### 1. ❌ Pose orientation — **the most important remaining problem**
 
-## What to do next session — concrete plan
+**Symptom**: sc_plug_visual local orient = my computed value, but world orient = TCP's orient (rel_quat is silently dropped in composition).
 
-Pick ONE (in order of effort):
+**Possible causes (ranked):**
+- (a) `xformOpOrder = [translate, orient, scale]` — Pixar composes T*R*S; if the parent's transformation chain composes T_parent * R_parent * S_parent, then world = T_p * R_p * S_p * T_c * R_c * S_c. If parent has scale that doesn't commute with my child rotation, the extraction order may zero it out. **Low confidence.**
+- (b) The two `/World/cable/Rope/fixedJoint{,2}` PhysX constraints — body0=link_0 / link_20, body1=sc_plug_visual or sfp_module_visual with non-identity `physics:localRot0` (e.g. (0.499,-0.5,0.5,-0.499)). Even with kinematic body1, PhysX may overwrite world pose to satisfy the constraint at each step. **High confidence.**
+- (c) `omni.physx.set_kinematic_target_transform` is the canonical API for kinematic body pose control; writing `xformOp:translate/orient` via Sdf/Fabric may not be the supported pathway. **Medium confidence.**
+- (d) The cable parent xform uses `AddRotateXYZOp` (Euler XYZ degrees) while child uses `xformOp:orient` (Quat). Mixed op-type composition may have quirks. **Low confidence.**
 
-### Option A — kinematic flag on connector visuals (fastest, ~15 min)
+**Concrete next actions:**
+1. Read `/tmp/gpt-pose-result-9174.txt` (GPT diagnosis launched at session end — may have arrived after wrap).
+2. Try the PhysX kinematic API: `omni.physx.set_kinematic_target_transform(prim_path, position, orientation)`. This is the *supported* way for kinematic bodies and should bypass the joint-constraint fight.
+3. If (2) doesn't work, REMOVE the `Rope/fixedJoint` and `Rope/fixedJoint2` from the cable USDs (in `build_cable_variant_usds.py`) entirely. The rope will dangle without anchors to the connectors, but for M1 the rope is decorative — the plug position+orient is what scoring cares about.
+4. If both (2) and (3) fail, the architecturally-correct fix is to reparent `sc_plug_visual` (and `sfp_module_visual`) under `gripper_tcp` via USD hierarchy at trial load time — so the renderer uses USD composition without any per-tick fight. This is a more invasive USD edit (changes prim paths, breaks joint references).
 
-Extend `build_cable_variant_usds.py` to also author
-`physics:kinematicEnabled = True` on both `/World/cable/sfp_module_visual`
-and `/World/cable/sc_plug_visual` in BOTH the original AND reversed USDs.
-PhysX treats kinematic bodies as scripted — they stay at authored pose,
-no drift. Then re-test trial_3 freeze and verify SC plug visually at the
-gripper end.
+### 2. ❌ Materials missing — `0/13 meshes` bound on `sc_plug_visual` subtree
 
-Implementation sketch:
-```python
-def author_kinematic(stage, prim_path):
-    from pxr import UsdPhysics, Sdf
-    p = stage.GetPrimAtPath(prim_path)
-    p.CreateAttribute("physics:kinematicEnabled", Sdf.ValueTypeNames.Bool).Set(True)
-```
+**Root cause traced this session**: The vendored `exts/aic-dt/assets/assets/SC Plug/sc_plug_visual.usd` HAS materials (Material `/World/Looks/DODGERBLUE3_001` with baseColor+metallicRoughness+occlusion textures, the canonical "dodger blue" SC connector color). But the project's `aic_unified_robot_cable_sdf.usd` was IMPORTED PRE-BUILT and uses the same mesh prim names INLINE without a Looks scope or material bindings.
 
-Caveats:
-- Need to verify this doesn't break the `plug_proxy` scoring path
-  (it shouldn't — plug_proxy is a separate Xform under the gripper finger,
-  unrelated to these connector rigid bodies).
-- May need to also author on the ORIGINAL USD or only-apply-when-reversed
-  depending on whether the user wants the original behavior preserved.
+The cable USD's mesh prims are `Cube_002`, `Cylinder_005`, `Cylinder_007`, `Cylinder_009`, `Cylinder_011`, `ferula_Predeterminado_003`, `ferula_Predeterminado_005`, `HOUSING_BLUE_Predeterminado_005..011`, `PARTE_INTERNA_A_Predeterminado_003/005` — exactly matching the vendored USD's mesh names. So they came from the same source GLB but went through different pipelines.
 
-### Option B — FixedJoint from each connector to its rope-end link (slower, ~1h)
+**Concrete next actions:**
+1. Modify `build_cable_variant_usds.py` to REPLACE the inline `/World/cable/sc_plug_visual` subtree (and `sfp_module_visual` similarly) with a single `USD reference` to `assets/assets/SC Plug/sc_plug_visual.usd` (and `assets/SFP Module/sfp_module_visual.usd` if it exists). Pattern matches `build_mount_rail_usds.py` from Phase 1.
+2. Update the cable USD's rope `fixedJoint/fixedJoint2` body1 paths if the prim hierarchy changes (or use the same `/World/cable/sc_plug_visual` parent Xform that references the vendored sub-USD).
+3. Verify SC plug renders with the dodger-blue housing in Isaac Sim — should match the Gazebo wrist-cam image (`gazebo_GROUND_TRUTH_center.png` in the Share folder).
 
-Author `UsdPhysics.FixedJoint` constraining sfp_module_visual to its
-rope-end link and sc_plug_visual to its rope-end link. Matches Gazebo's
-CablePlugin pattern. More work but produces real physical attachment
-(connectors follow rope motion if rope is ever made dynamic in M2).
+Same fix applies to `sfp_module_visual` if its vendored USD has materials and the inline cable USD subtree doesn't.
 
-This is also the option that maps to the future-arch doc's "save/restore
-with grasp" pattern — if we go this route the
-`save_scene_state`/`restore_scene_state` MCP atoms also need to round-trip
-these joint definitions.
+### 3. ❌ Gripper finger separation — fixed at 17.3mm, doesn't adapt per cable
 
-### Option C — reparent connector visuals under rope-end link Xforms
+**Root cause**: Per D-09, the Robotiq Hand-E gripper finger is currently a `PhysicsFixedJoint` (zero-DOF) in the cable USD. The two fingers are statically positioned 17.3mm apart. Gazebo's gripper opens to:
+- 14.6mm for trial_1 (LC plug — small)
+- 27.2mm for trial_3 (SC plug — wider)
 
-USD-hierarchy parenting: move sfp_module_visual and sc_plug_visual to be
-CHILDREN of `Rope/link_X` Xforms (which one each goes under depends on
-gripper-end-of-rope identity). USD transform composition then gives each
-connector the rope link's pose for free. No physics joint authoring needed.
+Isaac Sim can't grip the wider SC plug realistically; the plug overlaps with the gripper fingers at the current width.
 
-Caveat: changes prim paths (`/World/cable/sc_plug_visual` →
-`/World/cable/Rope/Rope/link_X/sc_plug_visual`), which may break the
-`build_cable_variant_usds.py` constants AND any extension.py code that
-references those paths by name. Audit required first.
+**Concrete next actions:**
+1. Author the Hand-E finger as a `PhysicsPrismaticJoint` with DriveAPI in the cable USD (build_cable_variant_usds.py edit) — 1 DOF prismatic along the gripper-opening axis, drive stiffness for position control.
+2. Set drive target via MCP atom (`gripper_command`) per cable_kwargs.gripper_initial_pos. Default 0.00655 currently does nothing (per D-09); should map to position 14.6mm for trial_1, 27.2mm for trial_3.
+3. Per `nvidia-suite-docs` `isaac-sim/router.md`, the canonical Hand-E example might exist in `isaacsim.robot.manipulators` — worth checking before re-authoring from scratch.
 
-## Helper scripts ready for next session
+## Verified working
 
-- `exts/aic-dt/scripts/capture_viewport_set.py` — capture wrist cameras
-  (or any USD camera) as PNG via Isaac Sim's viewport API. Replaces
-  X11 window screenshots for clean center-framed renders.
+Everything from prior session's wrap, plus:
+- ✅ Both trial_1 (SFP+LC at gripper) and trial_3 (SC plug at gripper) — plug X between gripper fingers
+- ✅ Per-tick TCP tracker tracks gripper motion (held connector moves with gripper)
+- ✅ Orphan FixedJoint removed from both USDs at build time
+- ✅ Cache snapshot: `DerivedDataCache.bak.1779012551`
 
-  ```
-  python3 exts/aic-dt/scripts/capture_viewport_set.py \\
-      --out-dir ~/Share/my_capture_$(date +%Y%m%d_%H%M%S) \\
-      --auto-spawn
-  ```
+## Test commands for next session
 
-- `exts/aic-dt/scripts/run_freeze_isaac_sim.sh` — launches the AIC engine
-  + model + Isaac Sim stack with `AIC_FREEZE_AT_HOVER=1` so CheatCode holds
-  the robot at the hover pose for visual inspection.
+```bash
+# Restart Isaac Sim with venv + ROS_DOMAIN_ID=7
+bash -c 'source ~/env_isaaclab/bin/activate && ROS_DOMAIN_ID=7 DISPLAY=${DISPLAY:-:0} \
+  bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch aic-dt'
 
-  ```
-  bash exts/aic-dt/scripts/run_freeze_isaac_sim.sh trial_3 hover
-  # then in another shell:
-  python3 exts/aic-dt/scripts/capture_viewport_set.py \\
-      --out-dir ~/Share/trial3_inspection \\
-      --auto-spawn
-  ```
+# Quick test: load trial_3 + probe orientation
+python3 /tmp/probe_trial3_state.py
 
-## Uncommitted state to commit at start of next session
+# Visual: re-launch Gazebo and grab live wrist-cam for direct comparison
+cd ~/Documents/aic && bash scripts/run_cheatcode.sh headless
+# wait for trial_3 active, then:
+docker exec aic_eval bash -lc 'source /opt/ros/kilted/setup.bash && \
+  export RMW_IMPLEMENTATION=rmw_zenoh_cpp ZENOH_CONFIG_OVERRIDE=";transport/shared_memory/enabled=false" && \
+  python3 -c "..." # see prior session for the rclpy image-grab snippet'
 
-```
-build_cable_variant_usds.py            — refactored to end-anchor pattern
-aic_unified_robot_cable_sdf_reversed.usd — regenerated with new TRS
-extension.py                            — load_robot cable_type branch
-capture_viewport_set.py                 — new (this session)
-docs/future-architecture/NEXT-SESSION.md (this file)
+# Isaac Sim wrist-cam capture (use existing helper)
+python3 ~/Documents/isaac-sim-mcp/exts/aic-dt/scripts/capture_viewport_set.py \
+  --out-dir ~/Share/aic_session_$(date +%Y%m%d_%H%M%S) \
+  --cameras center_camera left_camera right_camera --auto-spawn
 ```
 
 ## Don't forget
 
-- GPT diagnostic chain is preserved at:
-  - `/tmp/gpt-cable-fidelity-result-9173.txt` — 5-approach analysis
-  - `/tmp/gpt-cable-asset-result-9173.txt` — visual disambiguation (with composite image)
-  - `/tmp/gpt-reversed-transform-result-9173.txt` — identified per-end orient as Layer 1 bug
-  - `/tmp/gpt-end-anchor-result-9173.txt` — implementation report for Layer 1 fix
-  Copy these into `.tug/findings/` or similar before they age out of /tmp.
-- Reference HTML for visual sanity: `~/Share/gazebo_cable_asset_reference_20260516_220716/index.html`
+- GPT pose diagnosis result (if it landed): `/tmp/gpt-pose-result-9174.txt`
+- Gazebo ground-truth trial_3 image (already in Share): `~/Library/Mobile Documents/com~apple~CloudDocs/Share/aic_cable_fidelity_20260516_234420/POST_DUAL_WRITE/GAZEBO_trial3_center_GROUND_TRUTH.png`
+- Trial_1 + trial_3 Isaac Sim renders: same folder, `trial{1,3}_center.png`
+- Gazebo /tf bag for both trials saved locally:
+  - `/tmp/bag_trial_1_20260517_085246_597/`
+  - `/tmp/bag_trial_3_20260517_082306_946/`
+  - Use to re-extract Gazebo's geometric ground truth at any time without re-running docker.
+
+## Outstanding from HANDOFF.json (unchanged from prior session)
+
+- `parity-09-motion-deficit` — 84% commanded-amplitude loss
+- `parity-05-wrench-root-cause` — `/fts_broadcaster/wrench` publishes zeros
+- `phase-4-03-model-zenoh` — zenoh ↔ fastrtps interop blocker for full E2E
+
+These are unrelated to the cable-fidelity work and can be tackled in parallel.
