@@ -1821,14 +1821,18 @@ class DigitalTwin(omni.ext.IExt):
         # Done AFTER articulation setup so the gripper finger exists.
         if attach_cable_to_gripper:
             try:
-                self._attach_cable_to_gripper_impl(gripper_initial_pos=gripper_initial_pos)
+                self._attach_cable_to_gripper_impl(
+                    gripper_initial_pos=gripper_initial_pos,
+                    cable_type=cable_type,
+                )
             except Exception as exc:
                 print(f"[AIC-DT] SCENE-03 attach_cable_to_gripper failed: {exc!r}")
 
     def _attach_cable_to_gripper_impl(self,
                                       gripper_initial_pos: float = 0.00655,
                                       plug_link_path: str = "/World/UR5e/cable/Rope/Rope/link_20",
-                                      finger_link_path: str = "/World/UR5e/aic_unified_robot/gripper_hande_finger_link_l"):
+                                      finger_link_path: str = "/World/UR5e/aic_unified_robot/gripper_hande_finger_link_l",
+                                      cable_type: str = "sfp_sc_cable"):
         """SCENE-03 Plan 03-03 — attach cable plug-end to gripper finger via FixedJoint.
 
         Plug-end default = link_20 per Plan 03-01 topology probe (closest to
@@ -2015,6 +2019,80 @@ class DigitalTwin(omni.ext.IExt):
                 print(f"[AIC-DT] orphan-finger_r-fixedjoint-cleanup: removed phantom {r_finger_joint}")
         except Exception as exc:
             print(f"[AIC-DT] orphan-finger_r-fixedjoint-cleanup failed: {exc!r}")
+
+        # tcp-track-held-connector 2026-05-17 — mirror Gazebo CablePlugin behavior.
+        # Diagnosis (this session, /tmp/bag_trial_3_*/*.mcap probe):
+        #   Gazebo trial_3 cable_1/sc_plug_link world Z = 1.4545 (essentially at
+        #   gripper/tcp world Z = 1.4602; the SC plug is HELD at the gripper TIP).
+        #   Isaac Sim (pre-fix) had sc_plug_visual world Z = 1.639 — at gripper
+        #   hande_base level, 172mm above where Gazebo holds it, INSIDE the
+        #   gripper housing and visually occluded. The 172mm = the static
+        #   hande_base→TCP offset.
+        # Root cause: the orphan FixedJoint at finger_link_r (sfp_module_visual ↔
+        # articulation member) anchored the connector to the articulation origin,
+        # not to the gripper tip. SFP+LC (28×67×45mm) was big enough to protrude
+        # past the housing; small SC plug (16mm thick) disappears inside it.
+        # Fix architecture:
+        #   1. build_cable_variant_usds.py removes the orphan FixedJoint at USD
+        #      authoring time (so PhysX never cooks the wrong-anchor constraint).
+        #   2. This function (below) installs a physics-step callback that sets
+        #      the held connector's xformOp:translate every tick so its world
+        #      position tracks gripper_tcp. Connector is kinematic (Layer 2 in
+        #      the build script), so the assignment sticks against PhysX.
+        # Per-tick callback (not one-shot) because the gripper moves during
+        # CheatCode trajectories — the held connector must follow.
+        try:
+            held_path = ("/World/UR5e/cable/sc_plug_visual"
+                         if cable_type == "sfp_sc_cable_reversed"
+                         else "/World/UR5e/cable/sfp_module_visual")
+            self._held_connector_path = held_path
+            self._held_connector_cable_type = cable_type
+            self._install_held_connector_tcp_tracker(held_path)
+        except Exception as exc:
+            print(f"[AIC-DT] tcp-track-held-connector install failed: {exc!r}")
+
+    def _install_held_connector_tcp_tracker(self, held_path: str) -> None:
+        """Install a physics-step callback that pins held_path to gripper_tcp world pose.
+
+        Idempotent: removes any prior subscription before installing a new one.
+        The callback is light — one XformCache lookup + one Set per tick — and
+        only operates on the named prim. Safe to run alongside parity publishers
+        and AicControllerLoop physics-step callbacks.
+        """
+        import omni.physx
+        from pxr import UsdGeom, Gf
+
+        # Remove prior subscription if any (e.g. on trial reload).
+        prev = getattr(self, "_held_connector_sub", None)
+        if prev is not None:
+            try:
+                prev.unsubscribe()
+            except Exception:
+                pass
+            self._held_connector_sub = None
+
+        def _on_step(dt: float) -> None:
+            try:
+                stage = omni.usd.get_context().get_stage()
+                if stage is None: return
+                held = stage.GetPrimAtPath(held_path)
+                tcp = stage.GetPrimAtPath("/World/UR5e/aic_unified_robot/gripper_tcp")
+                if not (held and held.IsValid() and tcp and tcp.IsValid()):
+                    return
+                xc = UsdGeom.XformCache()
+                tcp_world = xc.GetLocalToWorldTransform(tcp).ExtractTranslation()
+                parent_world = xc.GetLocalToWorldTransform(held.GetParent())
+                local_pos = parent_world.GetInverse().Transform(tcp_world)
+                tr_attr = held.GetAttribute("xformOp:translate")
+                if tr_attr.IsValid():
+                    tr_attr.Set(Gf.Vec3d(local_pos[0], local_pos[1], local_pos[2]))
+            except Exception:
+                # One bad tick should never crash the sim
+                pass
+
+        physx = omni.physx.acquire_physx_interface()
+        self._held_connector_sub = physx.subscribe_physics_step_events(_on_step)
+        print(f"[AIC-DT] tcp-track-held-connector: subscribed physics-step tracker for {held_path}")
 
         # Note: gripper_initial_pos applies to the gripper drive joint (NOT this
         # FixedJoint). The Hand-E finger joint is a FixedJoint zero-DOF in our

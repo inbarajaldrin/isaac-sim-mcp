@@ -281,6 +281,41 @@ def compose_orient_with_yaw(base_orient, yaw_radians: float):
     return base_orient * yaw_correction
 
 
+def remove_orphan_finger_r_joint(stage) -> bool:
+    """Remove the upstream-shipped orphan FixedJoint that pulls a cable connector
+    to the gripper finger_link_r articulation member.
+
+    Path: /World/aic_unified_robot/gripper_hande_finger_link_r/FixedJoint
+    body0: a cable connector visual (sfp_module_visual originally;
+           swap_joint_endpoints_for_reversed_cable rebinds to sc_plug_visual in
+           the reversed variant)
+    body1: gripper_hande_finger_link_r (UR5e articulation member)
+
+    Why removed:
+      - The joint's localPos0 was authored for the SFP+LC body geometry (large
+        protruding module). When the joint locks the connector at the gripper
+        finger origin, a SFP-sized body extends out of the housing and is visible;
+        a small SC plug (16mm thick) gets fully occluded INSIDE the housing.
+      - The extension's _attach_cable_to_gripper_impl runs a physics-step tracker
+        that positions the held connector at gripper_tcp (visible at the gripper
+        TIP, matching Gazebo CablePlugin behavior). The orphan FixedJoint
+        actively fights that tracker and wins (joint-cooked constraints can't
+        be removed by USD RemovePrim alone after PhysX has cooked them).
+      - Eliminating the joint at USD authoring time means PhysX never cooks it,
+        leaving the field clear for the runtime tracker to govern position.
+
+    Returns True if removed, False if already absent.
+    """
+    orphan_path = "/World/aic_unified_robot/gripper_hande_finger_link_r/FixedJoint"
+    prim = stage.GetPrimAtPath(orphan_path)
+    if prim and prim.IsValid():
+        stage.RemovePrim(orphan_path)
+        print(f"[remove_orphan_finger_r_joint] removed {orphan_path}")
+        return True
+    print(f"[remove_orphan_finger_r_joint] not present at {orphan_path} — skipping")
+    return False
+
+
 def swap_joint_endpoints_for_reversed_cable(stage,
                                               connector_a_path: str,
                                               connector_b_path: str) -> dict:
@@ -340,7 +375,11 @@ def swap_joint_endpoints_for_reversed_cable(stage,
     for joint_path, rel_name, expected_old, expected_new in swaps:
         joint = stage.GetPrimAtPath(joint_path)
         if not joint.IsValid():
-            raise ValueError(f"Joint not found: {joint_path}")
+            # The orphan finger_r FixedJoint may have been removed by an earlier
+            # build pass (remove_orphan_finger_r_joint). Skip cleanly when the
+            # joint isn't present — its swap is meaningless after removal.
+            print(f"[swap_joint_endpoints] skip {joint_path}: not present (probably already removed)")
+            continue
         rel = joint.GetRelationship(rel_name)
         if not rel.IsValid():
             raise ValueError(f"Joint {joint_path} has no {rel_name}")
@@ -474,34 +513,32 @@ def build_cable_variant(source_usd: str, dest_usd: str, variant: str,
     if stage is None:
         raise RuntimeError(f"Failed to open {dest_usd} for editing")
 
+    # Both variants — apply the kinematic flag + remove the orphan FixedJoint at
+    # gripper_hande_finger_link_r. The orphan joint was wrong-anchor (locked
+    # the held connector at the gripper BASE, not the gripper TCP) — the
+    # extension code's _attach_cable_to_gripper_impl now installs a per-tick
+    # physics-step tracker that positions the held connector at gripper_tcp,
+    # mirroring Gazebo CablePlugin behavior. The joint must be GONE so the
+    # tracker has clear field; see remove_orphan_finger_r_joint() docstring
+    # for the 2026-05-17 diagnostic trail.
+    author_kinematic_on_connectors(stage, (connector_a, connector_b))
+    remove_orphan_finger_r_joint(stage)
+
     if variant == "sfp_sc_cable":
-        # Identity copy still needs the Layer 2 kinematic flag: without it,
-        # PhysX drifts the connector visuals during quick_start (which loads
-        # this USD) and writes new translates into the root anon layer.
-        # Those stale opinions then OVERRIDE the reversed USD's authored
-        # values when load_trial swaps the reference for trial_3. So both
-        # variants must carry the kinematic flag for the trial_3 reversed-end
-        # behavior to take effect.
-        author_kinematic_on_connectors(stage, (connector_a, connector_b))
         stage.GetRootLayer().Save()
-        print(f"[build_cable_variant] saved identity variant (kinematic patched): {dest_usd}")
+        print(f"[build_cable_variant] saved identity variant (kinematic + orphan-joint removed): {dest_usd}")
         return dest_usd
 
-    # Reversed variant — swap joint endpoints so the OTHER connector ends up
-    # at the gripper. The prior Layer 1 translate-swap approach was a no-op
-    # because PhysX joint constraints dominate the connector visual poses;
-    # see swap_joint_endpoints_for_reversed_cable() docstring for the
-    # diagnostic trail (2026-05-16 live audit of trial_3 in Isaac Sim).
+    # Reversed variant — also swap which connector each cable-rope-end joint
+    # binds to. The orphan-joint swap is no longer needed (the joint is gone),
+    # but the fixedJoint/fixedJoint2 inside /World/cable/Rope/ still determine
+    # which connector visually lives at which rope end. For trial_3, SC must
+    # be at the gripper-end rope link, SFP at the far end.
     joint_results = swap_joint_endpoints_for_reversed_cable(
         stage, connector_a, connector_b
     )
-    # Kinematic flag still helps: even with correct joint endpoints, the
-    # connector visuals are RigidBody prims with mass=0 — PhysX integration
-    # can introduce micro-drift between physics steps. kin=True locks them to
-    # the joint-satisfied pose.
-    author_kinematic_on_connectors(stage, (connector_a, connector_b))
     stage.GetRootLayer().Save()
-    print(f"[build_cable_variant] applied joint-endpoint swap (3 joints touched):")
+    print(f"[build_cable_variant] applied joint-endpoint swap (rope-end bindings):")
     for joint_path, changes in joint_results.items():
         print(f"  {joint_path}: {changes}")
     print(f"[build_cable_variant] saved reversed variant: {dest_usd}")
