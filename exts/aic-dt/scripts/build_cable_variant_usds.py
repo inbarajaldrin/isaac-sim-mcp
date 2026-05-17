@@ -540,32 +540,58 @@ def remove_rope_end_fixed_joints(stage) -> list:
     return removed
 
 
+def _author_inline_preview_surface(stage, mat_path: str, diffuse, metallic, roughness):
+    """Author a single UsdPreviewSurface Material at the given path."""
+    from pxr import Sdf, UsdShade
+    material = UsdShade.Material.Define(stage, mat_path)
+    shader = UsdShade.Shader.Define(stage, f"{mat_path}/PreviewSurface")
+    shader.CreateIdAttr("UsdPreviewSurface")
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(diffuse)
+    shader.CreateInput("metallic",     Sdf.ValueTypeNames.Float).Set(metallic)
+    shader.CreateInput("roughness",    Sdf.ValueTypeNames.Float).Set(roughness)
+    shader.CreateInput("opacity",      Sdf.ValueTypeNames.Float).Set(1.0)
+    shader.CreateInput("useSpecularWorkflow", Sdf.ValueTypeNames.Int).Set(0)
+    shader.CreateOutput("surface", Sdf.ValueTypeNames.Token)
+    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+    return material
+
+
 def author_inline_sfp_module_material(stage, sfp_path: str) -> bool:
-    """Author an inline UsdPreviewSurface for the SFP module subtree and bind
-    it on the parent prim so all child meshes inherit.
+    """Author inline UsdPreviewSurface materials for the SFP module subtree
+    and bind per-sub-subtree so the SFP body and the LC plug child carry
+    their own correct materials.
 
-    Why inline (vs reference like SC Plug):
-      The SC Plug has a vendored
-      assets/assets/SC Plug/sc_plug_visual.usd with a full Material +
-      texture stack — we just AddReference its Looks scope. The SFP Module
-      has only a source .glb (assets/aic_assets/models/SFP Module/sfp_module_visual.glb)
-      with no vendored USD counterpart, so we can't reference. Authoring
-      inline UsdPreviewSurface from the GLB's parsed materials is the
-      next-best step.
+    Inline cable USD structure under `{sfp_path}` (from probe 2026-05-17):
+      sfp_module_visual/
+        Looks/                     ← Material scope
+        sfp_module_visual/         ← inner Xform holding the SFP body mesh
+          Body_005     [Mesh]      ← SFP housing, source GLB material is
+                                     'Material.005' (metallic white)
+        lc_plug_visual/            ← entire LC plug subtree (Blender export)
+          Cube_010..022 / Cylinder_002 / FCA_FCFC_DPS1Z_ma1_AQUA_002 / ...
+                                     LC plug source GLB material is
+                                     'Plastic_Blue.002' (metallic white)
 
-    Source-of-truth (parsed via parse_glb_materials.py 2026-05-17 against
-    aic_assets/models/SFP Module/sfp_module_visual.glb):
-      - Material.005: baseColorFactor=(1,1,1,1) metallicFactor=1.0 roughnessFactor=1.0
-                      (the SFP housing — metallic white finish)
-      - Material.001: baseColorFactor=(1,1,1,1) metallicFactor=0    roughnessFactor=1.0
-                      (internal/decorative — non-metallic white, double-sided)
-
-    For M1 we author the DOMINANT material (Material.005, metallic white)
-    on the parent sfp_module_visual prim. Per-mesh material distinction
-    (Material.001 vs Material.005) is M2 work — requires per-child
-    material binding that mirrors the GLB primitives.material assignment,
-    and the inline cable USD doesn't preserve that GLB-side mesh→material
-    mapping.
+    Source-of-truth (parsed via parse_glb_materials.py 2026-05-17):
+      SFP Module GLB
+        - Material.005 (primitive 0 of Body.005): baseColorFactor=(1,1,1,1),
+                                                   metallicFactor=1.0,
+                                                   roughnessFactor=1.0
+        - Material.001 (primitive 1 of Body.005): baseColorFactor=(1,1,1,1),
+                                                   metallicFactor=0,
+                                                   roughnessFactor=1.0
+          → Per-primitive distinction inside Body_005 requires UsdGeomSubset
+            partitions on the mesh; the inline cable USD doesn't preserve
+            the GLB-side primitives.material index mapping. We bind the
+            dominant Material.005 on the Body_005 carrier Xform. The
+            internal-feature Material.001 is authored inline (so a future
+            session can wire it via GeomSubsets) but currently unbound to
+            any geometry.
+      LC Plug GLB
+        - Plastic_Blue.002: baseColorFactor=(1,1,1,1), metallicFactor=1.0,
+                            roughnessFactor=1.0  → bound on the entire
+                            lc_plug_visual subtree (single material per
+                            the LC GLB).
 
     Returns True on success.
     """
@@ -581,23 +607,41 @@ def author_inline_sfp_module_material(stage, sfp_path: str) -> bool:
     if not looks.IsValid():
         looks = stage.DefinePrim(looks_path, "Scope")
 
-    mat_path = f"{looks_path}/Material_005"
-    material = UsdShade.Material.Define(stage, mat_path)
-    shader_path = f"{mat_path}/PreviewSurface"
-    shader = UsdShade.Shader.Define(stage, shader_path)
-    shader.CreateIdAttr("UsdPreviewSurface")
-    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set((1.0, 1.0, 1.0))
-    shader.CreateInput("metallic",     Sdf.ValueTypeNames.Float).Set(1.0)
-    shader.CreateInput("roughness",    Sdf.ValueTypeNames.Float).Set(1.0)
-    shader.CreateInput("opacity",      Sdf.ValueTypeNames.Float).Set(1.0)
-    shader.CreateInput("useSpecularWorkflow", Sdf.ValueTypeNames.Int).Set(0)
-    shader.CreateOutput("surface", Sdf.ValueTypeNames.Token)
-    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+    # Author all three materials (M.005, M.001, Plastic_Blue_002) inline.
+    mat_005 = f"{looks_path}/Material_005"
+    mat_001 = f"{looks_path}/Material_001"
+    mat_pb  = f"{looks_path}/Plastic_Blue_002"
+    _author_inline_preview_surface(stage, mat_005, (1.0,1.0,1.0), 1.0, 1.0)
+    _author_inline_preview_surface(stage, mat_001, (1.0,1.0,1.0), 0.0, 1.0)
+    _author_inline_preview_surface(stage, mat_pb,  (1.0,1.0,1.0), 1.0, 1.0)
 
-    binding = UsdShade.MaterialBindingAPI.Apply(sfp)
-    binding.GetDirectBindingRel().SetTargets([Sdf.Path(mat_path)])
-    print(f"[author_inline_sfp_module_material] authored UsdPreviewSurface "
-          f"(metallic=1, roughness=1, white) at {mat_path}; bound on {sfp_path}")
+    # Clear any prior parent-level binding (was uniform Material_005 covering
+    # both the SFP body AND the LC plug subtree — wrong for LC).
+    parent_binding = UsdShade.MaterialBindingAPI.Apply(sfp)
+    parent_binding.GetDirectBindingRel().ClearTargets(removeSpec=False)
+
+    # Bind Material.005 on the SFP-body carrier Xform (covers Body_005 mesh
+    # via descendant inheritance).
+    sfp_inner_path = f"{sfp_path}/sfp_module_visual"
+    sfp_inner = stage.GetPrimAtPath(sfp_inner_path)
+    if sfp_inner.IsValid():
+        UsdShade.MaterialBindingAPI.Apply(sfp_inner).GetDirectBindingRel().SetTargets([Sdf.Path(mat_005)])
+        print(f"[author_inline_sfp_module_material] bound {mat_005} on {sfp_inner_path} (SFP body)")
+    else:
+        # No sub-Xform — fall back to parent binding (legacy USD layout)
+        parent_binding.GetDirectBindingRel().SetTargets([Sdf.Path(mat_005)])
+        print(f"[author_inline_sfp_module_material] no inner Xform at {sfp_inner_path}; "
+              f"bound {mat_005} on parent {sfp_path} (fallback)")
+
+    # Bind Plastic_Blue_002 on the LC plug subtree.
+    lc_path = f"{sfp_path}/lc_plug_visual"
+    lc = stage.GetPrimAtPath(lc_path)
+    if lc.IsValid():
+        UsdShade.MaterialBindingAPI.Apply(lc).GetDirectBindingRel().SetTargets([Sdf.Path(mat_pb)])
+        print(f"[author_inline_sfp_module_material] bound {mat_pb} on {lc_path} (LC plug subtree)")
+    else:
+        print(f"[author_inline_sfp_module_material] no LC plug subtree at {lc_path}; skipping")
+
     return True
 
 
