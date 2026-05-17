@@ -2125,18 +2125,14 @@ class DigitalTwin(omni.ext.IExt):
         # body with RigidBodyAPI (even kinematic). Write to Fabric instead so
         # the tracker's pose wins.
         try:
-            import usdrt
-            from usdrt import Gf as RtGf
-            stage_id = omni.usd.get_context().get_stage_id()
-            fstage = usdrt.Usd.Stage.Attach(stage_id)
-            fprim = fstage.GetPrimAtPath(held_path)
-            has_fabric = bool(fprim and fprim.IsValid())
+            import usdrt  # noqa: F401 — import probe (raises if unavailable)
+            from usdrt import Gf as RtGf  # noqa: F401
+            has_fabric = True
         except Exception as exc:
             print(f"[AIC-DT] tcp-track-held-connector: Fabric (usdrt) unavailable, "
                   f"falling back to USD-level Set: {exc!r}")
             has_fabric = False
-            fprim = None
-            RtGf = None
+            RtGf = None  # type: ignore[assignment]
 
         def _on_step(dt: float) -> None:
             try:
@@ -2167,33 +2163,41 @@ class DigitalTwin(omni.ext.IExt):
                 local_pos = held_local_mat.ExtractTranslation()
                 local_rot_quat = held_local_mat.ExtractRotation().GetQuat()
 
+                # Write to BOTH USD and Fabric. Hydra renderer + omni.physx
+                # writeback can read from either, depending on context; writing
+                # both removes the ambiguity. Without USD-level write, the
+                # renderer (which composes xformOps through USD's stage delegate
+                # in some configurations) would see the on-disk value.
+                tr_attr = held.GetAttribute("xformOp:translate")
+                or_attr = held.GetAttribute("xformOp:orient")
+                if tr_attr.IsValid():
+                    tr_attr.Set(Gf.Vec3d(local_pos[0], local_pos[1], local_pos[2]))
+                if or_attr.IsValid():
+                    type_str = str(or_attr.GetTypeName()).lower()
+                    if "quatf" in type_str:
+                        or_attr.Set(Gf.Quatf(local_rot_quat.GetReal(),
+                                             local_rot_quat.GetImaginary()[0],
+                                             local_rot_quat.GetImaginary()[1],
+                                             local_rot_quat.GetImaginary()[2]))
+                    else:
+                        or_attr.Set(local_rot_quat)
                 if has_fabric:
-                    # Write to Fabric so PhysX' writeback doesn't override us.
-                    ftr = fprim.GetAttribute("xformOp:translate")
-                    forn = fprim.GetAttribute("xformOp:orient")
-                    if ftr.IsValid():
-                        ftr.Set(RtGf.Vec3d(local_pos[0], local_pos[1], local_pos[2]))
-                    if forn.IsValid():
-                        forn.Set(RtGf.Quatf(local_rot_quat.GetReal(),
-                                            local_rot_quat.GetImaginary()[0],
-                                            local_rot_quat.GetImaginary()[1],
-                                            local_rot_quat.GetImaginary()[2]))
-                else:
-                    # USD-level fallback (won't survive PhysX writeback but keeps
-                    # the scene authoring sane for non-physics readers).
-                    tr_attr = held.GetAttribute("xformOp:translate")
-                    or_attr = held.GetAttribute("xformOp:orient")
-                    if tr_attr.IsValid():
-                        tr_attr.Set(Gf.Vec3d(local_pos[0], local_pos[1], local_pos[2]))
-                    if or_attr.IsValid():
-                        type_str = str(or_attr.GetTypeName()).lower()
-                        if "quatf" in type_str:
-                            or_attr.Set(Gf.Quatf(local_rot_quat.GetReal(),
+                    import usdrt
+                    from usdrt import Gf as _RtGf
+                    fstage = usdrt.Usd.Stage.Attach(
+                        omni.usd.get_context().get_stage_id()
+                    )
+                    fprim = fstage.GetPrimAtPath(held_path)
+                    if fprim and fprim.IsValid():
+                        ftr = fprim.GetAttribute("xformOp:translate")
+                        forn = fprim.GetAttribute("xformOp:orient")
+                        if ftr.IsValid():
+                            ftr.Set(_RtGf.Vec3d(local_pos[0], local_pos[1], local_pos[2]))
+                        if forn.IsValid():
+                            forn.Set(_RtGf.Quatf(local_rot_quat.GetReal(),
                                                  local_rot_quat.GetImaginary()[0],
                                                  local_rot_quat.GetImaginary()[1],
                                                  local_rot_quat.GetImaginary()[2]))
-                        else:
-                            or_attr.Set(local_rot_quat)
             except Exception:
                 # One bad tick should never crash the sim
                 pass
