@@ -2073,9 +2073,19 @@ class DigitalTwin(omni.ext.IExt):
             held_path = ("/World/UR5e/cable/sc_plug_visual"
                          if cable_type == "sfp_sc_cable_reversed"
                          else "/World/UR5e/cable/sfp_module_visual")
+            far_path = ("/World/UR5e/cable/sfp_module_visual"
+                        if cable_type == "sfp_sc_cable_reversed"
+                        else "/World/UR5e/cable/sc_plug_visual")
             self._held_connector_path = held_path
+            self._far_connector_path = far_path
             self._held_connector_cable_type = cable_type
             self._install_held_connector_tcp_tracker(held_path)
+            # Far-end connector tracker: pins the non-gripper connector to its
+            # Gazebo-truth world pose (extracted from /tf bag for each cable
+            # type). Without this the far connector sits at the cable-root
+            # spawn offset under /World/UR5e — visually wrong; should be on
+            # the board at the FAR-end position per Gazebo trial layout.
+            self._install_far_connector_world_tracker(far_path, cable_type)
         except Exception as exc:
             print(f"[AIC-DT] tcp-track-held-connector install failed: {exc!r}")
 
@@ -2242,6 +2252,128 @@ class DigitalTwin(omni.ext.IExt):
         self._held_connector_sub = physx.subscribe_physics_step_events(_on_step)
         print(f"[AIC-DT] tcp-track-held-connector: subscribed physics-step tracker for {held_path} "
               f"(cable_type={cable_type!r}, rel_quat_xyzw={rel_quat_xyzw})")
+
+    # Far-end connector world pose, sourced from Gazebo /tf bags 2026-05-17.
+    # Each entry pins the non-gripper connector's pose so it lives at the
+    # FAR end of the cable on the board, matching Gazebo's CablePlugin
+    # post-spawn equilibrium. Without this pin, the kinematic far connector
+    # sits at the cable-root spawn offset under /World/UR5e — visually wrong.
+    #
+    # World pose is constant (the far connector is decorative — doesn't track
+    # the gripper). Per-trial bag values from /tmp/tf_trial_{1,3}.json:
+    _FAR_CONNECTOR_WORLD_POSE = {
+        "sfp_sc_cable": {
+            # far = sc_plug_visual (LC+SFP at gripper, SC at far)
+            "world_translate":  (0.56620, 0.03456, 1.14564),
+            "world_quat_xyzw":  (-0.57420, 0.81760, -0.02455, -0.03495),
+        },
+        "sfp_sc_cable_reversed": {
+            # far = sfp_module_visual (SC at gripper, LC+SFP at far)
+            "world_translate":  (0.54113, -0.01844, 1.14743),
+            "world_quat_xyzw":  (-0.19723, -0.67903, -0.16977, 0.68644),
+        },
+    }
+
+    def _install_far_connector_world_tracker(self, far_path: str, cable_type: str) -> None:
+        """Pin the far-end connector to its Gazebo-truth world pose every tick.
+
+        The far connector has physics:kinematicEnabled=True per the Layer 2
+        author. Setting its xformOp:translate/orient via USD + Fabric every
+        tick keeps it locked at the world pose Gazebo's CablePlugin produces
+        for this trial. Rope link_0 / link_20 (whichever is anchored to the
+        far connector via fixedJoint with identity localRot0) follows along.
+
+        Args:
+          far_path: Prim path of the far-end connector visual.
+          cable_type: Key into _FAR_CONNECTOR_WORLD_POSE.
+        """
+        from pxr import UsdGeom, Gf
+
+        # Tear down any prior subscription (idempotent under trial reload)
+        prev = getattr(self, "_far_connector_sub", None)
+        if prev is not None:
+            try: prev.unsubscribe()
+            except Exception: pass
+            self._far_connector_sub = None
+
+        spec = self._FAR_CONNECTOR_WORLD_POSE.get(cable_type)
+        if spec is None:
+            print(f"[AIC-DT] far-connector-world-tracker: no pose spec for "
+                  f"cable_type={cable_type!r}; skipping install")
+            return
+        wx, wy, wz = spec["world_translate"]
+        qx, qy, qz, qw = spec["world_quat_xyzw"]
+        world_quat = Gf.Quatd(qw, qx, qy, qz)
+        world_pos = Gf.Vec3d(wx, wy, wz)
+
+        try:
+            import usdrt
+            from usdrt import Gf as RtGf
+            has_fabric = True
+        except Exception:
+            has_fabric = False
+            RtGf = None  # type: ignore[assignment]
+
+        def _on_step(dt: float) -> None:
+            try:
+                stage = omni.usd.get_context().get_stage()
+                if stage is None: return
+                prim = stage.GetPrimAtPath(far_path)
+                if not (prim and prim.IsValid()): return
+                xc = UsdGeom.XformCache()
+                parent = prim.GetParent()
+                parent_wtm = xc.GetLocalToWorldTransform(parent)
+                # Compose desired world transform (matrix), then convert to
+                # local via parent_inverse — same pattern as the held tracker.
+                desired_wtm = Gf.Matrix4d().SetIdentity()
+                desired_wtm.SetRotateOnly(Gf.Matrix3d().SetRotate(world_quat))
+                desired_wtm.SetTranslateOnly(world_pos)
+                local_mat = desired_wtm * parent_wtm.GetInverse()
+                local_pos = local_mat.ExtractTranslation()
+                local_quat = local_mat.ExtractRotation().GetQuat()
+
+                tr_attr = prim.GetAttribute("xformOp:translate")
+                or_attr = prim.GetAttribute("xformOp:orient")
+                if tr_attr.IsValid():
+                    tr_attr.Set(Gf.Vec3d(local_pos[0], local_pos[1], local_pos[2]))
+                if or_attr.IsValid():
+                    type_str = str(or_attr.GetTypeName()).lower()
+                    if "quatf" in type_str:
+                        or_attr.Set(Gf.Quatf(local_quat.GetReal(),
+                                             local_quat.GetImaginary()[0],
+                                             local_quat.GetImaginary()[1],
+                                             local_quat.GetImaginary()[2]))
+                    else:
+                        or_attr.Set(local_quat)
+                if has_fabric:
+                    import usdrt
+                    from usdrt import Gf as _RtGf
+                    fstage = usdrt.Usd.Stage.Attach(
+                        omni.usd.get_context().get_stage_id())
+                    fprim = fstage.GetPrimAtPath(far_path)
+                    if fprim and fprim.IsValid():
+                        ftr = fprim.GetAttribute("xformOp:translate")
+                        forn = fprim.GetAttribute("xformOp:orient")
+                        if ftr.IsValid():
+                            ftr.Set(_RtGf.Vec3d(local_pos[0], local_pos[1], local_pos[2]))
+                        if forn.IsValid():
+                            forn.Set(_RtGf.Quatf(local_quat.GetReal(),
+                                                 local_quat.GetImaginary()[0],
+                                                 local_quat.GetImaginary()[1],
+                                                 local_quat.GetImaginary()[2]))
+            except Exception as exc:
+                if not getattr(self, "_far_tracker_error_logged", False):
+                    self._far_tracker_error_logged = True
+                    import traceback
+                    print(f"[AIC-DT] far-connector-world-tracker tick error: {exc!r}")
+                    traceback.print_exc()
+
+        physx = omni.physx.acquire_physx_interface()
+        self._far_tracker_error_logged = False
+        self._far_connector_sub = physx.subscribe_physics_step_events(_on_step)
+        print(f"[AIC-DT] far-connector-world-tracker: subscribed physics-step tracker for {far_path} "
+              f"(cable_type={cable_type!r}, world_translate={spec['world_translate']}, "
+              f"world_quat_xyzw={spec['world_quat_xyzw']})")
 
     def _configure_arm_drives(self, stage, prim_path: str) -> None:
         """Author USD DriveAPI + PhysxArticulationAPI on the unified-robot arm.
