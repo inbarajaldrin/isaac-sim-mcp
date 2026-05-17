@@ -304,6 +304,12 @@ def remove_orphan_finger_r_joint(stage) -> bool:
       - Eliminating the joint at USD authoring time means PhysX never cooks it,
         leaving the field clear for the runtime tracker to govern position.
 
+    body0 (the connector visual) was originally bound by an earlier
+    pre-removal build pass; the legacy `swap_joint_endpoints_for_reversed_cable`
+    function used to swap it for reversed variants but was dropped on
+    2026-05-17 since this orphan joint is now removed unconditionally
+    regardless of variant.
+
     Returns True if removed, False if already absent.
     """
     orphan_path = "/World/aic_unified_robot/gripper_hande_finger_link_r/FixedJoint"
@@ -314,84 +320,6 @@ def remove_orphan_finger_r_joint(stage) -> bool:
         return True
     print(f"[remove_orphan_finger_r_joint] not present at {orphan_path} — skipping")
     return False
-
-
-def swap_joint_endpoints_for_reversed_cable(stage,
-                                              connector_a_path: str,
-                                              connector_b_path: str) -> dict:
-    """Swap the cable's joint endpoints so the OTHER connector ends up at the gripper.
-
-    The reversed-cable variant is NOT a transform swap (the connector visual
-    transforms are irrelevant because PhysX joint constraints dominate
-    position). It's a JOINT ENDPOINT swap: change which connector visual is
-    bound to which rope-end + which is bound to the gripper-finger orphan
-    joint.
-
-    Joints touched (paths fixed in the unified-robot cable USD):
-      /World/aic_unified_robot/gripper_hande_finger_link_r/FixedJoint
-          body0: connector_a → connector_b   (gripper anchor)
-      /World/cable/Rope/fixedJoint
-          body1: connector_a → connector_b   (rope link_0 end)
-      /World/cable/Rope/fixedJoint2
-          body1: connector_b → connector_a   (rope link_20 end)
-
-    After the swap, in the reversed USD:
-      - connector_b (sc_plug_visual) is pulled to gripper_finger_r AND to
-        rope link_0 (the gripper-end of the rope) — SC plug visually at
-        gripper.
-      - connector_a (sfp_module_visual) is pulled to rope link_20 (the far
-        end) — SFP+LC visually at the far end of the cable.
-
-    Why this is the right layer:
-      The connector visuals are PhysX RigidBody prims; their final world
-      pose is dictated by the joint constraints, not the authored
-      xformOp:translate. Swapping translates (the prior Layer 1 fix) was a
-      no-op because every tick PhysX overwrites the translate to satisfy
-      the joint pulls. Swapping the joint endpoints in the USD authoring is
-      the only way to change which connector ends up at which end.
-
-    The connector visual prim PATHS within /World/cable/ stay the same in
-    both variants. The extension code (extension.py:_attach_cable_to_gripper_impl,
-    _compute_trial_tf_frames, scoring publishers) references the prim paths
-    directly — swapping at the joint layer preserves those references.
-
-    Translates of sfp_module_visual + sc_plug_visual remain as-authored
-    in the source USD (we don't touch them). Kinematic flag is authored
-    separately by author_kinematic_on_connectors.
-
-    Returns a dict mapping joint path → list of new body0/body1 target paths
-    for verification.
-    """
-    from pxr import Sdf
-    swaps = [
-        ("/World/aic_unified_robot/gripper_hande_finger_link_r/FixedJoint",
-         "physics:body0", connector_a_path, connector_b_path),
-        ("/World/cable/Rope/fixedJoint",
-         "physics:body1", connector_a_path, connector_b_path),
-        ("/World/cable/Rope/fixedJoint2",
-         "physics:body1", connector_b_path, connector_a_path),
-    ]
-    results = {}
-    for joint_path, rel_name, expected_old, expected_new in swaps:
-        joint = stage.GetPrimAtPath(joint_path)
-        if not joint.IsValid():
-            # The orphan finger_r FixedJoint may have been removed by an earlier
-            # build pass (remove_orphan_finger_r_joint). Skip cleanly when the
-            # joint isn't present — its swap is meaningless after removal.
-            print(f"[swap_joint_endpoints] skip {joint_path}: not present (probably already removed)")
-            continue
-        rel = joint.GetRelationship(rel_name)
-        if not rel.IsValid():
-            raise ValueError(f"Joint {joint_path} has no {rel_name}")
-        current = [str(t) for t in rel.GetTargets()]
-        if current != [expected_old]:
-            print(f"[swap_joint_endpoints] WARNING {joint_path}.{rel_name}: "
-                  f"expected {[expected_old]}, found {current} — applying swap anyway")
-        rel.SetTargets([Sdf.Path(expected_new)])
-        results[joint_path] = {rel_name: expected_new}
-        print(f"[swap_joint_endpoints] {joint_path}.{rel_name}: "
-              f"{current} → [{expected_new}]")
-    return results
 
 
 def reauthor_rope_end_joints_identity(stage, *, variant: str) -> list:
@@ -412,9 +340,9 @@ def reauthor_rope_end_joints_identity(stage, *, variant: str) -> list:
       pose. Keep the original localPos0/Pos1 sub-cm offsets so the rope
       visually attaches at the right point on each connector mesh.
 
-    Variant routing (preserves the legacy body1-swap behavior of
-    swap_joint_endpoints_for_reversed_cable, but now baked into a single
-    function so the joint authoring is canonical):
+    Variant routing (replaces the legacy `swap_joint_endpoints_for_reversed_cable`
+    function dropped on 2026-05-17 — joint authoring is now canonical here
+    rather than spread across separate authoring + swap passes):
       - sfp_sc_cable          : link_0 ↔ sfp_module_visual, link_20 ↔ sc_plug_visual
       - sfp_sc_cable_reversed : link_0 ↔ sc_plug_visual,    link_20 ↔ sfp_module_visual
 

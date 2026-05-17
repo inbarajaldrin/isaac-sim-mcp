@@ -2116,6 +2116,78 @@ class DigitalTwin(omni.ext.IExt):
         },
     }
 
+    # Fabric (usdrt) availability — probed lazily on first tracker install.
+    # PhysX writes back to Fabric every step; for kinematic bodies we must
+    # also write Fabric so our pose wins against the writeback.
+    _USDRT_AVAILABLE: bool | None = None
+
+    @classmethod
+    def _probe_usdrt(cls) -> bool:
+        if cls._USDRT_AVAILABLE is not None:
+            return cls._USDRT_AVAILABLE
+        try:
+            import usdrt  # noqa: F401
+            from usdrt import Gf as _RtGf  # noqa: F401
+            cls._USDRT_AVAILABLE = True
+        except Exception as exc:
+            print(f"[AIC-DT] usdrt unavailable, kinematic trackers will USD-only: {exc!r}")
+            cls._USDRT_AVAILABLE = False
+        return cls._USDRT_AVAILABLE
+
+    def _apply_kinematic_world_pose(self, prim, world_pos, world_quat, *,
+                                     has_fabric: bool) -> None:
+        """Write `prim`'s xformOp:translate/orient (USD + Fabric) so that its
+        composed world transform equals (world_pos, world_quat).
+
+        Computes local = world * parent_inv via Gf.Matrix4d.GetInverse(),
+        then sets attributes if they exist. Writes Fabric too when usdrt is
+        available — PhysX writeback would otherwise win on RigidBodyAPI prims
+        (even kinematic).
+
+        Args:
+          prim:        UsdPrim whose pose to set.
+          world_pos:   Gf.Vec3d desired world translation.
+          world_quat:  Gf.Quatd desired world rotation.
+          has_fabric:  whether to also write to the Fabric stage.
+        """
+        from pxr import UsdGeom, Gf
+        xc = UsdGeom.XformCache()
+        parent_wtm_inv = xc.GetLocalToWorldTransform(prim.GetParent()).GetInverse()
+        desired_wtm = Gf.Matrix4d().SetIdentity()
+        desired_wtm.SetRotateOnly(Gf.Matrix3d().SetRotate(world_quat))
+        desired_wtm.SetTranslateOnly(world_pos)
+        local_mat = desired_wtm * parent_wtm_inv
+        local_pos = local_mat.ExtractTranslation()
+        local_quat = local_mat.ExtractRotation().GetQuat()
+
+        tr_attr = prim.GetAttribute("xformOp:translate")
+        or_attr = prim.GetAttribute("xformOp:orient")
+        if tr_attr.IsValid():
+            tr_attr.Set(Gf.Vec3d(local_pos[0], local_pos[1], local_pos[2]))
+        if or_attr.IsValid():
+            if "quatf" in str(or_attr.GetTypeName()).lower():
+                or_attr.Set(Gf.Quatf(local_quat.GetReal(),
+                                     local_quat.GetImaginary()[0],
+                                     local_quat.GetImaginary()[1],
+                                     local_quat.GetImaginary()[2]))
+            else:
+                or_attr.Set(local_quat)
+        if has_fabric:
+            import usdrt
+            from usdrt import Gf as _RtGf
+            fstage = usdrt.Usd.Stage.Attach(omni.usd.get_context().get_stage_id())
+            fprim = fstage.GetPrimAtPath(str(prim.GetPath()))
+            if fprim and fprim.IsValid():
+                ftr = fprim.GetAttribute("xformOp:translate")
+                forn = fprim.GetAttribute("xformOp:orient")
+                if ftr.IsValid():
+                    ftr.Set(_RtGf.Vec3d(local_pos[0], local_pos[1], local_pos[2]))
+                if forn.IsValid():
+                    forn.Set(_RtGf.Quatf(local_quat.GetReal(),
+                                         local_quat.GetImaginary()[0],
+                                         local_quat.GetImaginary()[1],
+                                         local_quat.GetImaginary()[2]))
+
     def _install_held_connector_tcp_tracker(self, held_path: str) -> None:
         """Install a physics-step callback that pins held_path to gripper_tcp pose.
 
@@ -2123,124 +2195,59 @@ class DigitalTwin(omni.ext.IExt):
         matches Gazebo's CablePlugin behavior (orientation matters as much as
         position — the plug must point INTO the port for insertion realism).
 
-        Idempotent: removes any prior subscription before installing a new one.
-        Light per-tick cost: one XformCache lookup + one Transform compose +
-        translate/orient Set per tick. Safe alongside parity publishers and
-        AicControllerLoop physics-step callbacks.
+        Per-tick: compute desired world pose = TCP_world ∘ rel_offset, then
+        delegate to _apply_kinematic_world_pose for the USD+Fabric write.
+
+        Idempotent: tears down any prior subscription on re-install.
         """
         import omni.physx
         from pxr import UsdGeom, Gf
 
-        # Remove prior subscription if any (e.g. on trial reload).
         prev = getattr(self, "_held_connector_sub", None)
         if prev is not None:
-            try:
-                prev.unsubscribe()
-            except Exception:
-                pass
+            try: prev.unsubscribe()
+            except Exception: pass
             self._held_connector_sub = None
 
         cable_type = getattr(self, "_held_connector_cable_type", "sfp_sc_cable")
         offset = self._HELD_CONNECTOR_POSE_OFFSETS.get(
-            cable_type, self._HELD_CONNECTOR_POSE_OFFSETS["sfp_sc_cable"]
-        )
+            cable_type, self._HELD_CONNECTOR_POSE_OFFSETS["sfp_sc_cable"])
         rel_quat_xyzw = offset["rel_quat_xyzw"]
         rel_xyz_world = offset["rel_translate_world"]
-        # Gf.Quatd takes (real, imaginary) = (w, x, y, z)
+        # Gf.Quatd is (real, imaginary) = (w, x, y, z)
         rel_quat = Gf.Quatd(rel_quat_xyzw[3], rel_quat_xyzw[0],
                             rel_quat_xyzw[1], rel_quat_xyzw[2])
-
-        # Fabric (usdrt) provides the runtime scene representation that PhysX
-        # writes back to each step. Writing directly to USD attributes during
-        # a physics step is overridden by PhysX's Fabric writeback for any
-        # body with RigidBodyAPI (even kinematic). Write to Fabric instead so
-        # the tracker's pose wins.
-        try:
-            import usdrt  # noqa: F401 — import probe (raises if unavailable)
-            from usdrt import Gf as RtGf  # noqa: F401
-            has_fabric = True
-        except Exception as exc:
-            print(f"[AIC-DT] tcp-track-held-connector: Fabric (usdrt) unavailable, "
-                  f"falling back to USD-level Set: {exc!r}")
-            has_fabric = False
-            RtGf = None  # type: ignore[assignment]
+        rel_rot_mat = Gf.Matrix3d().SetRotate(rel_quat)
+        has_fabric = self._probe_usdrt()
+        TCP_PATH = "/World/UR5e/aic_unified_robot/gripper_tcp"
 
         def _on_step(dt: float) -> None:
             try:
                 stage = omni.usd.get_context().get_stage()
                 if stage is None: return
                 held = stage.GetPrimAtPath(held_path)
-                tcp = stage.GetPrimAtPath("/World/UR5e/aic_unified_robot/gripper_tcp")
+                tcp = stage.GetPrimAtPath(TCP_PATH)
                 if not (held and held.IsValid() and tcp and tcp.IsValid()):
                     return
-                xc = UsdGeom.XformCache()
-                # Build desired held world transform (matrix, not quat — avoids
-                # scale-shear discrepancies when parent has scale).
-                tcp_wtm = xc.GetLocalToWorldTransform(tcp)
+                # OpenUSD/Gf row-vector convention: LEFT matrix is more local.
+                # Desired held world rotation = rel applied in TCP's frame
+                # then composed through TCP to world; in row-vector form
+                # held_rot = rel * tcp (per GPT diagnosis 2026-05-17, citing
+                # OpenUSD GfMatrix4d row-vector convention + UsdGeomXformable
+                # xform-op ordering docs).
+                tcp_wtm = UsdGeom.XformCache().GetLocalToWorldTransform(tcp)
                 tcp_world_pos = tcp_wtm.ExtractTranslation()
-                tcp_rot_mat = tcp_wtm.ExtractRotationMatrix()
-                rel_rot_mat = Gf.Matrix3d().SetRotate(rel_quat)
-                # OpenUSD/Gf uses ROW-vector convention: the LEFT matrix is more
-                # local in composition. Desired held world rotation = TCP world
-                # rotation followed by the cable-asset rel rotation; in row-vector
-                # math the rel matrix must go on the LEFT of TCP.
-                # (Per GPT diagnosis 2026-05-17 via /ask-gpt — citing OpenUSD
-                # GfMatrix4d row-vector convention + UsdGeomXformable xform-op
-                # ordering docs.)
-                held_rot_mat = rel_rot_mat * tcp_rot_mat
-                held_world_pos = Gf.Vec3d(tcp_world_pos[0] + rel_xyz_world[0],
-                                           tcp_world_pos[1] + rel_xyz_world[1],
-                                           tcp_world_pos[2] + rel_xyz_world[2])
-                # Convert held world → held local via parent inverse.
-                parent_wtm = xc.GetLocalToWorldTransform(held.GetParent())
-                parent_wtm_inv = parent_wtm.GetInverse()
-                held_wtm = Gf.Matrix4d().SetIdentity()
-                held_wtm.SetRotateOnly(held_rot_mat)
-                held_wtm.SetTranslateOnly(held_world_pos)
-                held_local_mat = held_wtm * parent_wtm_inv
-                local_pos = held_local_mat.ExtractTranslation()
-                local_rot_quat = held_local_mat.ExtractRotation().GetQuat()
-
-                # Write to BOTH USD and Fabric. Hydra renderer + omni.physx
-                # writeback can read from either, depending on context; writing
-                # both removes the ambiguity. Without USD-level write, the
-                # renderer (which composes xformOps through USD's stage delegate
-                # in some configurations) would see the on-disk value.
-                tr_attr = held.GetAttribute("xformOp:translate")
-                or_attr = held.GetAttribute("xformOp:orient")
-                if tr_attr.IsValid():
-                    tr_attr.Set(Gf.Vec3d(local_pos[0], local_pos[1], local_pos[2]))
-                if or_attr.IsValid():
-                    type_str = str(or_attr.GetTypeName()).lower()
-                    if "quatf" in type_str:
-                        or_attr.Set(Gf.Quatf(local_rot_quat.GetReal(),
-                                             local_rot_quat.GetImaginary()[0],
-                                             local_rot_quat.GetImaginary()[1],
-                                             local_rot_quat.GetImaginary()[2]))
-                    else:
-                        or_attr.Set(local_rot_quat)
-                if has_fabric:
-                    import usdrt
-                    from usdrt import Gf as _RtGf
-                    fstage = usdrt.Usd.Stage.Attach(
-                        omni.usd.get_context().get_stage_id()
-                    )
-                    fprim = fstage.GetPrimAtPath(held_path)
-                    if fprim and fprim.IsValid():
-                        ftr = fprim.GetAttribute("xformOp:translate")
-                        forn = fprim.GetAttribute("xformOp:orient")
-                        if ftr.IsValid():
-                            ftr.Set(_RtGf.Vec3d(local_pos[0], local_pos[1], local_pos[2]))
-                        if forn.IsValid():
-                            forn.Set(_RtGf.Quatf(local_rot_quat.GetReal(),
-                                                 local_rot_quat.GetImaginary()[0],
-                                                 local_rot_quat.GetImaginary()[1],
-                                                 local_rot_quat.GetImaginary()[2]))
+                held_rot_mat = rel_rot_mat * tcp_wtm.ExtractRotationMatrix()
+                held_world_pos = Gf.Vec3d(
+                    tcp_world_pos[0] + rel_xyz_world[0],
+                    tcp_world_pos[1] + rel_xyz_world[1],
+                    tcp_world_pos[2] + rel_xyz_world[2])
+                held_world_quat = Gf.Quatd(held_rot_mat.ExtractRotation().GetQuat())
+                self._apply_kinematic_world_pose(
+                    held, held_world_pos, held_world_quat, has_fabric=has_fabric)
             except Exception as exc:
-                # One bad tick should never crash the sim, but a silent
-                # except can hide a failed Set (GPT pose-diagnosis 2026-05-17).
-                # Log once per session to surface tracker errors during
-                # diagnostics; subsequent ticks stay silent.
+                # Log once per session — surface the first error, then stay
+                # silent so the sim isn't spammed.
                 if not getattr(self, "_tracker_error_logged", False):
                     self._tracker_error_logged = True
                     import traceback
@@ -2277,19 +2284,15 @@ class DigitalTwin(omni.ext.IExt):
     def _install_far_connector_world_tracker(self, far_path: str, cable_type: str) -> None:
         """Pin the far-end connector to its Gazebo-truth world pose every tick.
 
-        The far connector has physics:kinematicEnabled=True per the Layer 2
-        author. Setting its xformOp:translate/orient via USD + Fabric every
-        tick keeps it locked at the world pose Gazebo's CablePlugin produces
-        for this trial. Rope link_0 / link_20 (whichever is anchored to the
-        far connector via fixedJoint with identity localRot0) follows along.
+        Per-tick: read constant (world_pos, world_quat) from
+        _FAR_CONNECTOR_WORLD_POSE[cable_type], delegate to
+        _apply_kinematic_world_pose for the USD+Fabric write.
 
-        Args:
-          far_path: Prim path of the far-end connector visual.
-          cable_type: Key into _FAR_CONNECTOR_WORLD_POSE.
+        Idempotent: tears down any prior subscription on re-install.
         """
-        from pxr import UsdGeom, Gf
+        import omni.physx
+        from pxr import Gf
 
-        # Tear down any prior subscription (idempotent under trial reload)
         prev = getattr(self, "_far_connector_sub", None)
         if prev is not None:
             try: prev.unsubscribe()
@@ -2305,14 +2308,7 @@ class DigitalTwin(omni.ext.IExt):
         qx, qy, qz, qw = spec["world_quat_xyzw"]
         world_quat = Gf.Quatd(qw, qx, qy, qz)
         world_pos = Gf.Vec3d(wx, wy, wz)
-
-        try:
-            import usdrt
-            from usdrt import Gf as RtGf
-            has_fabric = True
-        except Exception:
-            has_fabric = False
-            RtGf = None  # type: ignore[assignment]
+        has_fabric = self._probe_usdrt()
 
         def _on_step(dt: float) -> None:
             try:
@@ -2320,47 +2316,8 @@ class DigitalTwin(omni.ext.IExt):
                 if stage is None: return
                 prim = stage.GetPrimAtPath(far_path)
                 if not (prim and prim.IsValid()): return
-                xc = UsdGeom.XformCache()
-                parent = prim.GetParent()
-                parent_wtm = xc.GetLocalToWorldTransform(parent)
-                # Compose desired world transform (matrix), then convert to
-                # local via parent_inverse — same pattern as the held tracker.
-                desired_wtm = Gf.Matrix4d().SetIdentity()
-                desired_wtm.SetRotateOnly(Gf.Matrix3d().SetRotate(world_quat))
-                desired_wtm.SetTranslateOnly(world_pos)
-                local_mat = desired_wtm * parent_wtm.GetInverse()
-                local_pos = local_mat.ExtractTranslation()
-                local_quat = local_mat.ExtractRotation().GetQuat()
-
-                tr_attr = prim.GetAttribute("xformOp:translate")
-                or_attr = prim.GetAttribute("xformOp:orient")
-                if tr_attr.IsValid():
-                    tr_attr.Set(Gf.Vec3d(local_pos[0], local_pos[1], local_pos[2]))
-                if or_attr.IsValid():
-                    type_str = str(or_attr.GetTypeName()).lower()
-                    if "quatf" in type_str:
-                        or_attr.Set(Gf.Quatf(local_quat.GetReal(),
-                                             local_quat.GetImaginary()[0],
-                                             local_quat.GetImaginary()[1],
-                                             local_quat.GetImaginary()[2]))
-                    else:
-                        or_attr.Set(local_quat)
-                if has_fabric:
-                    import usdrt
-                    from usdrt import Gf as _RtGf
-                    fstage = usdrt.Usd.Stage.Attach(
-                        omni.usd.get_context().get_stage_id())
-                    fprim = fstage.GetPrimAtPath(far_path)
-                    if fprim and fprim.IsValid():
-                        ftr = fprim.GetAttribute("xformOp:translate")
-                        forn = fprim.GetAttribute("xformOp:orient")
-                        if ftr.IsValid():
-                            ftr.Set(_RtGf.Vec3d(local_pos[0], local_pos[1], local_pos[2]))
-                        if forn.IsValid():
-                            forn.Set(_RtGf.Quatf(local_quat.GetReal(),
-                                                 local_quat.GetImaginary()[0],
-                                                 local_quat.GetImaginary()[1],
-                                                 local_quat.GetImaginary()[2]))
+                self._apply_kinematic_world_pose(
+                    prim, world_pos, world_quat, has_fabric=has_fabric)
             except Exception as exc:
                 if not getattr(self, "_far_tracker_error_logged", False):
                     self._far_tracker_error_logged = True
