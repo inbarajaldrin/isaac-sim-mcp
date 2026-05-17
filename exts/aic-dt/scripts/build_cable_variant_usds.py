@@ -281,6 +281,42 @@ def compose_orient_with_yaw(base_orient, yaw_radians: float):
     return base_orient * yaw_correction
 
 
+def author_kinematic_on_connectors(stage, prim_paths: Tuple[str, ...]) -> dict:
+    """Author physics:kinematicEnabled=True on each given prim.
+
+    PhysX treats kinematic rigid bodies as scripted — they stay at the authored
+    pose, no drift, no integration. Required for the reversed cable variant
+    because the connector visuals (sfp_module_visual + sc_plug_visual) are
+    authored as free-floating rigid bodies with mass=0; without the kinematic
+    flag, PhysX reads the authored translate as INITIAL position at spawn then
+    drifts them toward whichever rope link they spawn near. Layer 1 end-anchor
+    authoring puts them at the right initial pose; this is the Layer 2 fix
+    that keeps them there.
+
+    Applies RigidBodyAPI defensively (idempotent if already applied) before
+    setting the attribute, so the call works whether or not the source USD
+    already carries the API. Returns {prim_path: final_value} for verification.
+    """
+    from pxr import Sdf, UsdPhysics
+
+    results = {}
+    for prim_path in prim_paths:
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            raise ValueError(f"Prim not found: {prim_path}")
+        UsdPhysics.RigidBodyAPI.Apply(prim)  # idempotent
+        attr = prim.GetAttribute("physics:kinematicEnabled")
+        if not attr.IsValid():
+            attr = prim.CreateAttribute(
+                "physics:kinematicEnabled", Sdf.ValueTypeNames.Bool
+            )
+        attr.Set(True)
+        results[prim_path] = attr.Get()
+        print(f"[author_kinematic_on_connectors] {prim_path}: "
+              f"physics:kinematicEnabled = {results[prim_path]}")
+    return results
+
+
 def apply_end_anchor_reversal(stage, gripper_end_path: str, far_end_path: str) -> dict:
     """Move each connector subtree to the opposite end using end-anchor TRS.
 
@@ -363,6 +399,10 @@ def build_cable_variant(source_usd: str, dest_usd: str, variant: str,
         raise RuntimeError(f"Failed to open {dest_usd} for editing")
 
     final_trs = apply_end_anchor_reversal(stage, connector_a, connector_b)
+    # Layer 2 fix: pin the connector visuals to their authored end-anchor poses
+    # by marking them kinematic. Without this, PhysX drifts the free rigid
+    # bodies (mass=0) toward the nearest rope link and undoes Layer 1's swap.
+    author_kinematic_on_connectors(stage, (connector_a, connector_b))
     stage.GetRootLayer().Save()
     print(f"[build_cable_variant] applied end-anchor reversal on:\n"
           f"                        {connector_a}\n"
