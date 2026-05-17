@@ -444,6 +444,102 @@ def remove_rope_end_fixed_joints(stage) -> list:
     return removed
 
 
+def author_gripper_prismatic_joints(stage) -> dict:
+    """Convert the Robotiq Hand-E finger joints from PhysicsFixedJoint to
+    PhysicsPrismaticJoint with DriveAPI + symmetric mirror, so the gripper
+    width can adapt per trial instead of being locked at 17.3mm.
+
+    Source-of-truth: ~/Documents/aic/aic_description/urdf/ur_gz.urdf.xacro
+    + robotiq_hande_macro.xacro:
+      - left_finger_joint  prismatic axis=(1,0,0)  lower=0  upper=0.025
+      - right_finger_joint prismatic axis=(-1,0,0) lower=0  upper=0.025
+                           <mimic joint=left multiplier=1 offset=0/>
+      - grip_pos_min=0.0  grip_pos_max=0.025  grip_vel_max=0.05
+      - grip_effort_max=130
+      - gripper_initial_pos default=0.00655 (some trials 0.0073)
+
+    USD authoring decisions:
+      - axis token is X for BOTH joints (USD PrismaticJoint axis is a
+        token, no sign).
+      - Right joint gets localRot0 = 180°-about-Z so positive joint coord
+        in its local frame maps to -X in body0 (gripper_hande_base_link)
+        frame. URDF's axis=(-1,0,0) on right = our localRot0 flip.
+      - Limits 0..0.025 on both joints per URDF.
+      - DriveAPI("linear") with target=initial_pos, stiffness=10000,
+        damping=1000, maxForce=130 (effort_max). Stiffness chosen for
+        snappy ~50Hz position response; tune at runtime via gripper_command
+        MCP atom.
+      - existing localPos0 (≈5mm for left, ≈-12mm for right) preserved —
+        represents URDF authoring offset already encoded in the unified-
+        robot USD. Drive target = 0 then puts each finger at the
+        URDF-authored neutral pose; positive target separates them along
+        the mirror axes.
+
+    Note: URDF mimic semantics (right follows left) are NOT a USD/PhysX
+    concept — must be enforced at runtime by writing both drive targets
+    equally. The gripper_command MCP atom in extension.py owns this.
+
+    Returns dict mapping joint path → {'type': original_type, 'axis': ...}.
+    """
+    from pxr import UsdPhysics, Gf, Sdf
+
+    INITIAL_POS = 0.00655
+    LOWER = 0.0
+    UPPER = 0.025
+    STIFFNESS = 10000.0
+    DAMPING = 1000.0
+    MAX_FORCE = 130.0
+
+    # 180° about Z in Gf.Quatf: (w, x, y, z) = (0, 0, 0, 1)
+    flip_z_quatf = Gf.Quatf(0.0, Gf.Vec3f(0.0, 0.0, 1.0))
+
+    results = {}
+    for joint_path, flip_axis in (
+        ("/World/aic_unified_robot/joints/gripper_left_finger_joint", False),
+        ("/World/aic_unified_robot/joints/gripper_right_finger_joint", True),
+    ):
+        joint = stage.GetPrimAtPath(joint_path)
+        if not joint.IsValid():
+            print(f"[author_gripper_prismatic_joints] joint not found: {joint_path}")
+            continue
+        orig_type = str(joint.GetTypeName())
+        joint.SetTypeName("PhysicsPrismaticJoint")
+
+        prismatic = UsdPhysics.PrismaticJoint(joint)
+        prismatic.CreateAxisAttr("X")
+        prismatic.CreateLowerLimitAttr(LOWER)
+        prismatic.CreateUpperLimitAttr(UPPER)
+
+        if flip_axis:
+            # Right finger: rotate joint frame 180° about Z so positive
+            # joint coord = -X motion in body0 frame (matches URDF axis=(-1,0,0)).
+            rot_attr = joint.GetAttribute("physics:localRot0")
+            if rot_attr.IsValid():
+                rot_attr.Set(flip_z_quatf)
+            else:
+                joint.CreateAttribute(
+                    "physics:localRot0", Sdf.ValueTypeNames.Quatf
+                ).Set(flip_z_quatf)
+
+        drive = UsdPhysics.DriveAPI.Apply(joint, "linear")
+        drive.CreateTargetPositionAttr(INITIAL_POS)
+        drive.CreateStiffnessAttr(STIFFNESS)
+        drive.CreateDampingAttr(DAMPING)
+        drive.CreateMaxForceAttr(MAX_FORCE)
+
+        results[joint_path] = {
+            "orig_type": orig_type,
+            "axis": "X",
+            "flip_localRot0_180Z": flip_axis,
+            "limits": (LOWER, UPPER),
+            "drive_target": INITIAL_POS,
+        }
+        print(f"[author_gripper_prismatic_joints] {joint_path}: "
+              f"{orig_type} → PhysicsPrismaticJoint, axis=X, "
+              f"flip={flip_axis}, limits=({LOWER},{UPPER}), target={INITIAL_POS}")
+    return results
+
+
 def bind_sc_plug_dodgerblue_material(stage, plug_path: str,
                                        vendored_sc_plug_usd_rel: str) -> bool:
     """Reference the vendored SC Plug USD's Looks scope into the cable USD's
@@ -659,6 +755,10 @@ def build_cable_variant(source_usd: str, dest_usd: str, variant: str,
         stage, connector_b,
         "../assets/SC Plug/sc_plug_visual.usd",
     )
+    # Gripper Hand-E 1-DOF prismatic conversion: both finger joints become
+    # PhysicsPrismaticJoint + DriveAPI so the gripper width can vary per
+    # trial (URDF mimic at runtime — extension.py writes both drive targets).
+    author_gripper_prismatic_joints(stage)
 
     # With rope-end joints gone, the reversed variant no longer needs a
     # joint-endpoint swap — there is nothing to swap. The "which connector at
