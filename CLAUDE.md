@@ -1,55 +1,12 @@
 # isaac-sim-mcp / aic-dt — Claude Code on-ramp
 
-> ## ⛔ AUTONOMOUS M1 MODE — ACTIVE UNTIL MILESTONE 1 SHIPS
->
-> **Marker file: `.planning/.autonomous_m1_active`** (delete to disable). When this file exists:
->
-> 1. **NEVER stop to ask the user permission to fix a bug.** If you encounter a bug — fix it, commit it, move on. The user authorized continuous autonomous execution on 2026-05-05: *"fix any bug as you come across them and continue till the end of milestone 1 like i asked without stopping in between"*.
-> 2. **Phase order: Phase 2 (close runtime gaps) → Phase 3 (cable physics + object TF) → Phase 4 (trial loader + E2E).** Move forward as each phase closes.
-> 3. **Don't ask "do you want me to ...?" or "should I proceed?"** — just proceed. Only stop for HARD blockers: sudo password needed, GPU offline, fundamental architectural ambiguity that contradicts PROJECT.md, OR M1 has shipped (every `aic_engine sample_config.yaml` trial passes against Isaac Sim).
-> 4. **Skill use is mandatory** for any Isaac Sim API question — invoke `isaac-sim-extension-dev` and `nvidia-suite-docs` BEFORE guessing from training data (they evolve monthly; cached LLM knowledge is routinely stale).
-> 5. **Operating discipline:**
->    - Snapshot the cache after any successful `quick_start` (`prime_usd_cache.py snapshot`).
->    - Commit fixes atomically with descriptive messages (NO `Co-Authored-By` line per the global CLAUDE.md).
->    - Update `STATE.md` after every phase close.
->    - Use `TaskCreate`/`TaskUpdate` to track in-flight work.
-> 6. **When context fills + `/compact` triggers:** the `PreCompact` hook auto-dumps state to `.planning/.precompact_snapshot.txt`. The `SessionStart` hook auto-prints this autonomous-mode reminder. After compact, you bootstrap by reading (in order):
->    - This block (top of CLAUDE.md) — restate the autonomous-mode policy.
->    - `.planning/STATE.md` — current phase, last activity, blockers.
->    - `.planning/HANDOFF.json` — structured next_action + completed_tasks + decisions.
->    - `.planning/.precompact_snapshot.txt` — git status + recent commits + Isaac Sim status at compact time.
->    - Then RESUME — do not summarize back to the user, do not re-confirm; just continue.
-> 7. **`Stop` hook is configured to nudge you to keep going** if you idle. To genuinely pause: `touch .planning/.user_pause` (then the Stop hook leaves you alone). To genuinely complete: `touch .planning/.m1_shipped`.
-> 8. **Hard blockers go in `.planning/HANDOFF.json` `blockers` field**, then `touch .planning/.user_pause`, then stop. The user will see the blocker and unblock you.
->
-> **Do not delete this block** until M1 ships. The hooks (`.claude/settings.json` + `.claude/scripts/*.sh`) and this block work together — both must be removed for normal mode.
-
 This repo hosts Isaac Sim Kit extensions that expose MCP socket servers for agent-driven control of robot digital twins. Active development focuses on **`exts/aic-dt/`** — the digital twin for the AIC (AI for Industry Challenge) cable-insertion task. Other extensions (`ur5e-dt`, `soarm101-dt`) are sibling reference implementations.
 
-> ## ⛔ MANDATORY UNTIL M1 SHIPS — Skill invocation before guessing
+> ## ⛔ Operating-policy pointers
 >
-> **Until milestone M1 (`/sample_config.yaml` trials pass under CheatCode against Isaac Sim) is closed, ANY task that touches Isaac Sim 5.0 / OpenUSD / OmniGraph / Replicator / Warp / Isaac Lab / Isaac ROS / aic-dt extension internals MUST invoke the relevant skill BEFORE proposing a fix or writing code. No exceptions.**
->
-> - **`isaac-sim-extension-dev`** — first stop for anything aic-dt / extension lifecycle / MCP socket / USD cache / launch path. Encodes hard-won project knowledge (cooking deadlock, post-play wedge, real-Kit-log location, prim-path bug history, sibling extensions).
-> - **`nvidia-suite-docs`** — first stop for live NVIDIA docs (Isaac Sim 5.0 API surface, OpenUSD authoring, OmniGraph node behavior, articulation drives, sensors, RTX, Replicator, Isaac Lab, Isaac ROS, Warp). Routes to sub-skills + fetches official docs and forum threads. **Use this BEFORE relying on training-data memory of Isaac Sim 4.x APIs — APIs change every release and cached knowledge is routinely stale.**
->
-> Both skills apply to ALL agents: research, planning, execution, debugging, verification, code review. If you find yourself "pretty sure" about an Isaac Sim or OpenUSD API behavior without having opened either skill in the current session, STOP and invoke them. The cost of one Skill invocation (~2 file reads) is small; the cost of a wrong API guess is hours of debug.
->
-> **Common evidence this rule was violated:** "I know set_joint_positions/apply_action/SetActive/GetReferences works like X" without a citation to live docs. "OGN node should be at this prim path" without verifying via `omni.usd.get_context().get_stage()`. Patches that revert because the actual API contract is different. If a debug session passes the 1-hour mark on an Isaac-Sim-API question, that's a signal to back up and consult `nvidia-suite-docs`.
-
-> **Use the `isaac-sim-extension-dev` skill first** for anything Isaac Sim related — extension lifecycle, USD/physics, action graphs, MCP socket protocol, troubleshooting, the canonical asset workflow. The skill encodes hard-won knowledge (cooking deadlock workaround, post-play wedge anti-pattern, real-Kit-log location, etc.) that is the source of truth when this file goes stale.
-
-> **Canonical references for ALL agents — research, planning, execution, debugging, verification — not just research phases.** When any GSD agent (`gsd-phase-researcher`, `gsd-planner`, `gsd-executor`, `gsd-debugger`, `gsd-verifier`, `gsd-plan-checker`) encounters questions about the NVIDIA stack — Isaac Sim 5.0 API surface, OpenUSD authoring (composition / references / sublayers / MDL / Pixar Usd Python API), Omniverse Kit (extension lifecycle, settings, RTX, materials), `isaacsim.ros2.bridge` OmniGraph nodes, articulation drives, sensors, rendering, Replicator, Isaac Lab, Isaac ROS, Warp — they MUST consult `~/.claude/skills/nvidia-suite-docs/SKILL.md` (the meta-router for live NVIDIA docs) **before** guessing from training data. The NVIDIA stack evolves monthly and cached LLM knowledge is routinely stale or wrong.
->
-> **For project-specific knowledge** (extension patterns in this repo, cache management discipline, MCP socket protocol, prim-path bug history, cable physics workaround, postload launcher, sibling extensions `ur5e-dt`/`soarm101-dt`), consult `~/.claude/skills/isaac-sim-extension-dev/SKILL.md`.
->
-> **Execution-time recovery sequence** (when a task fails — USD reference unresolved, OmniGraph node not found, articulation drives don't apply, MDL warnings, sim wedges post-play, MCP socket times out, etc.):
-> 1. Read the **real Kit log** at `~/.nvidia-omniverse/logs/Kit/"Isaac-Sim Full"/5.0/kit_*.log` for actual error text — staleness in this log = main loop blocked.
-> 2. Consult `nvidia-suite-docs` skill for the relevant API surface (it routes to the right sub-skill — Isaac Sim, OpenUSD, OmniGraph, etc. — and fetches live docs / forum threads).
-> 3. Consult `isaac-sim-extension-dev` skill for project-specific gotchas and the cache-management discipline (`prime_usd_cache.py status` first when `quick_start` hangs).
-> 4. Only THEN propose a fix.
->
-> Do NOT guess from training-data assumptions about Isaac Sim 4.x APIs, deprecated OmniGraph node IDs, or generic Omniverse Python patterns — they are routinely wrong for 5.0. Live docs > cached knowledge, every time.
+> - **Autonomous M1 mode + sudo policy:** `.planning/AUTONOMOUS_MODE.md` (marker file `.planning/.autonomous_m1_active`; both that and `.planning/.m1_shipped` exist — block kept active because Plans 04-04/04-05 remain blocked on the kilted↔humble RMW issue in `HANDOFF.json`). The `SessionStart` hook auto-reads it.
+> - **Skill use is mandatory** for any Isaac Sim 5.0 / OpenUSD / OmniGraph / Replicator / Warp / Isaac Lab / Isaac ROS API question — invoke `isaac-sim-extension-dev` (project gotchas, cache discipline, prim-path history, postload launcher) and `nvidia-suite-docs` (live NVIDIA docs) BEFORE guessing from training data. APIs evolve monthly; cached LLM knowledge is routinely stale. Execution-time recovery: real Kit log first, then `nvidia-suite-docs`, then `isaac-sim-extension-dev`, then propose a fix.
+> - **Privileged commands (sudo) are passwordless** for `aaugus11` via `/etc/sudoers.d/aaugus11-nopasswd` (installed 2026-05-17). Call `sudo <cmd>` directly. Discipline: refuse-destructive, log cross-repo changes, prefer non-TTY flags. Detail in the user-global `~/.claude/CLAUDE.md`.
 
 ## Where to look first
 
@@ -60,6 +17,10 @@ This repo hosts Isaac Sim Kit extensions that expose MCP socket servers for agen
 | See phased plan + per-phase success criteria | `.planning/ROADMAP.md` |
 | See current execution state | `.planning/STATE.md` |
 | Inventory the extension's MCP tools / UI | `MCP_TOOL_REGISTRY` dict at the top of `exts/aic-dt/aic_dt/extension.py` |
+| Author a thin USD wrapper around a new GLB asset (socket / plug / mount) | `exts/aic-dt/scripts/build_thin_glb_usds.py` — vendors GLB from `~/Documents/aic/aic_assets/models/<X>/` + writes thin USD that `AddReference`s the GLB; gltf SDF plugin handles axis / units / PBR (incl. multi-primitive `UsdGeomSubset` partitions) at Kit load time |
+| Patch the cable USD's connector visuals + materials + kinematic flags + finger joints | `exts/aic-dt/scripts/build_cable_variant_usds.py` — `build_cable_variant()` is the entry; emits both `aic_unified_robot_cable_sdf.usd` (identity) and `…_reversed.usd` (cable_type swap). Helper `replace_plug_subtree_with_glb_refs()` is the canonical way to wire a thin GLB-USD into a kinematic-tracker-owned parent |
+| Build / source the Python 3.11 ROS 2 Humble workspace that rclpy parity publishers need | `exts/aic-dt/docs/rclpy-setup.md` — clones NVIDIA's `IsaacSim-ros_workspaces` at the `IsaacSim-5.0.0-full` tag, builds in Docker, appends `local_setup.bash` + `LD_LIBRARY_PATH` into `~/env_isaaclab/bin/activate`. Sibling extensions have their own copy: `exts/ur5e-dt/docs/rclpy-setup.md`. Verify with `exts/aic-dt/scripts/verify_kilted_humble_interop.sh` |
+| Isaac Sim hangs / freezes during `quick_start` (run freeze) | First: `prime_usd_cache.py status` — cold cache is the #1 cause (see the "Cache state matters" section in this file). Second: real Kit log path (`.planning/LAUNCH_REFERENCE.md` § Real Kit log) — staleness in the log = main loop blocked. Historical cooking-deadlock + post-play-wedge background lives in the `isaac-sim-extension-dev` skill's "Cache Management" section |
 | Debug Isaac Sim launch / hang / asset issues | invoke the `isaac-sim-extension-dev` skill |
 
 ---
@@ -134,99 +95,33 @@ There is one tool for all cache management. Use it before debugging anything els
 
 The full background (why cold-cache cooking is broken, the cooking-deadlock + post-play-wedge pair, the bake_cable_fix.py diagnostic trail) lives in the `isaac-sim-extension-dev` skill — see its "Cache Management" section.
 
-### Verified working flow (re-confirmed 2026-05-01)
+### Reference details (env vars, Kit log path, MCP socket protocol, verified-working recipe, streaming wrapper)
 
-```bash
-# 1. Confirm cache is healthy
-du -sh ~/.cache/ov/DerivedDataCache       # should be ≥100M
+Moved to `.planning/LAUNCH_REFERENCE.md`. Key facts that need to stay top-of-mind:
+- **`ROS_DOMAIN_ID=7` is mandatory** for any Isaac Sim launch + smoke test — the user has a live UR5e driver on domain 0 that competes on `/joint_states` and breaks Phase 1 smoke (discovered 2026-05-05). Always wrap.
+- **Real Kit log:** `~/.nvidia-omniverse/logs/Kit/"Isaac-Sim Full"/5.0/kit_*.log`. Staleness = main loop blocked. Grep for `[MCP]`, `[py stdout]`, `Traceback`, `[AIC-DT]`.
+- **MCP socket protocol:** single JSON object in, single JSON object out over TCP (no framing). `json.loads` until the buffer parses. Code example in the reference file.
 
-# 2. Launch
-DISPLAY=${DISPLAY:-:0} bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch aic-dt
-# → "READY (10s)"
+### MCP command surface
 
-# 3. quick_start (returns in ~5s; sim is playing afterwards with 387 prims)
-python3 -c "
-import socket, json
-s = socket.socket(); s.settimeout(120)
-s.connect(('localhost', 8768))
-s.sendall(json.dumps({'type':'quick_start','params':{}}).encode())
-data = b''
-while True:
-    c = s.recv(8192)
-    if not c: break
-    data += c
-    try: json.loads(data.decode()); break
-    except: continue
-print(json.loads(data.decode())['result']['message'])
-"
-# Expected: "Quick start complete: AIC scene with UR5e, wrist cameras, task board objects, and simulation running."
+`MCP_TOOL_REGISTRY` at the top of `exts/aic-dt/aic_dt/extension.py` is the authoritative list — it rots faster than any prose summary. Handler bodies are `_cmd_<name>` methods on the `DigitalTwin` class. Quick orientation:
 
-# 4. (Iteration cycle: clear stage without restart)
-python3 ~/.claude/skills/isaac-sim-extension-dev/scripts/mcp_test.py 8768 new_stage
-# then re-run the quick_start block above
-```
+- **Lifecycle (always work):** `load_scene` (~0.3s), `play_scene` / `stop_scene` / `new_stage` (instant), `quick_start` (~5s warm cache → 387 prims, sim playing), `execute_python_code` (use `result = <value>`, not `print()`).
+- **Trial loading:** `load_trial(trial_key='trial_1'|'trial_2'|'trial_3', ground_truth=True)` — reads `~/Documents/aic/aic_engine/config/sample_config.yaml`, wipes stage, runs `load_scene` + `load_robot` + per-trial spawn atoms + cable wiring. Main quick-test path now that the trial loader is wired.
+- **Held-connector control:** `gripper_command(position=…)` writes both finger prismatic drives symmetrically (URDF mimic at write); `attach_cable_to_gripper` installs the per-tick TCP tracker for the held connector pose.
+- If `quick_start` hangs at `load_robot` → cache is almost certainly empty. See "Cache state matters" above. Restore first, debug second.
 
-### Streaming wrapper (currently broken for aic-dt)
+### Cable note (REVISED 2026-05-17)
 
-`~/bin/isaacsim` (interactive picker) calls `~/Documents/isaacsim-streaming/stream-local.sh --ext <name>`, which has a hardcoded `EXT_MCP_PORT` map for `soarm101-dt` (8767) and `ur5e-dt` (8766) but **does not yet include `aic-dt`** (8768). Running it for aic-dt errors with `unknown extension`. Either add `[aic-dt]=8768` to `EXT_MCP_PORT` in `stream-local.sh` or use one of the two paths above. Tracked as DX work for M1.
+The cable USD is built by `build_cable_variant_usds.py` from a vendored source into two variants: `aic_unified_robot_cable_sdf.usd` (identity) and `…_reversed.usd` (cable_type swap for trial_3-style configs). The 21-link rope chain is anchored at both ends via identity-`localRot0` `fixedJoint`/`fixedJoint2` to the two kinematic connector parents (`/World/cable/sc_plug_visual` and `/World/cable/sfp_module_visual`).
 
-### Environment variables
+**Held-connector pose:** owned by `_install_held_connector_tcp_tracker` (per-tick `xformOp:translate`/`orient` write to the held connector parent, composing TCP × cable_type-specific `rel_quat`). Far-end pose: owned by `_install_far_connector_world_tracker`. Both write USD + Fabric per the dedup'd `_apply_kinematic_world_pose` helper.
 
-| Var | Default | Purpose |
-|---|---|---|
-| `DISPLAY` | `:0` | X11 display for the Kit GUI window. Required. |
-| `AIC_DT_EXT_FOLDER` | `/home/aaugus11/Documents/isaac-sim-mcp/exts` | Override hardcoded ext folder in `launch_postload.py`. Set when this repo lives elsewhere. |
-| `MCP_CLIENT_OUTPUT_DIR` | unset | If set, the extension writes resources / saved scene state under `$MCP_CLIENT_OUTPUT_DIR/resources/`. Otherwise relative to `cwd`. |
-| `MCP_SERVER_PORT` | `8768` (in code) | Socket port. Hardcoded as a constant in `extension.py` — change there, not via env. |
-| `ROS_DOMAIN_ID` | **`7` (sim isolation)** | **MUST be set to 7 for Isaac Sim launch + smoke tests.** The user has a live UR5e ROS driver (`ur5e_with_rg2.launch.py` against `192.168.1.111`) running on the default domain 0 — its `joint_state_broadcaster` competes with Isaac Sim's `aic_dt_parity_publisher` on `/joint_states` and breaks Phase 1 smoke. Discovered 2026-05-05. Always wrap launches: `bash -c 'source ~/env_isaaclab/bin/activate && ROS_DOMAIN_ID=7 DISPLAY=${DISPLAY:-:0} bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch aic-dt'` and smoke tests: `ROS_DOMAIN_ID=7 python3 .../smoke_test_aic_*.py`. |
+**Plug visuals (b059074 + feb53b8):** `sc_plug_visual` / `sfp_module_visual` subtrees are replaced at build time by `replace_plug_subtree_with_glb_refs()` with thin-USD references to `assets/assets/{SC Plug,SFP Module,LC Plug}/*_visual.usd` (built by `build_thin_glb_usds.py`). Isaac Sim's gltf SDF plugin auto-synthesizes `UsdGeomSubset` partitions for multi-primitive GLB meshes — SFP body's `Body_005` mesh gets 6684 + 184 face subsets for Material_005 + Material_001 with no manual fallback needed.
 
-### Real Kit log (where the actual extension errors live)
+**Gripper width:** Hand-E fingers converted to `PhysicsPrismaticJoint` + `DriveAPI` (commit `3c1b754`); `gripper_command` MCP atom (`e5b4bee`) writes both targets symmetrically per URDF mimic.
 
-```
-~/.nvidia-omniverse/logs/Kit/"Isaac-Sim Full"/5.0/kit_*.log
-```
-
-The newest `kit_<timestamp>.log` is what to grep. Filter for `[MCP]`, `[py stdout]`, `Traceback`, and the `[AIC-DT]` print prefix the extension emits. **Staleness in this log = main loop blocked** (typical PhysX wedge symptom).
-
-### MCP socket protocol
-
-TCP, send a single JSON object, receive a single JSON object. No length prefix, no newline framing — server `json.loads` the buffer until it parses successfully.
-
-```python
-import socket, json
-s = socket.socket(); s.connect(("127.0.0.1", 8768)); s.settimeout(120)
-s.sendall(json.dumps({"type": "load_scene", "params": {}}).encode())
-buf = b""
-while True:
-    chunk = s.recv(16384)
-    if not chunk: break
-    buf += chunk
-    try: resp = json.loads(buf.decode()); break
-    except json.JSONDecodeError: continue
-print(resp); s.close()
-```
-
-Each MCP tool name + parameters lives in `MCP_TOOL_REGISTRY` (extension.py top). Handler bodies are `_cmd_<name>` methods on the `DigitalTwin` class.
-
-### Verified MCP commands (as of 2026-05-01)
-
-- `load_scene` — works, ~0.3s. Initializes physics scene, ground plane, AIC enclosure.
-- `play_scene` / `stop_scene` / `new_stage` — work, instant.
-- `quick_start` — **works in ~5s** when `DerivedDataCache` is populated. Result: 387 prims, sim playing (UR5e + Robotiq Hand-E + enclosure + 4 task-board objects + workspace camera). If it hangs at `load_robot` → see "Cache state matters" above; cache is almost certainly empty.
-- `execute_python_code` — works. Use `result = <value>` (not `print()`) to return data; arbitrary Omniverse APIs available.
-- Other atomic tools (`load_robot`, `setup_action_graph`, `setup_force_publisher`, `setup_wrist_cameras`, `add_objects`, `setup_pose_publisher`, `randomize_object_poses`, `randomize_lighting`, `save_scene_state`, `restore_scene_state`, `sync_real_poses`) — assume working as part of the `quick_start` chain; verify individually before relying. The current `objects_poses_sim` / `sync_real_poses` pair will be replaced with Gazebo-native topic names in Phase 1.
-
-### Cable note (REVISED 2026-05-03)
-
-`load_robot` still calls `cable_prim.SetActive(False)` on `/World/UR5e/cable` — but the underlying wedge problem **no longer reproduces under current launch conditions** (venv-activate sourced + warm `DerivedDataCache` + postload script when needed). Empirically verified 2026-05-03: with cable activated and the 21-segment chain at its as-authored mass=0/inertia=0 state, `play_scene` returns instantly, sim time advances at ~0.67x realtime, MCP latency stays <30ms, no main-thread block. Diagnostic probes are at `exts/aic-dt/scripts/probe_cable_wedge.py` and `probe_cable_behavior.py`.
-
-What changed since D-04 was written: the launch path got better (postload script for cold cache, snapshot-and-restore cache discipline, venv-activate before launch). The wedge that prior sessions chased was a symptom of cooking / cache state, not an inherent cable USD issue. **D-04's `SetActive(False)` is now a workaround for a problem that no longer manifests.**
-
-What's *still* broken about the cable: with `mass=0` / `inertia=0` on every link, PhysX trivially skips the bodies (treats them as kinematic). Probe shows zero motion across all sampled cable links over 2s of sim time. The cable is decorative until proper mass + inertia are authored.
-
-**SCENE-05 in REQUIREMENTS.md is therefore now a much smaller piece of work**: in-place USD edit (D-06 policy) to author non-zero mass/inertia on the cable links, then verify (a) cable bends under gravity, (b) the wedge stays gone under non-zero-mass conditions, (c) plug end can be grabbed by the gripper. NOT a research-gated cable-physics-strategy decision. Recovery scaffolding for the failed `bake_cable_fix.py` lives in chat session 29ca157f if needed; the simpler approach is just per-link `MassAPI.CreateDensityAttr(0.00005)` per NVIDIA's `RigidBodyRopeDemo.py` template.
-
-If the wedge does return when non-zero mass is authored: the prior session's bisection (29ca157f) showed the cable plays fine in bare Kit but not in the aic-dt extension's Kit env — that's an env-specific init-order issue to investigate (World setup order, post-play tick pumping, async event loop). Hybrid rigid-plug-with-visual-cable is the deepest fallback (D-04 evolution).
+**Still latent (SCENE-05, M2):** rope links have `mass=0` / `inertia=0` so PhysX treats them kinematically — the cable is decorative for dynamics (no swing/sag), but the held-connector tracker keeps the relevant plug visually + scoring-wise correct. The cooking-deadlock wedge that originally motivated `SetActive(False)` no longer reproduces under current launch conditions (venv-activate + warm cache + postload when needed); historical bisection in chat session 29ca157f if it returns.
 
 ---
 
@@ -324,101 +219,14 @@ This project is managed with `/gsd-*` slash commands. Standard flow:
 
 Workflow config (`.planning/config.json`): `mode=yolo`, `granularity=coarse`, `model_profile=quality`, research / plan-check / verifier all on, sequential execution. Change via `/gsd-settings`.
 
-### Phase scope is by surface, not capability
+### Operating policies (phase scope, forward-pull, closure discipline)
 
-This project deviates from default GSD phase discipline. **Before planning a phase, scan future-phase requirements** in `.planning/REQUIREMENTS.md` and `.planning/ROADMAP.md`. **Pull a future-phase requirement into the current phase if all of these are true:**
+Three rules that govern how phases scope, enforce, and close — each one is the "lesson learned" form of a real incident. Full text + enforcement specs in **`.planning/POLICIES.md`**. The TL;DRs:
 
-1. **Surface adjacency** — its primary edit surface (files, data structures, UI atoms) overlaps what the current phase is already touching.
-2. **Dependencies met** — no upstream research decision, prior phase, or external review is still pending for it.
-3. **No new research needed** — pulling it in doesn't expand the research scope or invalidate the discuss-phase decisions already locked.
-
-The cost of splitting requirements that share a surface is invisible at plan time but real at execution: editor focus, mental model, and review surface all get re-paid weeks later. Pulling forward avoids that re-entry tax.
-
-**When pulling forward:** edit `.planning/REQUIREMENTS.md` traceability table to remap the IDs to the current phase, edit `.planning/ROADMAP.md` to add them to the phase's `Requirements:` list, then re-run `/gsd-plan-phase N` (with `--research` if the new IDs need fresh investigation, otherwise without). The CONTEXT.md and existing research stay valid; the planner produces additional plans for the pulled-forward IDs.
-
-**When NOT to pull forward:**
-- The requirement is research-gated (e.g., cable physics in Phase 3 awaits `nvidia-suite-docs` evaluation of deformable / articulated / hybrid strategies — pulling it in fakes the decision).
-- Its surface is meaningfully separate (e.g., the `aic_controller` command-loop surface vs. the passive-publisher surface — they share `extension.py` but the architectural concerns are distinct).
-- The phase is already at its context budget (a planner returning `## PHASE SPLIT RECOMMENDED` is signal to NOT pull more in).
-
-This rule applies recursively: when planning Phase 2, scan Phase 3+ for the same overlap criteria; same for Phase 3 looking at Phase 4. The roadmap is the *plan*, not a *contract*.
-
-### Forward-pull enforcement — three checkpoints, not a guideline
-
-**Surfaced 2026-05-08:** the original forward-pull rule above was a soft guideline with no verification. Agents were supposed to scan future-phase requirements at planning time but no checker confirmed it happened. Result: Phase 1's extension.py surface was re-edited by Phase 2 + 3 + 4 without anyone scanning forward — wrist-camera prim-path bug (Gap C / 01-G05) and the articulation-DOF coupling that broke PARITY-09 in Phase 3 are both forward-pull misses.
-
-**Three enforcement points:**
-
-**(1) discuss-phase produces a `## Forward-pull scan` block in CONTEXT.md.** Mandatory section. For every future-phase whose requirements share a surface (file / data structure / UI atom) with the current phase, list:
-
-```
-| Future Req | Future Phase | Surface overlap | Decision | Rationale |
-|------------|--------------|-----------------|----------|-----------|
-| SCENE-05   | Phase 3      | extension.py::load_robot cable subtree | DEFERRED | Research-gated on nvidia-suite-docs; pulling forward fakes the strategy decision |
-| TEX-03     | Phase 1      | exts/aic-dt/docs/texture-sweep.md | PULLED  | Sweep-script surface adjacent; no research needed |
-```
-
-If no future-phase shares a surface with this one, write `## Forward-pull scan: NONE — no surface overlap with Phase N+1, N+2, ...` with explicit justification per future phase. The empty case must be defended, not silent.
-
-**(2) plan-checker verifies the block exists + is non-vacuous.** Before approving a phase plan, the plan-checker agent:
-- Confirms `## Forward-pull scan` exists in CONTEXT.md.
-- For each future phase, confirms either at least one entry OR explicit "no overlap" justification.
-- Cross-checks: for any future-phase requirement whose declared surface (per ROADMAP.md `Requirements:` block) matches a file in the current phase's plan task list, the requirement MUST appear in the forward-pull table. Missing entries fail the checker.
-
-**(3) execute-phase halts on surface-touch surprise.** When a plan's task touches a file that's listed as primary surface for a future-phase requirement NOT in the forward-pull table, the executor halts and surfaces:
-
-```
-[FORWARD-PULL HALT] Task X edits exts/aic-dt/aic_dt/extension.py.
-This file is also the primary surface for SCENE-05 (Phase 3) per ROADMAP.md.
-SCENE-05 was not in the forward-pull table for this phase.
-Either pull SCENE-05 forward now (update CONTEXT + REQUIREMENTS + ROADMAP) or
-document why the surface-touch doesn't qualify (e.g. plan touches a different
-function in the same file).
-```
-
-This catches the late-discovered overlap that discuss-phase missed.
-
-**Forward + backward = closure principle.** Every phase scans both directions:
-- **Forward (at discuss-phase):** "What future-phase requirements could I close while I'm in this surface?"
-- **Backward (at phase-closure / backlog-sweep):** "What prior-phase deferrals can I close because this phase already edited their surface?"
-
-A surface is "done" only when all its requirements across all phases that don't have hard external dependencies (research-gated, upstream-blocker-gated) are addressed. Phase boundaries are scope organizers, not capability fences.
-
-**Concrete artifacts produced:**
-- `.planning/phases/<phase>/CONTEXT.md` `## Forward-pull scan` block (mandatory)
-- `.planning/phases/<phase>/CLOSURE.md` `## Backlog-sweep` block (mandatory at closure)
-- Both blocks reference the live REQUIREMENTS.md inline checkboxes; both flip them as part of the same atomic commit.
-
-### Phase closure discipline — backlog sweep + payload sanity
-
-**Surfaced 2026-05-08 after a runtime audit found 5 over-claimed closures (PARITY-05/09/10/12, SCENE-05) and 6 stale-Pending entries that were actually closed.** Two structural failures:
-
-1. **Closure ceremony only updated downstream artifacts.** Phase 3 + Phase 4 plan landings updated `STATE.md` and the inline `[x]/[ ]/[~]` checkboxes in REQUIREMENTS.md but never refreshed the **traceability table at the bottom of REQUIREMENTS.md**, which became the most-quoted-but-most-stale signal. Future status reports keep reading the wrong source.
-2. **Verifiers were structural, not runtime.** Smoke tests checked "topic exists + rate > 0 + frame_id matches" but never sampled payload. PARITY-05 wrench passed rate=13.6Hz + frame_id=ati/tool_link gates but emitted all-zeros. PARITY-09 buffered+applied joint commands but never published a real cmd and read /joint_states for delta.
-
-**Two policies enforced going forward:**
-
-**(A) Backlog sweep at every phase closure.** Before declaring a phase `[x]` closed:
-- Scan the **cumulative deferred-items list** across ALL prior phase SUMMARY.md files.
-- For each deferred item whose surface (file / data structure / UI atom) the closing phase touched, **either close it now or document explicitly why the deferral persists** (with the new gating dependency).
-- Update the REQUIREMENTS.md traceability table **as part of closure** — same commit as STATE.md update + ROADMAP plan checkbox flip. Closure isn't atomic if any of those drift.
-
-**(B) Runtime payload sanity gate in every verifier.** `verify_phase_*.sh` harnesses must include for each published topic:
-- One sample read with `rclpy` (or equivalent) within N seconds of `quick_start`.
-- Assertion that payload has at least one nonzero field (or, for event topics, that the trigger fires deterministically under a known-good stimulus — e.g. CheatCode plug-into-port for PARITY-07).
-- For each subscribed topic, a publish-then-read round-trip: publish a known-good command, read the topic that should reflect the response, assert delta within tolerance.
-
-**Status-reading discipline for any agent reporting M1 progress:**
-
-| Source | Truth status | When to consult |
-|---|---|---|
-| `REQUIREMENTS.md` **inline `[x]/[~]/[ ]`** checkboxes per requirement | **Primary** | When asked "is requirement X done?" |
-| `REQUIREMENTS.md` **traceability table** (bottom of file) | Derived; verify against inline | Cross-check, never sole source |
-| `STATE.md` progress block | Snapshot at last phase boundary | Direction + magnitude of progress, not per-requirement truth |
-| `HANDOFF.json` blockers + completed_tasks | Live | Active blockers + last session's deltas |
-| Live `ros2 topic` / runtime probe | Ground truth | When `[x]` claim is uncertain or the requirement is runtime-behavioral |
-
-**Rule:** never quote the traceability table as gospel without cross-checking inline checkboxes. If they diverge, run a runtime probe before declaring status. The 2026-05-08 reconciliation pass was forced by exactly this divergence.
+- **Phase scope is by surface, not capability.** Before planning, scan future-phase requirements; pull one forward if its primary edit surface overlaps + dependencies met + no new research needed. The roadmap is the *plan*, not a *contract*.
+- **Forward-pull is enforced at three checkpoints, not a guideline:** mandatory `## Forward-pull scan` block in CONTEXT.md (defended even when empty), plan-checker cross-checks for surface overlap, executor halts on surface-touch surprise. Surfaced 2026-05-08 after Phase 1's extension.py surface got re-edited by 2 + 3 + 4 without anyone scanning.
+- **Phase closure has a backlog sweep + runtime payload sanity gate.** Closure ceremony updates the REQUIREMENTS.md traceability table atomically with STATE.md + ROADMAP. Verifiers sample real payload (not just rate/frame_id) — PARITY-05/09/10/12 all over-claimed because structural-only gates passed while payloads were zero/missing.
+- **Status-reading discipline:** REQUIREMENTS.md inline checkboxes are primary truth; the traceability table is derived (cross-check); STATE.md is a phase-boundary snapshot; HANDOFF.json is live; runtime probe is ground truth when in doubt.
 
 ---
 
