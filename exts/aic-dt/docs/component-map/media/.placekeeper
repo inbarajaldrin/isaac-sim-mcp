@@ -1,0 +1,11 @@
+This directory is checked by build_component_map.py as a fallback location
+for images referenced in AIC docs but not present in their source-relative
+paths.
+
+To override a missing image, drop a file named exactly like the source
+markdown's reference (e.g. aic_overview.png). The generator picks it up
+on next run.
+
+Example: ~/Documents/aic/docs/overview.md has `![](../../media/aic_overview.png)`
+which doesn't resolve (no ~/Documents/aic/media/ directory exists).
+Drop aic_overview.png here to override.
