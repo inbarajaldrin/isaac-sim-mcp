@@ -87,3 +87,9 @@ resources/
 .tug/logs/
 .tug/batch_context.md
 .tug/config.sh
+
+# Local agent state (Claude Code per-project + Codex CLI per-project)
+# Not pushed; not shared; rebuilt per machine. Stops these from cluttering
+# `git status` on every command.
+.claude/
+.codex
