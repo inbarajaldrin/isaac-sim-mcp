@@ -238,7 +238,14 @@ else
         # Explicitly add zenoh_cpp_vendor lib dir — humble setup.bash misses it.
         export LD_LIBRARY_PATH="/opt/ros/humble/opt/zenoh_cpp_vendor/lib:${LD_LIBRARY_PATH:-}"
         export DISPLAY=${DISPLAY:-:0}
-        exec "$ISAACSIM_BIN" --exec "$POSTLOAD_PY"
+        # Disable the async-rendering toggle in isaacsim.core.throttling.
+        # Its on_stop_play hook calls _settings.set("/app/asyncRendering", False)
+        # on PLAY events; on Isaac Sim 5.1 with rmw_zenoh_cpp + cable-active
+        # load_trial that call deadlocks the main thread inside reset_async
+        # (py-spy stack pinned at throttling/extension.py:117, kit-time frozen).
+        # Bypassing the toggle skips the entire asyncRendering update path.
+        exec "$ISAACSIM_BIN" --exec "$POSTLOAD_PY" \
+             "--/exts/isaacsim.core.throttling/enable_async=false"
     ' > /tmp/aic_dt_isaacsim_launch.log 2>&1 &
     LAUNCH_PID=$!
     # Wait up to 90s for the MCP socket to open
