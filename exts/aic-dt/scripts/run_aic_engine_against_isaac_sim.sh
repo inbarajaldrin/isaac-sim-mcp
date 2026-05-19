@@ -82,12 +82,18 @@ SCRIPT_DIR_RAES="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT_RAES="$(cd "$SCRIPT_DIR_RAES/../../.." && pwd)"
 ISAACSIM_LAUNCH_SH="$REPO_ROOT_RAES/scripts/isaacsim_launch.sh"
 PRIME_USD_CACHE_PY="$REPO_ROOT_RAES/scripts/prime_usd_cache.py"
+POSTLOAD_PY="$REPO_ROOT_RAES/exts/aic-dt/scripts/launch_postload.py"
+ISAACSIM_BIN="$HOME/env_isaaclab/bin/isaacsim"
 if [ ! -x "$ISAACSIM_LAUNCH_SH" ]; then
     echo "[wrapper] ERROR: missing helper $ISAACSIM_LAUNCH_SH"
     exit 1
 fi
 if [ ! -f "$PRIME_USD_CACHE_PY" ]; then
     echo "[wrapper] ERROR: missing helper $PRIME_USD_CACHE_PY"
+    exit 1
+fi
+if [ ! -f "$POSTLOAD_PY" ]; then
+    echo "[wrapper] ERROR: missing postload script $POSTLOAD_PY"
     exit 1
 fi
 APT_VENDOR="$AIC_WS/vendored_apt/extracted/opt/ros/humble"
@@ -217,9 +223,14 @@ else
     # Isaac Sim's rclpy bridge MUST find librmw_zenoh_cpp.so + libzenohc.so to
     # publish on the zenoh router. The libzenohc.so vendor lives at a
     # non-standard path that /opt/ros/humble/setup.bash leaves off LD_LIBRARY_PATH.
-    ISAACSIM_LAUNCH_SH="$ISAACSIM_LAUNCH_SH" bash -c '
+    # Use --exec postload pattern (not --enable). --enable mode triggers
+    # an EULA prompt on stdin which dies under nohup, AND it bypasses the
+    # postload's omni.kit.scripting monkeypatch + bind verification that
+    # the extension depends on under Isaac Sim 5.1.
+    ISAACSIM_BIN="$ISAACSIM_BIN" POSTLOAD_PY="$POSTLOAD_PY" bash -c '
         source ~/env_isaaclab/bin/activate
         source /opt/ros/humble/setup.bash
+        export OMNI_KIT_ACCEPT_EULA=YES
         export ROS_DOMAIN_ID=7
         export RMW_IMPLEMENTATION=rmw_zenoh_cpp
         export ZENOH_ROUTER_CHECK_ATTEMPTS=-1
@@ -227,8 +238,8 @@ else
         # Explicitly add zenoh_cpp_vendor lib dir — humble setup.bash misses it.
         export LD_LIBRARY_PATH="/opt/ros/humble/opt/zenoh_cpp_vendor/lib:${LD_LIBRARY_PATH:-}"
         export DISPLAY=${DISPLAY:-:0}
-        exec bash "$ISAACSIM_LAUNCH_SH" launch aic-dt
-    ' &
+        exec "$ISAACSIM_BIN" --exec "$POSTLOAD_PY"
+    ' > /tmp/aic_dt_isaacsim_launch.log 2>&1 &
     LAUNCH_PID=$!
     # Wait up to 90s for the MCP socket to open
     for i in $(seq 1 90); do
