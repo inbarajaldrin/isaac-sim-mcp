@@ -1364,8 +1364,8 @@ def build_tools_tab() -> str:
           <tr><td><code>exts/aic-dt/scripts/build_component_map.py</code></td><td>This page (regenerates from current AIC files)</td><td><code>python3 exts/aic-dt/scripts/build_component_map.py</code></td></tr>
           <tr><td><code>exts/aic-dt/scripts/check_cad_dimensions.py</code></td><td>Verify CAD dimensions across GLB JSON / Blender / USD / live MCP sources</td><td><code>python3 exts/aic-dt/scripts/check_cad_dimensions.py PATH [--compare PATH]</code></td></tr>
           <tr><td><code>exts/aic-dt/scripts/run_aic_engine_against_isaac_sim.sh</code></td><td>Fire one or more trials end-to-end against Isaac Sim</td><td><code>bash run_aic_engine_against_isaac_sim.sh trial_1 --output-json=/tmp/out.json</code></td></tr>
-          <tr><td><code>~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh</code></td><td>Launch / kill / status of Isaac Sim with aic-dt extension</td><td><code>bash isaacsim_launch.sh launch aic-dt</code></td></tr>
-          <tr><td><code>~/.claude/skills/isaac-sim-extension-dev/scripts/prime_usd_cache.py</code></td><td>USD cache snapshot/restore (avoid cold-cook wedge)</td><td><code>python3 prime_usd_cache.py status</code></td></tr>
+          <tr><td><code>scripts/isaacsim_launch.sh</code></td><td>Launch / kill / status of Isaac Sim with aic-dt extension</td><td><code>bash scripts/isaacsim_launch.sh launch aic-dt</code></td></tr>
+          <tr><td><code>scripts/prime_usd_cache.py</code></td><td>USD cache snapshot/restore (avoid cold-cook wedge)</td><td><code>python3 scripts/prime_usd_cache.py status</code></td></tr>
         </table>
       </div>
       <h2>Source-of-truth files</h2>

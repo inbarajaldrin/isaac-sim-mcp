@@ -64,8 +64,6 @@ COMPILED = [re.compile(p, re.IGNORECASE) for p in PATTERNS]
 def send_cmd(port, cmd_type, params=None, timeout=300):
     """MCP socket round-trip — connects to localhost:port, sends one JSON
     command, reads chunks until JSON parses (no length framing).
-
-    Mirrors ~/.claude/skills/isaac-sim-extension-dev/scripts/mcp_test.py.
     """
     msg = json.dumps({"type": cmd_type, "params": params or {}})
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -35,9 +35,9 @@ probe just gives 04-03 the verdict to act on.
 
 Pre-requisites:
   - Isaac Sim aic-dt running on localhost:8768
-    (verify via: bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh status)
+    (verify via: bash <repo-root>/scripts/isaacsim_launch.sh status)
   - DerivedDataCache healthy (verify via:
-    ~/env_isaaclab/bin/python ~/.claude/skills/isaac-sim-extension-dev/scripts/prime_usd_cache.py status)
+    ~/env_isaaclab/bin/python <repo-root>/scripts/prime_usd_cache.py status)
 
 Usage:
   ~/env_isaaclab/bin/python exts/aic-dt/scripts/probe_taskboard_prim_paths.py

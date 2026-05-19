@@ -74,6 +74,22 @@ WRAPPER_TOP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # without touching the real workspace.
 AIC_WS="${AIC_WS:-$HOME/aic_humble_ws}"
 AIC_REPO="${AIC_REPO:-$HOME/Documents/aic}"
+
+# Resolve helper-script paths relative to this script's location.
+# Layout: this file is at exts/aic-dt/scripts/ → repo root is 3 levels up,
+# helpers live in scripts/ from repo root.
+SCRIPT_DIR_RAES="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT_RAES="$(cd "$SCRIPT_DIR_RAES/../../.." && pwd)"
+ISAACSIM_LAUNCH_SH="$REPO_ROOT_RAES/scripts/isaacsim_launch.sh"
+PRIME_USD_CACHE_PY="$REPO_ROOT_RAES/scripts/prime_usd_cache.py"
+if [ ! -x "$ISAACSIM_LAUNCH_SH" ]; then
+    echo "[wrapper] ERROR: missing helper $ISAACSIM_LAUNCH_SH"
+    exit 1
+fi
+if [ ! -f "$PRIME_USD_CACHE_PY" ]; then
+    echo "[wrapper] ERROR: missing helper $PRIME_USD_CACHE_PY"
+    exit 1
+fi
 APT_VENDOR="$AIC_WS/vendored_apt/extracted/opt/ros/humble"
 ENGINE_BIN="$AIC_WS/install/aic_engine/lib/aic_engine/aic_engine"
 ADAPTER_BIN="$AIC_WS/install/aic_adapter/lib/aic_adapter/aic_adapter"
@@ -156,7 +172,7 @@ cleanup() {
     docker stop "$MODEL_CONTAINER" 2>/dev/null || true
     docker rm   "$MODEL_CONTAINER" 2>/dev/null || true
     if [[ "$CLEAN" == "1" ]]; then
-        bash "$HOME/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh" kill 2>/dev/null || true
+        bash "$ISAACSIM_LAUNCH_SH" kill 2>/dev/null || true
     fi
 }
 trap cleanup EXIT
@@ -186,14 +202,14 @@ CACHE_SIZE="${CACHE_SIZE:-0}"
 if [ "$CACHE_SIZE" -lt 100 ]; then
     echo "[wrapper] DerivedDataCache size=${CACHE_SIZE}M (<100M) — restoring known-good"
     "$HOME/env_isaaclab/bin/python" \
-        "$HOME/.claude/skills/isaac-sim-extension-dev/scripts/prime_usd_cache.py" \
+        "$PRIME_USD_CACHE_PY" \
         restore known-good
 else
     echo "[wrapper] DerivedDataCache OK (${CACHE_SIZE}M)"
 fi
 
 # ---------- pre-flight: Isaac Sim status ----------
-SIM_STATUS="$(bash "$HOME/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh" status 2>&1 || true)"
+SIM_STATUS="$(bash "$ISAACSIM_LAUNCH_SH" status 2>&1 || true)"
 if echo "$SIM_STATUS" | grep -qE "aic-dt \(8768\): RESPONSIVE"; then
     echo "[wrapper] Isaac Sim aic-dt RESPONSIVE — reusing"
 else
@@ -201,7 +217,7 @@ else
     # Isaac Sim's rclpy bridge MUST find librmw_zenoh_cpp.so + libzenohc.so to
     # publish on the zenoh router. The libzenohc.so vendor lives at a
     # non-standard path that /opt/ros/humble/setup.bash leaves off LD_LIBRARY_PATH.
-    bash -c '
+    ISAACSIM_LAUNCH_SH="$ISAACSIM_LAUNCH_SH" bash -c '
         source ~/env_isaaclab/bin/activate
         source /opt/ros/humble/setup.bash
         export ROS_DOMAIN_ID=7
@@ -211,7 +227,7 @@ else
         # Explicitly add zenoh_cpp_vendor lib dir — humble setup.bash misses it.
         export LD_LIBRARY_PATH="/opt/ros/humble/opt/zenoh_cpp_vendor/lib:${LD_LIBRARY_PATH:-}"
         export DISPLAY=${DISPLAY:-:0}
-        exec bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch aic-dt
+        exec bash "$ISAACSIM_LAUNCH_SH" launch aic-dt
     ' &
     LAUNCH_PID=$!
     # Wait up to 90s for the MCP socket to open

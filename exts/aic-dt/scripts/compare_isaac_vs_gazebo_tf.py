@@ -25,7 +25,7 @@ Output (stdout, markdown):
 Usage:
 
   # 1. Make sure Isaac Sim is running with trial loaded:
-  #    bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch aic-dt
+  #    bash <repo-root>/scripts/isaacsim_launch.sh launch aic-dt
   #    python3 -c "..." # quick_start + load_trial
   #
   # 2. Run the compare:

@@ -12,8 +12,6 @@ Acceptance per prd.json wrench-rootcause:
     loaded robot (idle weight should produce nonzero z-axis).
 
 Exit 0 if pass, 1 if no samples / all zero / connection error.
-
-Reference: ~/.claude/skills/isaac-sim-extension-dev/SKILL.md
 """
 from __future__ import annotations
 

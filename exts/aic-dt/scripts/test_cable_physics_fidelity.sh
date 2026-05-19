@@ -41,7 +41,7 @@ fi
 # ---------- Gate 2 + 3 + 4 require live sim ----------
 if ! nc -z localhost $PORT 2>/dev/null; then
     log "FATAL: Isaac Sim MCP not listening on $PORT — launch via:"
-    log "  bash -c 'source ~/env_isaaclab/bin/activate && DISPLAY=\${DISPLAY:-:0} bash ~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh launch aic-dt'"
+    log "  source ~/env_isaaclab/bin/activate && DISPLAY=\${DISPLAY:-:0} bash $(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/scripts/isaacsim_launch.sh launch aic-dt"
     exit 2
 fi
 
