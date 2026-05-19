@@ -4721,7 +4721,7 @@ class DigitalTwin(omni.ext.IExt):
               f"plug={plug_frame['child']} (anchor={plug_proxy_usd_path})")
         return [port_frame, port_entrance_frame, plug_frame]
 
-    def _apply_home_joint_positions(self, robot_cfg: dict) -> bool:
+    async def _apply_home_joint_positions(self, robot_cfg: dict) -> bool:
         """trial-home-robot-pose (2026-05-11): drive the 6 arm joints to the
         config-specified home pose so CheatCode starts trials with the gripper
         above the task board.
@@ -4770,11 +4770,12 @@ class DigitalTwin(omni.ext.IExt):
                         and hasattr(cl._articulation, "_physics_view") \
                         and cl._articulation._physics_view is not None:
                     break
-                try:
-                    asyncio.get_event_loop().run_until_complete(asyncio.sleep(0.1))
-                except RuntimeError:
-                    import time
-                    time.sleep(0.1)
+                # Cooperative yield. The previous loop.run_until_complete(asyncio.sleep)
+                # pattern wedged Isaac Sim 5.1's stricter asyncio enforcement: it
+                # tried to drive the already-running Kit loop from sync code, which
+                # mis-entered Kit's internal watcher/scripting/camera-list tasks
+                # and poisoned the loop forever.
+                await asyncio.sleep(0.1)
         if cl is None or getattr(cl, "_articulation", None) is None:
             print("[AIC-DT][home] controller_loop articulation never ready — skipping home pose")
             return False
@@ -4906,6 +4907,28 @@ class DigitalTwin(omni.ext.IExt):
             # 4. Early play (Phase 1 D-12 non-negotiable order)
             print("--- Playing scene early (before graphs/objects) ---")
             self._timeline.play()
+
+            # 4b. Wait for PhysX warmup on the UR5e + cable scene to FINISH before
+            # adding more rigid bodies. On Isaac Sim 5.1, force_load_physics_from_usd
+            # wedges indefinitely if new rigid bodies (task_board / rails / ports) are
+            # added to the stage while it's mid-cook — verified empirically 2026-05-19
+            # dual-a4500. Polling SimulationManager._warmup_needed: True while
+            # initialize_physics is running, flips False the instant it returns.
+            # Without this wait, the SYNC spawn calls in steps 8-9 below land
+            # mid-cook and freeze the main thread permanently. The skill's "play
+            # early after articulation built" pattern is still correct (avoids
+            # the 5.0-era late-play wedge); this wait just respects PhysX's new
+            # 5.1 ordering requirement.
+            try:
+                from isaacsim.core.simulation_manager import SimulationManager
+                for _ in range(600):  # up to ~10 seconds at 60Hz
+                    await asyncio.sleep(1.0 / 60.0)
+                    if not SimulationManager._warmup_needed:
+                        break
+                print("[AIC-DT] PhysX warmup complete — safe to add more rigid bodies")
+            except Exception as _warmup_exc:
+                print(f"[AIC-DT] PhysX warmup poll fell through ({_warmup_exc!r}); using 2s fixed dwell")
+                await asyncio.sleep(2.0)
 
             # 5. TF + JointState publishers (PARITY-03/04)
             self.setup_tf_publish_action_graph()
@@ -5051,7 +5074,7 @@ class DigitalTwin(omni.ext.IExt):
             # ~600mm from any task-board port). Apply explicitly so CheatCode
             # starts with the gripper above the board where it can reach.
             try:
-                self._apply_home_joint_positions(cfg.get("robot", {}) or {})
+                await self._apply_home_joint_positions(cfg.get("robot", {}) or {})
             except Exception as exc:
                 print(f"[AIC-DT][home] _apply_home_joint_positions failed: {exc!r}")
                 traceback.print_exc()

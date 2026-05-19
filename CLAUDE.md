@@ -71,19 +71,19 @@ There is one tool for all cache management. Use it before debugging anything els
 
 ```bash
 # Always check first when quick_start misbehaves:
-~/env_isaaclab/bin/python ~/.claude/skills/isaac-sim-extension-dev/scripts/prime_usd_cache.py status
+~/env_isaaclab/bin/python scripts/prime_usd_cache.py status
 # Healthy: ≥100MB. Empty/wedged: <1MB. List of backups shown.
 
 # Snapshot — take after any successful quick_start as cheap insurance:
-~/env_isaaclab/bin/python ~/.claude/skills/isaac-sim-extension-dev/scripts/prime_usd_cache.py snapshot
+~/env_isaaclab/bin/python scripts/prime_usd_cache.py snapshot
 
 # Restore — your fix when cache is empty/corrupt (~2s, deterministic):
-~/env_isaaclab/bin/python ~/.claude/skills/isaac-sim-extension-dev/scripts/prime_usd_cache.py restore             # newest backup
-~/env_isaaclab/bin/python ~/.claude/skills/isaac-sim-extension-dev/scripts/prime_usd_cache.py restore known-good  # by name
-~/env_isaaclab/bin/python ~/.claude/skills/isaac-sim-extension-dev/scripts/prime_usd_cache.py restore 1777683559  # by timestamp
+~/env_isaaclab/bin/python scripts/prime_usd_cache.py restore             # newest backup
+~/env_isaaclab/bin/python scripts/prime_usd_cache.py restore known-good  # by name
+~/env_isaaclab/bin/python scripts/prime_usd_cache.py restore 1777683559  # by timestamp
 
 # Best-effort prime via postload + quick_start (warm-cache only — refuses on cold cache by default):
-~/env_isaaclab/bin/python ~/.claude/skills/isaac-sim-extension-dev/scripts/prime_usd_cache.py prime aic-dt
+~/env_isaaclab/bin/python scripts/prime_usd_cache.py prime aic-dt
 ```
 
 **Operating discipline (do this, never violate):**
