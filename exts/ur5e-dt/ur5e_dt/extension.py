@@ -395,6 +395,21 @@ MCP_TOOL_REGISTRY = {
         "description": "Create an action graph to publish object poses to ROS2 topic 'objects_poses_sim'.",
         "parameters": {}
     },
+    "start_ros_driver": {
+        "description": "Bring the ROS2 robot driver up/down (shells out to scripts/sim_bringup.sh). action='up' in sim mode starts URSim + ur_robot_driver hands-free — no PolyScope clicks — until /joint_states is live and the driver reports 'Ready to receive control commands'. Blocks until ready (~110s). real mode is NOT yet enabled (needs in-lab verification). Use this once at startup so robot-motion tools (ros-mcp-server move_home/move_to_grasp/...) have a driver to talk to.",
+        "parameters": {
+            "mode": {
+                "type": "string",
+                "enum": ["sim", "real"],
+                "description": "'sim' (URSim docker, default) or 'real' (lab UR5e — not yet enabled)."
+            },
+            "action": {
+                "type": "string",
+                "enum": ["up", "down", "status"],
+                "description": "'up' (default) brings the driver up, 'down' tears it down, 'status' reports state."
+            }
+        }
+    },
     "sync_real_poses": {
         "description": "Subscribe to /objects_poses_real ROS2 topic and update sim object poses to match real-world detected poses.",
         "parameters": {}
@@ -447,6 +462,7 @@ MCP_HANDLERS = {
     "add_objects": "_cmd_add_objects",
     "delete_objects": "_cmd_delete_objects",
     "setup_pose_publisher": "_cmd_setup_pose_publisher",
+    "start_ros_driver": "_cmd_start_ros_driver",
     "sync_real_poses": "_cmd_sync_real_poses",
     "new_stage": "_cmd_new_stage",
     "quick_start": "_cmd_quick_start",
@@ -5507,6 +5523,69 @@ class DigitalTwin(omni.ext.IExt):
                 "message": f"Failed to setup pose publisher: {str(e)}",
                 "traceback": traceback.format_exc()
             }
+
+    def _cmd_start_ros_driver(self, mode: str = "sim", action: str = "up") -> Dict[str, Any]:
+        """Bring the ROS2 robot driver up/down/status via scripts/sim_bringup.sh.
+
+        Runs in the MCP client worker thread (not Kit's main loop) and touches no
+        USD/OmniGraph state — it's a pure host subprocess (docker + ros2) — so it
+        is safe to block here until the driver is ready. The socket read timeout
+        is 300s; bring-up normally takes ~110s, so we cap the subprocess at 240s.
+        """
+        import os
+        import subprocess
+        from pathlib import Path
+
+        if mode not in ("sim", "real"):
+            return {"status": "error", "message": f"invalid mode '{mode}' (expected sim|real)"}
+        if action not in ("up", "down", "status"):
+            return {"status": "error", "message": f"invalid action '{action}' (expected up|down|status)"}
+
+        # extension.py -> ur5e_dt -> ur5e-dt -> exts -> <repo root>
+        script = Path(__file__).resolve().parents[3] / "scripts" / "sim_bringup.sh"
+        if not script.exists():
+            return {"status": "error", "message": f"sim_bringup.sh not found at {script}"}
+
+        # Run in a sanitized env. Isaac Sim's process carries its own ROS2 /
+        # python (env_isaaclab) setup — AMENT_PREFIX_PATH, PYTHONPATH,
+        # LD_LIBRARY_PATH, RMW_* — that conflicts with the system ROS2 the script
+        # sources. Inheriting it makes `ros2 topic echo`/`ros2 launch` misbehave
+        # (false "no /joint_states" → the script reaps a healthy driver). A clean
+        # slate lets the script's own `source /opt/ros/humble` + ros2_ws be
+        # authoritative. ROS_DOMAIN_ID must match every ROS client (see CLAUDE.md).
+        env = {
+            "HOME": os.environ.get("HOME", str(Path.home())),
+            "USER": os.environ.get("USER", ""),
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "ROS_DOMAIN_ID": os.environ.get("ROS_DOMAIN_ID", "7"),
+        }
+        timeout = 240 if action == "up" else 60
+
+        try:
+            proc = subprocess.run(
+                ["bash", str(script), action, mode],
+                capture_output=True, text=True, timeout=timeout, env=env,
+            )
+        except subprocess.TimeoutExpired as e:
+            return {
+                "status": "error",
+                "message": f"sim_bringup.sh {action} {mode} timed out after {timeout}s",
+                "output": (e.output or "")[-2000:],
+            }
+
+        output = ((proc.stdout or "") + (proc.stderr or ""))[-2000:]
+        if proc.returncode == 0:
+            return {
+                "status": "success",
+                "message": f"ros driver {action} ({mode}) completed",
+                "ros_domain_id": env["ROS_DOMAIN_ID"],
+                "output": output,
+            }
+        return {
+            "status": "error",
+            "message": f"sim_bringup.sh {action} {mode} exited {proc.returncode}",
+            "output": output,
+        }
 
     def _cmd_sync_real_poses(self) -> Dict[str, Any]:
         """MCP handler for syncing real object poses to sim."""
