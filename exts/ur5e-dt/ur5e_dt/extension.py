@@ -56,7 +56,7 @@ ENVIRONMENT_PRIM_PATH = "/World/Environment"
 # Robot base mount height above the ground plane (meters).
 # Convention: world z=0 is the floor surface; robot base is lifted by ROBOT_BASE_Z.
 # This matches Isaac Sim's standard env convention so all environments compose cleanly.
-ROBOT_BASE_Z = 0.08  # robot base lifted 8cm; MUST match ros-mcp-server config.py ROBOT_BASE_Z (was wrongly 0.0 since f19ea90 -> gripper drove into table)
+ROBOT_BASE_Z = 0.0  # Isaac convention (f19ea90): ground plane + robot base both at z=0. Consumer ros-mcp-server is mode-aware to match this in sim.
 
 # Per-environment Z offset to align each env's floor surface to z=0.
 # Most envs already author their floor at z=0 — only the legacy gridroom assets need correction.
