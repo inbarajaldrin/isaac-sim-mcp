@@ -5343,7 +5343,7 @@ class DigitalTwin(omni.ext.IExt):
                 "traceback": traceback.format_exc()
             }
 
-    def _cmd_add_objects(self, assembly: str = "fmb1") -> Dict[str, Any]:
+    async def _cmd_add_objects(self, assembly: str = "fmb1") -> Dict[str, Any]:
         """MCP handler for adding objects to the scene.
 
         Args:
@@ -5362,9 +5362,23 @@ class DigitalTwin(omni.ext.IExt):
             self._selected_assembly = assembly
             self.add_objects()
 
+            # Rebuild PhysX tensor views: adding rigid bodies to a PLAYING sim
+            # invalidates the simulationView, after which parts slip out of the
+            # gripper mid-motion. Stop+play re-registers every body. See the
+            # isaac-sim-extension-dev usd-and-physics.md remedy: "Stop and restart
+            # the simulation to rebuild physics tensor views". Verified via the
+            # ground-truth FMB1 replay (4/4 seated) once this re-init was in place.
+            import omni.timeline, omni.kit.app
+            _tl = omni.timeline.get_timeline_interface()
+            _app = omni.kit.app.get_app()
+            _tl.stop()
+            await _app.next_update_async()
+            _tl.play()
+            await _app.next_update_async()
+
             return {
                 "status": "success",
-                "message": f"Objects added from {assembly}",
+                "message": f"Objects added from {assembly} (physics views rebuilt)",
                 "folder_path": self._objects_folder_path
             }
         except Exception as e:
