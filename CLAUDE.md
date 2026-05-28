@@ -199,3 +199,21 @@ driver gap above is closed, `run.start` + this launch workflow = unattended end-
 - See the **`isaac-sim-extension-dev` skill** for launch lifecycle, cache discipline
   (`prime_usd_cache.py`), the post-load launcher, and hard-won gotchas (cooking deadlock, post-play
   wedge, real Kit log location). See `README.md` for extension architecture + MCP client config.
+
+## 2026-05-28 — sim/real parity + physics fixes (verified end-to-end)
+
+Full FMB1 sim assembly now works: ground-truth replay seats 4/4, and a live 3-phase ablation
+(claude-haiku-4-5) completed all 3 phases on attempt 1 (4/4 assembled), no escalation. Fixes
+in THIS repo (consumer-side fixes live in ros-mcp-server):
+
+- **Launch via `scripts/launch_sim.sh`** (NOT the bare skill launcher). It sources
+  `config/ros_dds.env` (CycloneDDS + ROS_LOCALHOST_ONLY=1 + domain 7) so Isaac shares the DDS
+  island with ros-mcp-server + the UR driver. A bare launch defaults to localhost_only=0 → the
+  consumer can't discover /gripper_width_sim, /objects_poses_sim, /joint_states. (commit 0445657)
+- **`config/ros_dds.env` + `config/cyclonedds.xml`**: canonical sim DDS env (mirrors the
+  consumer profile); also sourced by `scripts/sim_bringup.sh` for the driver. (a2b776b)
+- **`add_objects` rebuilds PhysX tensor views** (async `_cmd_add_objects` → stop+play after
+  adding objects). Adding rigid bodies to a PLAYING sim invalidates the simulationView → parts
+  slip out of the gripper mid-motion. Stop+play re-registers them. (0445657)
+- **`ROBOT_BASE_Z = 0.0`** — Isaac convention: ground plane + robot base both at z=0. Do NOT
+  raise it; the consumer (ros-mcp-server) is mode-aware to match this in sim. (c545bde)
