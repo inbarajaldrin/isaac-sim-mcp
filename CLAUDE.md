@@ -50,6 +50,34 @@ Set `ROS_DOMAIN_ID` **identically** on the sim launch AND on every ROS-side clie
 each other's topics. We use **`7`** for sim isolation (no real UR5e on domain 0 by default). The
 specific number doesn't matter; consistency does.
 
+## DDS rule (RMW + ROS_LOCALHOST_ONLY) — the sibling of the domain rule
+
+Same domain is necessary but **not sufficient**. Every ROS node sharing the domain must also agree on
+the **DDS vendor** and **`ROS_LOCALHOST_ONLY`**, or discovery goes one-way. Symptom we hit (2026-05-27):
+`move_home(mode='sim')` failed with *"UR robot driver isn't running"* while `control_gripper(mode='sim')`
+"worked". Root cause: the UR driver was launched with the shell default `ROS_LOCALHOST_ONLY=0` + FastDDS,
+but the consumer (`ros-mcp-server`) **and Isaac** pin `ROS_LOCALHOST_ONLY=1` + CycloneDDS +
+`cyclonedds_local.xml`. A plain topic *publish* (gripper → Isaac, same profile) survives a mismatched
+peer; the consumer→driver direction (`FollowJointTrajectory` **action discovery** + the `/joint_states`
+subscription `move_home` needs) never matches, so `wait_for_server()` times out.
+
+Proven empirically (daemon-free rclpy `ActionClient`): `cyclone+localhost1+profile` on **both** sides →
+server found; any mismatch → not found. `ROS_LOCALHOST_ONLY` is the decisive knob (cross-vendor discovery
+itself works once it matches). **rmw_cyclonedds gotcha:** `ROS_LOCALHOST_ONLY=1` only auto-injects a
+loopback discovery config when you have **not** set `CYCLONEDDS_URI`; if both are set, your URI wins and
+must itself permit localhost discovery — ours does (it's the same profile the consumer uses).
+
+**Fix — `config/ros_dds.env`** (sourced by `sim_bringup.sh` in `source_ros()` and the driver's launch
+shell): exports `ROS_DOMAIN_ID`, `ROS_LOCALHOST_ONLY=1`, `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`, and
+`CYCLONEDDS_URI` → `config/cyclonedds.xml` (a self-contained mirror of the consumer's profile). This makes
+the whole sim ROS stack homogeneous. Keep it in sync with the consumer (`mcp_config*.json` env +
+`server_mode2.py` `os.environ.setdefault`). Also: `cmd_up_sim` now runs `ros2 daemon stop` before its
+readiness gates — a stale `ros2` CLI daemon from a prior call under a different RMW/domain caches a corrupt
+graph and makes `ros2 topic echo /joint_states` see nothing even when the topic is live.
+
+Verified 2026-05-27: with the driver brought up via the patched `sim_bringup.sh`, `move_home(mode='sim')`
+returns `{"result": "success"}` (trajectory sent → accepted → completed) under the consumer's exact env.
+
 ## Loading a scene (MCP tools on ur5e-dt)
 
 `quick_start()` → `add_objects(assembly='fmb1'|'fmb2'|'fmb3')` → `setup_pose_publisher()` →

@@ -37,6 +37,10 @@ WS_SETUP="${WS_SETUP:-$HOME/ros2_ws/install/setup.bash}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
+# Canonical ROS2/DDS env (RMW + ROS_LOCALHOST_ONLY + Cyclone profile) so the
+# driver — and this script's own ros2 calls — match the MCP consumer. Without
+# it the driver discovery handshake never matches the consumer. See config file.
+DDS_CONFIG="${DDS_CONFIG:-$REPO_DIR/config/ros_dds.env}"
 DASH="python3 $SCRIPT_DIR/ur_dashboard.py --host $DASH_HOST"
 BUNDLED_URP="$REPO_DIR/resources/ursim/external_control.urp"
 PROGRAM_DIR="$HOME/.ursim/e-series/$MODEL/programs"
@@ -51,6 +55,11 @@ source_ros() {
   set +u
   source "$ROS_SETUP" 2>/dev/null
   source "$WS_SETUP" 2>/dev/null
+  # DDS env AFTER the ROS setups (which leave RMW unset -> FastDDS default) so
+  # Cyclone + ROS_LOCALHOST_ONLY=1 win. Matches the consumer; without it this
+  # script's own ros2 topic/echo calls run on a different DDS island than the
+  # driver and falsely report "/joint_states never appeared".
+  [ -f "$DDS_CONFIG" ] && source "$DDS_CONFIG"
   set -u
 }
 
@@ -111,8 +120,9 @@ launch_driver() {
     err "refusing to silently reap it — run '$0 down $MODE' first, then '$0 up $MODE'."
     return 1
   fi
-  log "launching ur_bringup (robot_ip=$ROBOT_IP, domain=$ROS_DOMAIN_ID) ..."
+  log "launching ur_bringup (robot_ip=$ROBOT_IP, domain=$ROS_DOMAIN_ID, dds=$DDS_CONFIG) ..."
   setsid bash -c "source '$ROS_SETUP'; source '$WS_SETUP'; export ROS_DOMAIN_ID=$ROS_DOMAIN_ID; \
+    [ -f '$DDS_CONFIG' ] && source '$DDS_CONFIG'; \
     exec ros2 launch ur_bringup ur5e.launch.py ur_type:=$MODEL robot_ip:=$ROBOT_IP \
     launch_rviz:=false headless_mode:=false" >"$DRIVER_LOG" 2>&1 &
   local pid=$!
@@ -154,6 +164,12 @@ cmd_up() {
 
 cmd_up_sim() {
   source_ros
+  # Clear any stale ros2 CLI daemon: a daemon left over from an earlier ros2
+  # call under a different RMW/domain caches a corrupt node graph and makes the
+  # `ros2 topic echo /joint_states` readiness gates below see nothing (the topic
+  # is actually live — rclpy consumers find it fine). Daemon auto-restarts clean
+  # under the env we just sourced.
+  ros2 daemon stop >/dev/null 2>&1 || true
   start_ursim       || exit 1
   stage_program     || exit 1
   wait_dashboard    || exit 1
@@ -185,11 +201,12 @@ cmd_up_real() {
     exit 3
   fi
   log "FORCE_REAL=1 set — launching real robot stack ..."
+  ros2 daemon stop >/dev/null 2>&1 || true   # clear stale CLI daemon (see cmd_up_sim)
   launch_driver        || exit 1   # against the real ROBOT_IP, no URSim/dashboard
   wait_joint_states    || exit 1
-  setsid bash -c "source '$ROS_SETUP'; source '$WS_SETUP'; export ROS_DOMAIN_ID=$ROS_DOMAIN_ID; exec ros2 run onrobot_ros gripper_control" >/tmp/onrobot_gripper.log 2>&1 &
+  setsid bash -c "source '$ROS_SETUP'; source '$WS_SETUP'; export ROS_DOMAIN_ID=$ROS_DOMAIN_ID; [ -f '$DDS_CONFIG' ] && source '$DDS_CONFIG'; exec ros2 run onrobot_ros gripper_control" >/tmp/onrobot_gripper.log 2>&1 &
   ok "gripper_control launched (log: /tmp/onrobot_gripper.log)"
-  setsid bash -c "source '$ROS_SETUP'; source '$WS_SETUP'; export ROS_DOMAIN_ID=$ROS_DOMAIN_ID; exec ros2 run aruco_camera_localizer localize" >/tmp/aruco_localizer.log 2>&1 &
+  setsid bash -c "source '$ROS_SETUP'; source '$WS_SETUP'; export ROS_DOMAIN_ID=$ROS_DOMAIN_ID; [ -f '$DDS_CONFIG' ] && source '$DDS_CONFIG'; exec ros2 run aruco_camera_localizer localize" >/tmp/aruco_localizer.log 2>&1 &
   ok "aruco localizer launched (log: /tmp/aruco_localizer.log)"
   echo; log "REAL DRIVER STACK LAUNCHED (verify topics manually)"
 }
