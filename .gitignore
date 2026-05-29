@@ -78,4 +78,11 @@ mcp_cache/
 resources/
 
 # Video recordings
-**/videos/
+**/videos/.local/
+.local/
+
+# Local agent/tooling state & recording outputs (per-developer, not source)
+.claude/
+.codex
+.tug/
+exts/ur5e-dt/videos/
