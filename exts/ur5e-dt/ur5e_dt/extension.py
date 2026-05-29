@@ -2344,9 +2344,18 @@ class DigitalTwin(omni.ext.IExt):
         robot-base-at-0 convention, so the bench feet land on the room floor. Hides the
         default ground plane's visual (the room provides the floor) while keeping its z=0
         collider so object/robot physics are unchanged. Does not move the robot.
+
+        Performance: the Simple_Room asset ships a collider on EVERY mesh (59 of them,
+        many full triangle-mesh) — pure backdrop the robot never touches. Left enabled
+        they crater the physics step rate (measured: render-off RTF 0.91 -> 0.13, ~7x).
+        So we strip all room collision via _make_visual_only(), then stop+play to rebuild
+        PhysX without them (render-off RTF back to ~0.95). We keep our own z=0 ground
+        collider for objects to rest on.
         """
         import time
-        from pxr import UsdGeom, Gf
+        import omni.timeline          # NB: import omni.* at top — a later in-function
+        import omni.kit.app           # `import omni.x` makes `omni` local for the WHOLE
+        from pxr import UsdGeom, Gf    # function, breaking earlier omni.usd.* (UnboundLocalError)
 
         stage = omni.usd.get_context().get_stage()
         if stage is None:
@@ -2398,11 +2407,30 @@ class DigitalTwin(omni.ext.IExt):
                 child.SetActive(False)
                 print(f"Deactivated Simple Room built-in table: {child.GetPath()}")
 
+        # Strip ALL of the room's colliders — it's pure visual backdrop and its 59
+        # (mostly triangle-mesh) colliders otherwise crater the physics step rate.
+        stripped = self._make_visual_only(room_path)
+        print(f"Room made visual-only: {stripped}")
+
         # Hide ONLY the default ground plane visual; keep its z=0 collider.
         ground = stage.GetPrimAtPath("/World/defaultGroundPlane")
         if ground and ground.IsValid():
             UsdGeom.Imageable(ground).MakeInvisible()
             print("Default ground plane visual hidden (z=0 collision retained).")
+
+        # The room was added to a live (playing) PhysX scene, so disabling its colliders
+        # via USD doesn't drop them until PhysX rebuilds. If playing, stop+play so they
+        # actually leave the simulation (measured: render-off RTF 0.38 -> 0.95). Use
+        # next_update_async (NOT time.sleep) so the loop runs and stop/play take effect.
+        tl = omni.timeline.get_timeline_interface()
+        if tl.is_playing():
+            tl.stop()
+            for _ in range(3):
+                await omni.kit.app.get_app().next_update_async()
+            tl.play()
+            for _ in range(3):
+                await omni.kit.app.get_app().next_update_async()
+            print("Rebuilt PhysX (stop+play) so disabled room colliders are fully dropped.")
 
         print("Simple Room loaded.")
 
@@ -2411,6 +2439,43 @@ class DigitalTwin(omni.ext.IExt):
         await self.quick_start()
         await self.load_workstation()
         await self.load_simple_room()
+
+    def _make_visual_only(self, prim_path: str) -> Dict[str, Any]:
+        """Strip physics colliders + rigid bodies from a subtree → pure visual backdrop.
+
+        Decorative/environment assets routinely ship a collider on EVERY mesh (Isaac's
+        Simple_Room has 59, many full triangle-mesh). For a backdrop the robot never
+        touches, those colliders are dead weight that PhysX still processes every step —
+        the single biggest scene-FPS/physics-rate killer we've measured (Simple_Room:
+        render-off RTF 0.91 -> 0.13, ~7x slowdown; prim count was a red herring, the
+        bench's +688 visual-only prims cost ~nothing). Diagnose this class of problem by
+        watching RTF with rendering OFF: if it collapses when an asset loads, the cost is
+        PhysX (colliders), not the GPU.
+
+        Disables (does not delete) collisionEnabled / rigidBodyEnabled, so it is
+        reversible. Call it in the load handler BEFORE returning — the handler blocks
+        Kit's main loop, so PhysX never cooks the colliders in the first place (cooking
+        an already-built collider then disabling it needs a stop+play to take effect).
+
+        Args:
+            prim_path: root of the subtree to neutralize (e.g. "/World/SimpleRoom").
+        Returns:
+            {"colliders_disabled": int, "rigidbodies_disabled": int}
+        """
+        from pxr import Usd, UsdPhysics
+        stage = omni.usd.get_context().get_stage()
+        root = stage.GetPrimAtPath(prim_path) if stage else None
+        if not (root and root.IsValid()):
+            return {"colliders_disabled": 0, "rigidbodies_disabled": 0}
+        nc = nr = 0
+        for p in Usd.PrimRange(root):
+            if p.HasAPI(UsdPhysics.CollisionAPI):
+                UsdPhysics.CollisionAPI(p).GetCollisionEnabledAttr().Set(False)
+                nc += 1
+            if p.HasAPI(UsdPhysics.RigidBodyAPI):
+                UsdPhysics.RigidBodyAPI(p).GetRigidBodyEnabledAttr().Set(False)
+                nr += 1
+        return {"colliders_disabled": nc, "rigidbodies_disabled": nr}
 
     def _toggle_viewport_rendering(self):
         """Toggle viewport rendering on/off to free GPU resources."""
