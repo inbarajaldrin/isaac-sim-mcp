@@ -58,6 +58,26 @@ ENVIRONMENT_PRIM_PATH = "/World/Environment"
 # This matches Isaac Sim's standard env convention so all environments compose cleanly.
 ROBOT_BASE_Z = 0.0  # Isaac convention (f19ea90): ground plane + robot base both at z=0. Consumer ros-mcp-server is mode-aware to match this in sim.
 
+# Vention workstation bench — optional, additive (see load_workstation / "Load Workstation" button).
+# Bundled, self-contained asset authored in centimeters (metersPerUnit 0.01) → scale 0.01 to meters.
+# At load time the bench TOP surface is aligned to z=0 (computed from its world bbox), so it
+# coincides with the work plane where the robot base (ROBOT_BASE_Z=0.0) and objects already sit.
+# The robot is NOT moved and ROBOT_BASE_Z is NOT changed → ROS pose parity is untouched.
+# WORKSTATION_XY is the source scene's vention-relative-to-robot-at-origin offset.
+WORKSTATION_USD = "workstation/vention.usd"
+WORKSTATION_PRIM_PATH = "/World/Vention"
+WORKSTATION_XY = (0.2252, -0.11364)
+WORKSTATION_SCALE = 0.01
+
+# Isaac standard "Simple Room" environment — optional backdrop (see load_simple_room).
+# Standard Isaac asset (meters, no scale) referenced via the Isaac assets root so it resolves
+# whether assets are local Nucleus or cloud. Placed at z = -0.11: the source scene's room is at
+# identity with the robot at z=0.11, so under our robot-base-at-0 convention the whole scene
+# shifts -0.11 — the bench feet then land on the room floor exactly as authored.
+SIMPLE_ROOM_PRIM_PATH = "/World/SimpleRoom"
+SIMPLE_ROOM_ASSET_REL = "/Isaac/Environments/Simple_Room/simple_room.usd"
+SIMPLE_ROOM_Z = -0.11
+
 # Per-environment Z offset to align each env's floor surface to z=0.
 # Most envs already author their floor at z=0 — only the legacy gridroom assets need correction.
 ENVIRONMENT_Z_OFFSETS = {
@@ -447,6 +467,22 @@ MCP_TOOL_REGISTRY = {
         "description": "Check if viewport video recording is currently active. Returns status, frame count, elapsed time, output path, and FPS.",
         "parameters": {}
     },
+    "load_workstation": {
+        "description": "Load the Vention workstation bench as visual context under the robot. Additive (cleared by new_stage): references the bundled vention.usd at /World/Vention and places it so the tabletop top is exactly at z=0 — coincident with the work plane where the robot base and objects already sit (ROBOT_BASE_Z stays 0.0, so ROS pose parity is untouched). The default ground plane's z=0 collider is retained and only its visual is hidden. The bench is visual-only (no colliders) so it is safe to add while the sim is playing. Does not move the robot or alter any other tool.",
+        "parameters": {}
+    },
+    "quick_start_with_workstation": {
+        "description": "Same as quick_start, then loads the Vention workstation bench (see load_workstation). One call builds the full robot+scene and drops the bench underneath. quick_start itself is unchanged.",
+        "parameters": {}
+    },
+    "load_simple_room": {
+        "description": "Load Isaac's standard Simple Room environment (floor, walls, window, lamp) as a backdrop. Additive (cleared by new_stage): references the standard Isaac Simple_Room asset onto /World/SimpleRoom at z=-0.11 so it matches the source scene under the robot-base-at-0 convention (the Vention bench feet land on the room floor). Hides the default ground plane visual while keeping its z=0 collider, so object/robot physics are unchanged. Does not move the robot. Best used together with load_workstation.",
+        "parameters": {}
+    },
+    "quick_start_with_workstation_and_simple_room": {
+        "description": "Same as quick_start, then loads the Vention workstation bench AND the Simple Room backdrop. One call builds the full robot+scene, the bench under the robot, and the room around it. quick_start itself is unchanged.",
+        "parameters": {}
+    },
 }
 
 # Handler method names for each tool (maps to self._cmd_<name> methods)
@@ -469,6 +505,10 @@ MCP_HANDLERS = {
     "start_recording": "_cmd_start_recording",
     "stop_recording": "_cmd_stop_recording",
     "get_recording_status": "_cmd_get_recording_status",
+    "load_workstation": "_cmd_load_workstation",
+    "quick_start_with_workstation": "_cmd_quick_start_with_workstation",
+    "load_simple_room": "_cmd_load_simple_room",
+    "quick_start_with_workstation_and_simple_room": "_cmd_quick_start_with_workstation_and_simple_room",
 }
 
 from isaacsim.core.utils.stage import add_reference_to_stage
@@ -636,6 +676,20 @@ class DigitalTwin(omni.ext.IExt):
                         ui.Button("Load Scene", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_scene()))
                         self._viewport_toggle_btn = ui.Button("Disable Viewport", width=140, height=35, clicked_fn=self._toggle_viewport_rendering)
                         ui.Button("Quick Start", width=120, height=35, clicked_fn=lambda: asyncio.ensure_future(self.quick_start()))
+                    with ui.HStack(spacing=5):
+                        ui.Button("Load Workstation", width=140, height=35,
+                                  clicked_fn=lambda: asyncio.ensure_future(self.load_workstation()),
+                                  tooltip="Add the Vention bench under the robot (tabletop top at z=0; robot/objects unchanged). Hides the grid visual.")
+                        ui.Button("Import Simple Room", width=160, height=35,
+                                  clicked_fn=lambda: asyncio.ensure_future(self.load_simple_room()),
+                                  tooltip="Add Isaac's Simple Room backdrop (floor/walls/window) at z=-0.11. Hides the grid visual.")
+                    with ui.HStack(spacing=5):
+                        ui.Button("Quick Start with Workstation", width=210, height=35,
+                                  clicked_fn=lambda: asyncio.ensure_future(self.quick_start_with_workstation()),
+                                  tooltip="Run Quick Start, then load the Vention workstation bench.")
+                        ui.Button("Quick Start with Workstation + Simple Room", width=320, height=35,
+                                  clicked_fn=lambda: asyncio.ensure_future(self.quick_start_with_workstation_and_simple_room()),
+                                  tooltip="Run Quick Start, then load the Vention bench AND the Simple Room backdrop.")
                     with ui.HStack(spacing=5):
                         ui.Button("Dark Studio Ground", width=160, height=30, clicked_fn=self._apply_dark_studio_ground)
                     with ui.HStack(spacing=5):
@@ -2184,6 +2238,179 @@ class DigitalTwin(omni.ext.IExt):
             print("Warning: /physicsScene not found")
 
         print("Scene loaded successfully.")
+
+    async def load_workstation(self):
+        """Load the Vention workstation bench under the robot (additive, visual-only).
+
+        References the bundled vention.usd at /World/Vention and places it so the
+        tabletop TOP surface is exactly at z=0 — coincident with the work plane where
+        the robot base (ROBOT_BASE_Z=0.0) and objects already sit. The robot is NOT
+        moved and ROBOT_BASE_Z is NOT changed, so ROS pose parity is untouched. The
+        bench has no colliders; the default ground plane's z=0 collision is retained
+        and only its visual is hidden. Safe to call while the sim is playing.
+        """
+        import time
+        import omni.kit.app
+        from pxr import Usd, UsdGeom, Gf
+
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            print("No stage; cannot load workstation.")
+            return
+
+        parent_path = WORKSTATION_PRIM_PATH          # /World/Vention — a fresh Xform we own
+        bench_path = parent_path + "/Bench"          # the referenced asset lives under here
+        existing = stage.GetPrimAtPath(parent_path)
+        if existing and existing.IsValid():
+            print(f"Workstation already present at {parent_path}, skipping.")
+            return
+
+        # Own a brand-new parent Xform so there are NO inherited xformOps to collide with.
+        # (Referencing the cm-authored asset directly onto the prim imports its quatf
+        #  xformOp:orient, which then conflicts with AddOrientOp(PrecisionDouble). The
+        #  wrapper sidesteps that gotcha entirely — all our transform lives on the parent.)
+        UsdGeom.Xform.Define(stage, parent_path)
+
+        asset_path = _local_asset(WORKSTATION_USD)
+        add_reference_to_stage(usd_path=asset_path, prim_path=bench_path)
+
+        # Wait for the referenced bench prim to compose.
+        bench = None
+        for _ in range(50):
+            bench = stage.GetPrimAtPath(bench_path)
+            if bench and bench.IsValid():
+                break
+            time.sleep(0.1)
+        if not (bench and bench.IsValid()):
+            raise RuntimeError(f"Failed to load workstation prim at {bench_path}")
+
+        # Transform lives on the fresh parent: XY only (robot at origin in source scene);
+        # Z is solved last so the bench top lands exactly at z=0.
+        tx, ty = WORKSTATION_XY
+        parent = stage.GetPrimAtPath(parent_path)
+        xform = UsdGeom.Xform(parent)
+        xform.ClearXformOpOrder()
+        t_op = xform.AddTranslateOp()                # fresh prim → default (double), no clash
+        t_op.Set(Gf.Vec3d(tx, ty, 0.0))
+
+        # Let composition settle. Isaac's MetricAssembler auto-resolves the asset's cm units
+        # (metersPerUnit 0.01) into the meters stage on this tick, writing its own
+        # xformOp:scale:unitsResolve on the referenced child. We must NOT also scale, or it
+        # double-applies (verified: 88m raw, 0.0089m when both fire). So scale only if the
+        # measured bench height shows units were NOT resolved (defensive if MetricAssembler off).
+        await omni.kit.app.get_app().next_update_async()
+
+        def _world_range():
+            c = UsdGeom.BBoxCache(Usd.TimeCode.Default(),
+                                  [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
+            return c.ComputeWorldBound(parent).ComputeAlignedRange()
+
+        rng = _world_range()
+        height = float(rng.GetMax()[2] - rng.GetMin()[2])
+        applied_scale = 1.0
+        if height > 5.0:                             # real bench ~0.885m; >5m ⇒ raw cm, unresolved
+            s = WORKSTATION_SCALE
+            xform.AddScaleOp().Set(Gf.Vec3f(s, s, s))
+            applied_scale = s
+            rng = _world_range()
+            height = float(rng.GetMax()[2] - rng.GetMin()[2])
+
+        top_z = float(rng.GetMax()[2])
+        t_op.Set(Gf.Vec3d(tx, ty, -top_z))
+        print(f"Vention placed at {parent_path}: top aligned to z=0 "
+              f"(height {height:.4f} m, raw top {top_z:.4f} m, our_scale={applied_scale}), "
+              f"xy=({tx}, {ty})")
+
+        # Hide ONLY the visual of the default ground plane; keep its z=0 collider so
+        # object/robot physics stay byte-identical to before.
+        ground = stage.GetPrimAtPath("/World/defaultGroundPlane")
+        if ground and ground.IsValid():
+            UsdGeom.Imageable(ground).MakeInvisible()
+            print("Default ground plane visual hidden (z=0 collision retained).")
+
+        print("Workstation loaded.")
+
+    async def quick_start_with_workstation(self):
+        """quick_start() then load_workstation() — full scene plus the Vention bench."""
+        await self.quick_start()
+        await self.load_workstation()
+
+    async def load_simple_room(self):
+        """Load Isaac's standard Simple Room environment as a backdrop (additive).
+
+        References the standard Isaac Simple_Room asset (via the Isaac assets root, so it
+        resolves whether assets are local or cloud) onto a fresh /World/SimpleRoom wrapper
+        and places it at z=-0.11 — matching the source scene's room under our
+        robot-base-at-0 convention, so the bench feet land on the room floor. Hides the
+        default ground plane's visual (the room provides the floor) while keeping its z=0
+        collider so object/robot physics are unchanged. Does not move the robot.
+        """
+        import time
+        from pxr import UsdGeom, Gf
+
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            print("No stage; cannot load simple room.")
+            return
+
+        parent_path = SIMPLE_ROOM_PRIM_PATH          # fresh Xform we own
+        room_path = parent_path + "/Room"            # asset reference lives here
+        existing = stage.GetPrimAtPath(parent_path)
+        if existing and existing.IsValid():
+            print(f"Simple Room already present at {parent_path}, skipping.")
+            return
+
+        try:
+            from isaacsim.storage.native import get_assets_root_path
+        except Exception:
+            from isaacsim.core.utils.nucleus import get_assets_root_path
+        root = get_assets_root_path()
+        if not root:
+            raise RuntimeError("Could not resolve the Isaac assets root for Simple Room.")
+        asset_path = root + SIMPLE_ROOM_ASSET_REL
+
+        # Fresh parent Xform → no inherited xformOps to clash with (same gotcha-avoidance
+        # as load_workstation). Reference the room asset onto a child.
+        UsdGeom.Xform.Define(stage, parent_path)
+        add_reference_to_stage(usd_path=asset_path, prim_path=room_path)
+
+        room = None
+        for _ in range(100):                         # room streams more sub-assets; allow time
+            room = stage.GetPrimAtPath(room_path)
+            if room and room.IsValid():
+                break
+            time.sleep(0.1)
+        if not (room and room.IsValid()):
+            raise RuntimeError(f"Failed to load simple room prim at {room_path}")
+
+        # Place the room (meters asset → no scale, identity rotation).
+        parent = stage.GetPrimAtPath(parent_path)
+        xform = UsdGeom.Xform(parent)
+        xform.ClearXformOpOrder()
+        xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, SIMPLE_ROOM_Z))
+        print(f"Simple Room placed at {parent_path}: translate z={SIMPLE_ROOM_Z}")
+
+        # Remove the Simple Room's built-in table prop — we use our own Vention bench.
+        # Deactivate (not just hide) so its geometry AND any collider leave composition.
+        # Match by name prefix so it survives the asset's numeric suffix (e.g. table_low_327).
+        for child in room.GetChildren():
+            if child.GetName().lower().startswith("table_low"):
+                child.SetActive(False)
+                print(f"Deactivated Simple Room built-in table: {child.GetPath()}")
+
+        # Hide ONLY the default ground plane visual; keep its z=0 collider.
+        ground = stage.GetPrimAtPath("/World/defaultGroundPlane")
+        if ground and ground.IsValid():
+            UsdGeom.Imageable(ground).MakeInvisible()
+            print("Default ground plane visual hidden (z=0 collision retained).")
+
+        print("Simple Room loaded.")
+
+    async def quick_start_with_workstation_and_simple_room(self):
+        """quick_start() + load_workstation() + load_simple_room() — full scene, bench, room."""
+        await self.quick_start()
+        await self.load_workstation()
+        await self.load_simple_room()
 
     def _toggle_viewport_rendering(self):
         """Toggle viewport rendering on/off to free GPU resources."""
@@ -5514,6 +5741,74 @@ class DigitalTwin(omni.ext.IExt):
             return {
                 "status": "error",
                 "message": f"Quick start failed: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    async def _cmd_load_workstation(self) -> Dict[str, Any]:
+        """MCP handler: add the Vention workstation bench (visual, tabletop top at z=0)."""
+        try:
+            await self.load_workstation()
+            return {
+                "status": "success",
+                "message": "Workstation loaded at /World/Vention (tabletop top at z=0; robot and object physics unchanged; ground plane visual hidden)."
+            }
+        except Exception as e:
+            carb.log_error(f"Error in load_workstation: {e}")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"Load workstation failed: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    async def _cmd_quick_start_with_workstation(self) -> Dict[str, Any]:
+        """MCP handler: quick_start, then load the Vention workstation bench."""
+        try:
+            await self.quick_start_with_workstation()
+            return {
+                "status": "success",
+                "message": "Quick start complete with the Vention workstation loaded."
+            }
+        except Exception as e:
+            carb.log_error(f"Error in quick_start_with_workstation: {e}")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"Quick start with workstation failed: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    async def _cmd_load_simple_room(self) -> Dict[str, Any]:
+        """MCP handler: add Isaac's Simple Room backdrop at z=-0.11."""
+        try:
+            await self.load_simple_room()
+            return {
+                "status": "success",
+                "message": "Simple Room loaded at /World/SimpleRoom (z=-0.11; robot/object physics unchanged; ground plane visual hidden)."
+            }
+        except Exception as e:
+            carb.log_error(f"Error in load_simple_room: {e}")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"Load simple room failed: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    async def _cmd_quick_start_with_workstation_and_simple_room(self) -> Dict[str, Any]:
+        """MCP handler: quick_start, then the Vention bench, then the Simple Room."""
+        try:
+            await self.quick_start_with_workstation_and_simple_room()
+            return {
+                "status": "success",
+                "message": "Quick start complete with the Vention workstation and Simple Room loaded."
+            }
+        except Exception as e:
+            carb.log_error(f"Error in quick_start_with_workstation_and_simple_room: {e}")
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "message": f"Quick start with workstation and simple room failed: {str(e)}",
                 "traceback": traceback.format_exc()
             }
 
