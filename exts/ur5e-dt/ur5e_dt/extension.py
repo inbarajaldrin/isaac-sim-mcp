@@ -5698,13 +5698,25 @@ class DigitalTwin(omni.ext.IExt):
                 "traceback": traceback.format_exc()
             }
 
-    def _cmd_play_scene(self) -> Dict[str, Any]:
+    async def _cmd_play_scene(self) -> Dict[str, Any]:
         """Start/resume the simulation timeline."""
         try:
             import omni.timeline
 
             timeline = omni.timeline.get_timeline_interface()
             timeline.play()
+            # 5.1: wait for PhysX warmup after play so cooking completes before any
+            # subsequent stage mutation (setup_pose_publisher / randomize) runs.
+            # Replaying a scene with the heavier fmb2/fmb3 bodies otherwise wedges
+            # the kit main thread mid-cook. See SKILL.md 5.1 warmup addendum.
+            try:
+                from isaacsim.core.simulation_manager import SimulationManager
+                for _ in range(900):  # up to ~15s at 60Hz
+                    await asyncio.sleep(1.0 / 60.0)
+                    if not SimulationManager._warmup_needed:
+                        break
+            except Exception:
+                await asyncio.sleep(3.0)
             return {
                 "status": "success",
                 "message": "Simulation started"
