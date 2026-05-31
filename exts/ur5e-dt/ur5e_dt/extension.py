@@ -1870,11 +1870,23 @@ class DigitalTwin(omni.ext.IExt):
         if mgr.frame_sub is not None:
             mgr.frame_sub = None
         if mgr.ffmpeg_proc is not None:
+            # Closing stdin gives ffmpeg EOF -> it flushes the encode buffer and writes
+            # the moov atom. Large recordings need well over the old 10s to finalize, so a
+            # short wait abandoned ffmpeg mid-finalize -> truncated mp4 (no moov atom).
+            import signal as _signal
             try:
                 mgr.ffmpeg_proc.stdin.close()
-                mgr.ffmpeg_proc.wait(timeout=10)
             except Exception as e:
-                print(f"Warning closing ffmpeg: {e}")
+                print(f"Warning closing ffmpeg stdin: {e}")
+            try:
+                mgr.ffmpeg_proc.wait(timeout=180)  # generous: let ffmpeg write the moov
+            except Exception as e:
+                print(f"ffmpeg finalize exceeded wait ({e}); sending SIGINT to force trailer")
+                try:
+                    mgr.ffmpeg_proc.send_signal(_signal.SIGINT)
+                    mgr.ffmpeg_proc.wait(timeout=60)
+                except Exception as e2:
+                    print(f"ffmpeg still not finalized after SIGINT: {e2}")
             mgr.ffmpeg_proc = None
         mgr.recording = False
         self._rt_record_btn.enabled = True
