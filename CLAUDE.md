@@ -29,12 +29,19 @@ a live Isaac Sim; each extension is the source of truth for its own tools via `M
 
 ## Launching Isaac Sim — verified working 2026-05-27 (ur5e-dt)
 
-**0. Cache health FIRST.** `~/.cache/ov/DerivedDataCache` must be **> 50 MB** or `quick_start` wedges
+**0. Cache health FIRST.** The PhysX `DerivedDataCache` must be **> 50 MB** or `quick_start` wedges
 at `load_robot/reset_async` (cold-cooking the robot USD is broken on 5.x). Check / restore:
 ```bash
 ~/env_isaaclab/bin/python ~/Documents/isaac-sim-mcp/scripts/prime_usd_cache.py status
 # if < 50 MB:  prime_usd_cache.py restore known-good
 ```
+**Cache location moved on Isaac 5.x (pip wheel).** It is no longer `~/.cache/ov/DerivedDataCache`
+(a launched 5.x still creates that path but only as an empty lock dir). The real cooked cache now
+lives in the package tree at
+`~/env_isaaclab/lib/python3.11/site-packages/omni/cache/DerivedDataCache`. `prime_usd_cache.py`
+auto-detects this (it picks whichever candidate holds the most data); override with `ISAAC_DDC_DIR=…`
+if your install differs. The script was restored to `main` from the `aic` branch 2026-06-08 — `status`
+now reports ~153 MB from the pip location.
 
 **1. Launch (blocks until the MCP socket is ready, ~5–10 s warm / ~90 s cold):**
 ```bash
