@@ -417,6 +417,13 @@ def _tool_implementation(name: str, params: Dict[str, Any]) -> str:
     return f"Error: {str(last_error)}"
 
 
+# MCP _meta category tags for specific dynamically-registered tools.
+_TOOL_META_CATEGORIES = {
+    "save_scene_state": "checkpoint",
+    "restore_scene_state": "checkpoint",
+}
+
+
 def register_dynamic_tool(server: FastMCP, tool_name: str, tool_def: Dict[str, Any]):
     """Register a single tool dynamically based on its definition."""
     description = tool_def.get("description", f"Execute {tool_name} on Isaac Sim")
@@ -424,7 +431,11 @@ def register_dynamic_tool(server: FastMCP, tool_name: str, tool_def: Dict[str, A
 
     # Build function with proper signature
     handler = _build_tool_function(tool_name, description, parameters)
-    server.tool()(handler)
+    category = _TOOL_META_CATEGORIES.get(tool_name)
+    if category is not None:
+        server.tool(meta={"category": category})(handler)
+    else:
+        server.tool()(handler)
 
 
 # Main execution
