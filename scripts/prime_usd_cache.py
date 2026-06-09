@@ -68,36 +68,15 @@ import time
 # ---- Configuration --------------------------------------------------------
 
 def _resolve_cache_dir() -> str:
-    """Locate the active PhysX DerivedDataCache.
+    """Runtime cache path (verified via lsof on a live Isaac process).
 
-    Isaac Sim 5.x (pip wheel in ~/env_isaaclab) moved the cache out of the old
-    launcher location (~/.cache/ov/DerivedDataCache) and into the package tree
-    (.../site-packages/omni/cache/DerivedDataCache). Honor an explicit override,
-    otherwise pick the first candidate that exists, falling back to the legacy
-    path so snapshot/restore still works on machines that use it.
+    The ~153 MB seed at ~/env_isaaclab/.../omni/cache/DerivedDataCache is NOT opened
+    at runtime -- do not point here. Override with ISAAC_DDC_DIR if your install differs.
     """
     override = os.environ.get("ISAAC_DDC_DIR")
     if override:
         return os.path.expanduser(override)
-    candidates = [
-        "~/env_isaaclab/lib/python3.11/site-packages/omni/cache/DerivedDataCache",  # pip wheel (Isaac 5.x)
-        "~/.cache/ov/DerivedDataCache",  # legacy launcher install
-    ]
-    existing = [os.path.expanduser(c) for c in candidates if os.path.isdir(os.path.expanduser(c))]
-    if not existing:
-        return os.path.expanduser(candidates[0])
-    # A launched Isaac 5.x also creates an (empty, lock-only) ~/.cache/ov/DerivedDataCache,
-    # so "first that exists" is ambiguous -- pick whichever holds the most cooked data.
-    def _quick_size(p: str) -> int:
-        total = 0
-        for root, _, files in os.walk(p):
-            for f in files:
-                try:
-                    total += os.path.getsize(os.path.join(root, f))
-                except OSError:
-                    pass
-        return total
-    return max(existing, key=_quick_size)
+    return os.path.expanduser("~/.cache/ov/DerivedDataCache")
 
 
 CACHE_DIR = _resolve_cache_dir()
@@ -125,6 +104,27 @@ def dir_size_mb(path: str) -> float:
             except OSError:
                 pass
     return total / (1024 * 1024)
+
+
+def cache_health(path: str) -> tuple[str, str]:
+    """OK / THIN / EMPTY by largecachedata segment count + GB, not raw MB.
+
+    A complete robot cache spans several `largecachedata_*` segments and is multi-GB
+    (known-good 5.0 ref: ~14.6 GB / 8 segments). A lone ~150 MB seed segment still
+    wedges reset_async -- ">50 MB" is not a meaningful floor.
+    """
+    if not os.path.isdir(path):
+        return "EMPTY", "directory does not exist"
+    segs = sorted(f for f in os.listdir(path) if f.startswith("largecachedata_"))
+    seg_mb = sum(dir_size_mb(os.path.join(path, s)) if os.path.isdir(os.path.join(path, s))
+                 else os.path.getsize(os.path.join(path, s)) / (1024 * 1024)
+                 for s in segs)
+    detail = f"{len(segs)} largecachedata segment(s) = {seg_mb:.0f} MB cooked"
+    if not segs or seg_mb < 1:
+        return "EMPTY", detail
+    if len(segs) < 2 or seg_mb < 400:
+        return "THIN", detail + "  <- partial/seed cache (cold-cook risk)"
+    return "OK", detail
 
 
 def list_backups() -> list[tuple[int, str, float]]:
@@ -214,7 +214,12 @@ def wait_for_socket(port: int, timeout: float = 120.0) -> bool:
 # ---- Subcommands ----------------------------------------------------------
 
 def cmd_status(_args) -> int:
+    verdict, detail = cache_health(CACHE_DIR)
     print(f"DerivedDataCache: {dir_size_mb(CACHE_DIR):.1f} MB ({CACHE_DIR})")
+    print(f"Health: {verdict} -- {detail}")
+    if verdict != "OK":
+        print("  Restore a complete known-good cache before launching, e.g.:")
+        print("    prime_usd_cache.py restore <ts>   (or a ~/.cache/isaacsim-recovery snapshot)")
     backups = list_backups()
     if not backups:
         print("Backups: (none)")

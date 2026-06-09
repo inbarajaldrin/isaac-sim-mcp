@@ -29,19 +29,22 @@ a live Isaac Sim; each extension is the source of truth for its own tools via `M
 
 ## Launching Isaac Sim — verified working 2026-05-27 (ur5e-dt)
 
-**0. Cache health FIRST.** The PhysX `DerivedDataCache` must be **> 50 MB** or `quick_start` wedges
-at `load_robot/reset_async` (cold-cooking the robot USD is broken on 5.x). Check / restore:
+**0. Cache health FIRST.** An incomplete `DerivedDataCache` makes `quick_start` wedge at
+`load_robot/reset_async` (main thread in `futex_wait`, GPU ~0%, cache does **not** grow — a cold-cook
+deadlock). Check:
 ```bash
 ~/env_isaaclab/bin/python ~/Documents/isaac-sim-mcp/scripts/prime_usd_cache.py status
-# if < 50 MB:  prime_usd_cache.py restore known-good
+# Health OK -> launch.   THIN/EMPTY -> restore a complete known-good cache first.
 ```
-**Cache location moved on Isaac 5.x (pip wheel).** It is no longer `~/.cache/ov/DerivedDataCache`
-(a launched 5.x still creates that path but only as an empty lock dir). The real cooked cache now
-lives in the package tree at
-`~/env_isaaclab/lib/python3.11/site-packages/omni/cache/DerivedDataCache`. `prime_usd_cache.py`
-auto-detects this (it picks whichever candidate holds the most data); override with `ISAAC_DDC_DIR=…`
-if your install differs. The script was restored to `main` from the `aic` branch 2026-06-08 — `status`
-now reports ~153 MB from the pip location.
+- **Runtime path is `~/.cache/ov/DerivedDataCache`** (confirmed via `lsof`). The ~153 MB seed at
+  `~/env_isaaclab/.../site-packages/omni/cache/DerivedDataCache` is never opened at runtime — ignore it.
+- **Health = segment count / GB, not MB.** A complete robot cache spans multiple `largecachedata_*`
+  segments and is multi-GB (known-good 5.0 ref: ~14.6 GB / 8 segments); a lone ~150 MB seed still wedges.
+- **Known-good restore (5.0, this host):** kill Isaac, then
+  `mv ~/.cache/ov/DerivedDataCache{,.bak.$(date +%s)}` and
+  `cp -a ~/.cache/isaacsim-recovery/20260424-053625/cache/ov/DerivedDataCache ~/.cache/ov/DerivedDataCache`,
+  strip `app_instance_lock*`, relaunch. **Version-match it:** cooks are keyed to the Kit build. This host
+  is **5.0.0-rc.45** — a 5.1 cache (e.g. dual-a4500's) will not hit.
 
 **1. Launch (blocks until the MCP socket is ready, ~5–10 s warm / ~90 s cold):**
 ```bash
