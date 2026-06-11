@@ -46,6 +46,15 @@ deadlock). Check:
   strip `app_instance_lock*`, relaunch. **Version-match it:** cooks are keyed to the Kit build. This host
   is **5.0.0-rc.45** — a 5.1 cache (e.g. dual-a4500's) will not hit.
 
+**Automated backups (so a wipe can't strand us again).** Backups live OUTSIDE `~/.cache` (which is what
+got wiped) at `~/isaac-ddc-backups/<isaac-version>/ddc-<ts>.tar.zst` (zstd, ~36% of size), version-scoped.
+- `prime_usd_cache.py backup [--keep N]` — guarded+deduped: backs up only if the runtime cache is
+  non-empty and not smaller than the newest backup (never clobbers good with wiped); skips if unchanged.
+  Runs daily via the `isaac-ddc-backup.timer` systemd **user** timer (linger on; same on dual-a4500).
+- `prime_usd_cache.py ensure` — pre-flight self-heal: restores the newest version-matching backup if the
+  runtime cache looks wiped. **`scripts/launch_sim.sh` calls this before every launch**, so a cleared
+  cache self-heals instead of wedging. Non-fatal; no-ops if Isaac is already running or no backup exists.
+
 **1. Launch (blocks until the MCP socket is ready, ~5–10 s warm / ~90 s cold):**
 ```bash
 bash -c 'source ~/env_isaaclab/bin/activate; export ROS_DOMAIN_ID=7 DISPLAY=:0; \

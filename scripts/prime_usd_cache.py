@@ -56,8 +56,10 @@ Exit codes: 0 success, 1 failure.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -392,6 +394,134 @@ def cmd_prime(args) -> int:
 
 # ---- CLI ------------------------------------------------------------------
 
+# ---- Versioned off-cache backups (survive ~/.cache wipes) -----------------
+
+BACKUP_ROOT = os.path.expanduser(os.environ.get("ISAAC_DDC_BACKUP_ROOT", "~/isaac-ddc-backups"))
+ISAAC_VERSION_FILE = os.path.expanduser(
+    "~/env_isaaclab/lib/python3.11/site-packages/isaacsim/VERSION")
+
+
+def isaac_version() -> str:
+    """Filesystem-safe Isaac version key (backups are scoped per version)."""
+    try:
+        with open(ISAAC_VERSION_FILE) as f:
+            raw = f.read().strip().splitlines()[0]
+    except OSError:
+        raw = "unknown"
+    return re.sub(r"[^0-9A-Za-z._+-]", "_", raw) or "unknown"
+
+
+def cache_signature(path: str) -> tuple[int, int]:
+    """(total_bytes, largecachedata_segment_count) -- cheap fingerprint for dedup."""
+    if not os.path.isdir(path):
+        return (0, 0)
+    total = segs = 0
+    for root, _, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+            if root == path and f.startswith("largecachedata_"):
+                segs += 1
+    return (total, segs)
+
+
+def list_version_backups(vdir: str) -> list[tuple[str, dict]]:
+    """[(tar_path, meta), ...] newest-first for one version dir."""
+    out = []
+    if not os.path.isdir(vdir):
+        return out
+    for name in sorted(os.listdir(vdir), reverse=True):
+        if not name.endswith(".tar.zst"):
+            continue
+        tar = os.path.join(vdir, name)
+        try:
+            with open(tar[:-len(".tar.zst")] + ".meta.json") as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            meta = {"bytes": 0, "segments": 0}
+        out.append((tar, meta))
+    return out
+
+
+def cmd_backup(args) -> int:
+    ver = isaac_version()
+    vdir = os.path.join(BACKUP_ROOT, ver)
+    keep = getattr(args, "keep", 2)
+    rt_bytes, rt_segs = cache_signature(CACHE_DIR)
+    if rt_bytes < (1 << 20):
+        print(f"skip: runtime cache empty ({rt_bytes / 1e6:.0f} MB) — nothing to back up")
+        return 0
+    backups = list_version_backups(vdir)
+    if backups:
+        nb = backups[0][1].get("bytes", 0)
+        if rt_bytes < nb * 0.9:
+            print(f"skip: runtime ({rt_bytes/1e9:.2f} GB) < newest backup ({nb/1e9:.2f} GB) "
+                  f"— refusing to back up a degraded cache")
+            return 0
+        if (rt_bytes, rt_segs) == (nb, backups[0][1].get("segments", -1)):
+            print("skip: unchanged since newest backup (dedup)")
+            return 0
+    os.makedirs(vdir, exist_ok=True)
+    ts = int(time.time())
+    tar = os.path.join(vdir, f"ddc-{ts}.tar.zst")
+    print(f"backing up {CACHE_DIR} ({rt_bytes/1e9:.2f} GB, {rt_segs} seg) -> {tar}")
+    rc = subprocess.run(
+        ["tar", "-I", "zstd -3 -T0", "-cf", tar, "-C", CACHE_PARENT,
+         "--exclude", f"{os.path.basename(CACHE_DIR)}/app_instance_lock*",
+         "--exclude", f"{os.path.basename(CACHE_DIR)}/*.lock",
+         os.path.basename(CACHE_DIR)]).returncode
+    if rc != 0:
+        print("ERROR: tar/zstd failed", file=sys.stderr)
+        if os.path.exists(tar):
+            os.remove(tar)
+        return 1
+    comp = os.path.getsize(tar)
+    with open(tar[:-len(".tar.zst")] + ".meta.json", "w") as f:
+        json.dump({"bytes": rt_bytes, "segments": rt_segs, "ts": ts,
+                   "version": ver, "compressed_bytes": comp}, f)
+    print(f"OK: {comp/1e9:.2f} GB compressed ({comp/rt_bytes*100:.0f}% of original)")
+    for tar_old, _ in list_version_backups(vdir)[keep:]:
+        os.remove(tar_old)
+        meta_old = tar_old[:-len(".tar.zst")] + ".meta.json"
+        if os.path.exists(meta_old):
+            os.remove(meta_old)
+        print(f"pruned {os.path.basename(tar_old)}")
+    return 0
+
+
+def cmd_ensure(_args) -> int:
+    """Pre-launch self-heal: restore the newest version-matching backup if the runtime
+    cache looks wiped. Non-fatal — never blocks a launch."""
+    ver = isaac_version()
+    backups = list_version_backups(os.path.join(BACKUP_ROOT, ver))
+    if not backups:
+        print(f"ensure: no backup for Isaac {ver} yet — skipping (run 'backup' after a good launch)")
+        return 0
+    tar, meta = backups[0]
+    nb = meta.get("bytes", 0)
+    rt_bytes, _ = cache_signature(CACHE_DIR)
+    if rt_bytes >= nb * 0.9:
+        print(f"ensure: cache OK ({rt_bytes/1e9:.2f} GB vs backup {nb/1e9:.2f} GB) — no restore")
+        return 0
+    if any(socket_open(p, 0.3) for p in EXT_PORT.values()):
+        print("ensure: Isaac is running — refusing to swap cache; close it first", file=sys.stderr)
+        return 0
+    print(f"ensure: cache degraded ({rt_bytes/1e9:.2f} GB < backup {nb/1e9:.2f} GB) "
+          f"— restoring {os.path.basename(tar)}")
+    if os.path.isdir(CACHE_DIR):
+        shutil.move(CACHE_DIR, f"{CACHE_DIR}.pre-ensure.{int(time.time())}")
+    if subprocess.run(["tar", "-I", "zstd -d", "-xf", tar, "-C", CACHE_PARENT]).returncode != 0:
+        print("ERROR: restore extraction failed", file=sys.stderr)
+        return 1
+    for lk in glob.glob(os.path.join(CACHE_DIR, "app_instance_lock*")) + \
+              glob.glob(os.path.join(CACHE_DIR, "*.lock")):
+        shutil.rmtree(lk, ignore_errors=True) if os.path.isdir(lk) else os.remove(lk)
+    print(f"ensure: restored {dir_size_mb(CACHE_DIR):.0f} MB")
+    return 0
+
+
 def parse_args():
     p = argparse.ArgumentParser(
         description="Manage Isaac Sim DerivedDataCache (status / snapshot / restore / prime)",
@@ -403,6 +533,16 @@ def parse_args():
     sub.add_parser("status", help="Show current cache size and list backups")
 
     sub.add_parser("snapshot", help="Snapshot current cache to .bak.<unix_ts>")
+
+    sp_backup = sub.add_parser("backup",
+                               help="Compress runtime cache to ~/isaac-ddc-backups/<version>/ "
+                                    "(guarded+deduped; safe to run on a timer)")
+    sp_backup.add_argument("--keep", type=int, default=2,
+                           help="How many backups to keep per version (default: 2)")
+
+    sub.add_parser("ensure",
+                   help="Pre-launch self-heal: restore newest version-matching backup if "
+                        "the runtime cache looks wiped (non-fatal)")
 
     sp_restore = sub.add_parser("restore", help="Restore a backup into DerivedDataCache")
     sp_restore.add_argument("which", nargs="?", default=None,
@@ -431,6 +571,8 @@ def main() -> int:
         "snapshot": cmd_snapshot,
         "restore": cmd_restore,
         "prime": cmd_prime,
+        "backup": cmd_backup,
+        "ensure": cmd_ensure,
     }[args.cmd](args)
 
 
