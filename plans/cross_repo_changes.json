@@ -1,0 +1,25 @@
+[
+  {
+    "date": "2026-06-11",
+    "repo_path": "system",
+    "change": "apt-get install x11vnc (view-only VNC screen streaming of DISPLAY :0 over Tailscale, for watching Isaac Sim from the Mac without touching the sim process)",
+    "details": "x11vnc runs as user aaugus11, -viewonly -shared -forever -bg, password file ~/.vnc_isaac_passwd, bound to Tailscale IPv4 100.97.45.92:5900 (IPv6 [::]:5900 also bound but only tailnet ULA is global). Not a systemd service - dies on reboot or 'pkill x11vnc'.",
+    "reversibility": "sudo apt-get remove -y x11vnc; pkill -15 x11vnc; rm ~/.vnc_isaac_passwd"
+  },
+  {
+    "date": "2026-06-11",
+    "repo_path": "system",
+    "host": "dual-a4500",
+    "change": "apt-get install x11vnc + started view server on DISPLAY :1 (screen viewing from Mac over Tailscale, mirrors a4500 setup)",
+    "details": "x11vnc as user aaugus11, input enabled, password file ~/.vnc_isaac_passwd, bound to 100.80.151.46:5900, low-latency flags (-defer/-wait 5, -nowireframe). Not a systemd service - dies on reboot or pkill x11vnc.",
+    "reversibility": "ssh aaugus11@dual-a4500 'pkill -15 -x x11vnc; sudo apt-get remove -y x11vnc; rm ~/.vnc_isaac_passwd'"
+  },
+  {
+    "date": "2026-06-11",
+    "repo_path": "system",
+    "host": "a4500 + dual-a4500",
+    "change": "x11vnc-view systemd USER unit enabled (permanent Linux->Mac VNC view, survives reboots via linger)",
+    "details": "Unit ~/.config/systemd/user/x11vnc-view.service runs ~/.local/bin/linux2mac-vnc.sh with FOREGROUND=1; Restart=always handles boot races (X/tailscale not up). Kit with README + script + unit at dual-a4500:~/Desktop/linux-to-mac-screen-share/. Linger was already on (both hosts).",
+    "reversibility": "systemctl --user disable --now x11vnc-view; rm ~/.config/systemd/user/x11vnc-view.service ~/.local/bin/linux2mac-vnc.sh"
+  }
+]
