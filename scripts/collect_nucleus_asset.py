@@ -59,7 +59,13 @@ def send(code: str, port: int, timeout: int = 120) -> dict:
         except json.JSONDecodeError:
             continue
     s.close()
-    return json.loads(data.decode())
+    resp = json.loads(data.decode())
+    # The MCP socket wraps the Python `result` variable inside
+    # response["result"]["result"] — unwrap to the innermost value.
+    inner = resp.get("result", {})
+    if isinstance(inner, dict) and "result" in inner:
+        return inner["result"]
+    return inner
 
 
 def collect(src: str, dst: str, port: int, timeout: int) -> bool:
