@@ -228,7 +228,13 @@ cmd_status() {
   source_ros
   echo "container: $(docker ps --format '{{.Names}} {{.Status}}' | grep "$CONTAINER" || echo 'not running')"
   echo "driver:    $(driver_running && echo running || echo 'not running')"
-  if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then $DASH status || true; fi
+  # 'status' shows the LOADED program only; print run state too — a stopped
+  # external_control means the driver accepts goals that never execute
+  # (silent motion-dead sim, cost a run on 2026-06-11).
+  if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
+    $DASH status || true
+    $DASH running state || true
+  fi
 }
 
 case "$ACTION" in

@@ -21,5 +21,13 @@
     "change": "x11vnc-view systemd USER unit enabled (permanent Linux->Mac VNC view, survives reboots via linger)",
     "details": "Unit ~/.config/systemd/user/x11vnc-view.service runs ~/.local/bin/linux2mac-vnc.sh with FOREGROUND=1; Restart=always handles boot races (X/tailscale not up). Kit with README + script + unit at dual-a4500:~/Desktop/linux-to-mac-screen-share/. Linger was already on (both hosts).",
     "reversibility": "systemctl --user disable --now x11vnc-view; rm ~/.config/systemd/user/x11vnc-view.service ~/.local/bin/linux2mac-vnc.sh"
+  },
+  {
+    "date": "2026-06-11",
+    "repo_path": "system",
+    "host": "a4500",
+    "change": "ursim-watchdog systemd user unit enabled (auto-replay external_control.urp after protective-stop program halts)",
+    "details": "Runs scripts/ursim_watchdog.sh (this repo): 10s programState poll; clears protective stops, replays program via dashboard start_external, leaves EMERGENCY/FAULT/VIOLATION alone; events logged to /tmp/ursim_watchdog.log. Trigger: jams in agent assembly runs stop the program -> silent motion-dead sim (recurred twice 2026-06-11).",
+    "reversibility": "systemctl --user disable --now ursim-watchdog; rm ~/.config/systemd/user/ursim-watchdog.service"
   }
 ]
