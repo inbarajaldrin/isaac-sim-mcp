@@ -38,11 +38,11 @@ import time
 
 
 def send(code: str, port: int, timeout: int = 120) -> dict:
-    """Run a Python snippet inside the live Isaac Sim via execute_python_code.
+    """Run a Python snippet inside the live Isaac Sim via run_python.
 
     The snippet must assign a JSON-serialisable value to ``result``.
     """
-    msg = json.dumps({"type": "execute_python_code", "params": {"code": code}})
+    msg = json.dumps({"type": "run_python", "params": {"code": code}})
     s = socket.socket()
     s.settimeout(timeout)
     s.connect(("localhost", port))

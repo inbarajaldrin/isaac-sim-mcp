@@ -29,5 +29,12 @@
     "change": "ursim-watchdog systemd user unit enabled (auto-replay external_control.urp after protective-stop program halts)",
     "details": "Runs scripts/ursim_watchdog.sh (this repo): 10s programState poll; clears protective stops, replays program via dashboard start_external, leaves EMERGENCY/FAULT/VIOLATION alone; events logged to /tmp/ursim_watchdog.log. Trigger: jams in agent assembly runs stop the program -> silent motion-dead sim (recurred twice 2026-06-11).",
     "reversibility": "systemctl --user disable --now ursim-watchdog; rm ~/.config/systemd/user/ursim-watchdog.service"
+  },
+  {
+    "date": "2026-06-14",
+    "repo_path": "~/.claude/skills/isaac-sim-extension-dev/scripts/isaacsim_launch.sh",
+    "change": "Launcher now adds a second --ext-folder ($HOME/Documents/omni-kit-mcp/exts) so a consumer extension's new 'omni.kit.mcp' dependency resolves. Part of extracting the generic MCP socket bridge into the standalone omni-kit-mcp repo.",
+    "details": "Added BRIDGE_EXT_FOLDER + EXTRA_EXT_FOLDER guard (only appended if the dir exists) and inserted $EXTRA_EXT_FOLDER into the launch nohup line. No-op when the bridge repo is absent. New repo: ~/Documents/omni-kit-mcp (Kit ext omni.kit.mcp, python module omni_kit_mcp). ur5e-dt converted to a bridge consumer (registers tools + start(8766)).",
+    "reversibility": "git -C ~/Documents/isaac-sim-mcp checkout -- exts/ur5e-dt; revert the isaacsim_launch.sh edit (remove BRIDGE_EXT_FOLDER/EXTRA_EXT_FOLDER lines + the $EXTRA_EXT_FOLDER token); rm -rf ~/Documents/omni-kit-mcp"
   }
 ]

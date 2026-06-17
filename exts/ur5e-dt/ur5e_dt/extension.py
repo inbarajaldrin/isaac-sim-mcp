@@ -19,8 +19,16 @@ from typing import Dict, Any
 from isaacsim.core.api.world import World
 from isaacsim.gui.components.element_wrappers import ScrollingWindow
 
-# MCP socket server port - change this for different extensions
-MCP_SERVER_PORT = 8766
+# Generic MCP socket bridge (omni.kit.mcp) — this extension is a CONSUMER: it
+# registers its tools on the shared bridge and starts it on a port, instead of
+# hand-rolling its own socket server. Declared as a dependency in extension.toml.
+from omni_kit_mcp import McpBridge, ToolDefinition
+
+# ur5e-dt keeps its established port 8766 (consumers connect here for the twin
+# tools). It runs its OWN bridge instance (not the shared omni.kit.mcp singleton),
+# so it coexists with the permanent base bridge, which lives on its own port (9099).
+# Env override: UR5E_DT_PORT, or the legacy ISAAC_SIM_PORT the consumer already sets.
+MCP_PORT = int(os.getenv("UR5E_DT_PORT") or os.getenv("ISAAC_SIM_PORT") or "8766")
 
 # MCP output directory configuration
 BASE_OUTPUT_DIR = os.getenv("MCP_CLIENT_OUTPUT_DIR", "").strip()
@@ -409,23 +417,8 @@ ASSEMBLIES["fmb_jenga"] = ASSEMBLIES["fmb4"]
 # =============================================================================
 
 MCP_TOOL_REGISTRY = {
-    "execute_python_code": {
-        "description": "Execute Python code directly in Isaac Sim's environment with access to Omniverse APIs. Set persistent=True with a session_id to keep variables alive between calls — useful for multi-step workflows where later calls need results from earlier ones.",
-        "parameters": {
-            "code": {
-                "type": "string",
-                "description": "Python code to execute in Isaac Sim"
-            },
-            "session_id": {
-                "type": "string",
-                "description": "Session identifier for persistent execution. Use the same ID across calls to share state. Defaults to 'default'."
-            },
-            "persistent": {
-                "type": "boolean",
-                "description": "If true, variables persist across calls with the same session_id."
-            }
-        }
-    },
+    # NOTE: run_python is provided by the omni.kit.mcp bridge as a
+    # built-in verb — do not re-declare it here.
     "play_scene": {
         "description": "Start/resume the simulation timeline in Isaac Sim.",
         "parameters": {}
@@ -589,32 +582,8 @@ MCP_TOOL_REGISTRY = {
     },
 }
 
-# Handler method names for each tool (maps to self._cmd_<name> methods)
-MCP_HANDLERS = {
-    "execute_python_code": "_cmd_execute_python_code",
-    "set_object_pose": "_cmd_set_object_pose",
-    "play_scene": "_cmd_play_scene",
-    "stop_scene": "_cmd_stop_scene",
-    "assemble_objects": "_cmd_assemble_objects",
-    "randomize_object_poses": "_cmd_randomize_object_poses",
-    "randomize_single_object": "_cmd_randomize_single_object",
-    "save_scene_state": "_cmd_save_scene_state",
-    "restore_scene_state": "_cmd_restore_scene_state",
-    "add_objects": "_cmd_add_objects",
-    "delete_objects": "_cmd_delete_objects",
-    "setup_pose_publisher": "_cmd_setup_pose_publisher",
-    "start_ros_driver": "_cmd_start_ros_driver",
-    "sync_real_poses": "_cmd_sync_real_poses",
-    "new_stage": "_cmd_new_stage",
-    "quick_start": "_cmd_quick_start",
-    "start_recording": "_cmd_start_recording",
-    "stop_recording": "_cmd_stop_recording",
-    "get_recording_status": "_cmd_get_recording_status",
-    "load_workstation": "_cmd_load_workstation",
-    "quick_start_with_workstation": "_cmd_quick_start_with_workstation",
-    "load_simple_room": "_cmd_load_simple_room",
-    "quick_start_with_workstation_and_simple_room": "_cmd_quick_start_with_workstation_and_simple_room",
-}
+# Tool name -> handler method is resolved at registration time from the stable
+# `_cmd_<name>` convention (see on_startup), so no separate handler map is needed.
 
 from isaacsim.core.utils.stage import add_reference_to_stage
 from isaacsim.core.prims import Articulation as ArticulationView
@@ -712,14 +681,8 @@ class DigitalTwin(omni.ext.IExt):
         self._force_pub_node = None
         self._force_warmup = 0
 
-        # MCP socket server state
-        self._mcp_socket = None
-        self._mcp_server_thread = None
-        self._mcp_server_running = False
-        self._mcp_client_threads = []
-
-        # Persistent Python execution sessions (in-memory, keyed by session_id)
-        self._python_sessions = {}
+        # MCP bridge handle (set in on_startup); socket + sessions live on the bridge.
+        self._mcp = None
 
         # Add Objects UI state
         self._selected_assembly = "fmb1"
@@ -796,8 +759,19 @@ class DigitalTwin(omni.ext.IExt):
             with ui.VStack(spacing=5):
                 self.create_ui()
 
-        # Start MCP socket server
-        self._start_mcp_server()
+        # Register this extension's tools on ITS OWN MCP bridge instance, then start
+        # it on ur5e-dt's dedicated port. A separate instance (not get_mcp_bridge())
+        # keeps ur5e-dt off the permanent base bridge's 8766 socket.
+        # Handlers are resolved from the stable `_cmd_<name>` convention.
+        self._mcp = McpBridge()
+        for _name, _schema in MCP_TOOL_REGISTRY.items():
+            self._mcp.register_tool(ToolDefinition(
+                name=_name,
+                description=_schema["description"],
+                parameters=_schema.get("parameters", {}),
+                handler=getattr(self, "_cmd_" + _name),
+            ))
+        self._mcp.start(MCP_PORT)
 
     def create_ui(self):
         with ui.VStack(spacing=5):
@@ -5423,292 +5397,7 @@ class DigitalTwin(omni.ext.IExt):
             topic_name="objects_poses_sim"
         )
 
-    # ==================== MCP Socket Server Methods ====================
-
-    def _start_mcp_server(self):
-        """Start the MCP socket server."""
-        if self._mcp_server_running:
-            print("[MCP] Server is already running")
-            return
-
-        self._mcp_server_running = True
-        host = "localhost"
-        port = MCP_SERVER_PORT
-
-        try:
-            self._mcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self._mcp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self._mcp_socket.bind((host, port))
-            self._mcp_socket.listen(1)
-
-            self._mcp_server_thread = threading.Thread(target=self._mcp_server_loop)
-            self._mcp_server_thread.daemon = True
-            self._mcp_server_thread.start()
-
-            print(f"[MCP] Server started on {host}:{port}")
-        except Exception as e:
-            print(f"[MCP] Failed to start server: {str(e)}")
-            self._stop_mcp_server()
-
-    def _stop_mcp_server(self):
-        """Stop the MCP socket server and wait for all client threads to finish."""
-        self._mcp_server_running = False
-
-        if self._mcp_socket:
-            try:
-                self._mcp_socket.close()
-            except:
-                pass
-            self._mcp_socket = None
-
-        if self._mcp_server_thread:
-            try:
-                if self._mcp_server_thread.is_alive():
-                    self._mcp_server_thread.join(timeout=2.0)
-            except:
-                pass
-            self._mcp_server_thread = None
-
-        # Wait for all client handler threads to finish so they don't
-        # race on the USD stage after hot-reload creates a new instance
-        for t in self._mcp_client_threads:
-            try:
-                if t.is_alive():
-                    t.join(timeout=2.0)
-            except:
-                pass
-        self._mcp_client_threads = []
-
-        print("[MCP] Server stopped")
-
-    def _mcp_server_loop(self):
-        """Main server loop in a separate thread."""
-        self._mcp_socket.settimeout(1.0)
-
-        while self._mcp_server_running:
-            try:
-                try:
-                    client, address = self._mcp_socket.accept()
-                    print(f"[MCP] Connected to client: {address}")
-
-                    client_thread = threading.Thread(
-                        target=self._handle_mcp_client,
-                        args=(client,)
-                    )
-                    client_thread.daemon = True
-                    client_thread.start()
-                    # Track thread and prune finished ones
-                    self._mcp_client_threads = [t for t in self._mcp_client_threads if t.is_alive()]
-                    self._mcp_client_threads.append(client_thread)
-                except socket.timeout:
-                    continue
-                except OSError:
-                    # Socket closed during shutdown - this is expected
-                    if not self._mcp_server_running:
-                        break
-                except Exception as e:
-                    if self._mcp_server_running:
-                        print(f"[MCP] Error accepting connection: {str(e)}")
-                    import time
-                    time.sleep(0.5)
-            except Exception as e:
-                if self._mcp_server_running:
-                    print(f"[MCP] Error in server loop: {str(e)}")
-                if not self._mcp_server_running:
-                    break
-                import time
-                time.sleep(0.5)
-
-    def _handle_mcp_client(self, client):
-        """Handle connected client."""
-        print("[MCP] Client handler started")
-        client.settimeout(None)
-        buffer = b''
-
-        try:
-            while self._mcp_server_running:
-                try:
-                    data = client.recv(16384)
-                    if not data:
-                        print("[MCP] Client disconnected")
-                        break
-
-                    buffer += data
-                    try:
-                        command = json.loads(buffer.decode('utf-8'))
-                        buffer = b''
-
-                        # Execute command in Isaac Sim's main thread
-                        async def execute_wrapper():
-                            try:
-                                response = await self._execute_mcp_command(command)
-                                response_json = json.dumps(response)
-                                print(f"[MCP] response_json: {response_json}")
-                                try:
-                                    client.sendall(response_json.encode('utf-8'))
-                                except:
-                                    print("[MCP] Failed to send response - client disconnected")
-                            except Exception as e:
-                                print(f"[MCP] Error executing command: {str(e)}")
-                                traceback.print_exc()
-                                try:
-                                    error_response = {
-                                        "status": "error",
-                                        "message": str(e)
-                                    }
-                                    client.sendall(json.dumps(error_response).encode('utf-8'))
-                                except:
-                                    pass
-                            return None
-
-                        from omni.kit.async_engine import run_coroutine
-                        run_coroutine(execute_wrapper())
-
-                    except json.JSONDecodeError:
-                        pass
-                except Exception as e:
-                    print(f"[MCP] Error receiving data: {str(e)}")
-                    break
-        except Exception as e:
-            print(f"[MCP] Error in client handler: {str(e)}")
-        finally:
-            try:
-                client.close()
-            except:
-                pass
-            print("[MCP] Client handler stopped")
-
-    async def _execute_mcp_command(self, command) -> Dict[str, Any]:
-        """Execute a command and return the response."""
-        try:
-            cmd_type = command.get("type")
-            params = command.get("params", {})
-
-            # Special command: list_available_tools - returns the tool registry
-            if cmd_type == "list_available_tools":
-                return {
-                    "status": "success",
-                    "result": {
-                        "status": "success",
-                        "tools": MCP_TOOL_REGISTRY
-                    }
-                }
-
-            # Look up handler from MCP_HANDLERS defined at top of file
-            handler_name = MCP_HANDLERS.get(cmd_type)
-            if handler_name:
-                handler = getattr(self, handler_name, None)
-            else:
-                handler = None
-
-            if handler:
-                try:
-                    print(f"[MCP] Executing handler for {cmd_type}")
-                    import inspect
-                    if inspect.iscoroutinefunction(handler):
-                        result = await handler(**params)
-                    else:
-                        result = handler(**params)
-                    print(f"[MCP] Handler execution complete: {result}")
-                    if result and result.get("status") == "success":
-                        return {"status": "success", "result": result}
-                    else:
-                        return {"status": "error", "message": result.get("message", "Unknown error")}
-                except Exception as e:
-                    print(f"[MCP] Error in handler: {str(e)}")
-                    traceback.print_exc()
-                    return {"status": "error", "message": str(e)}
-            else:
-                return {"status": "error", "message": f"Unknown command type: {cmd_type}"}
-
-        except Exception as e:
-            print(f"[MCP] Error executing command: {str(e)}")
-            traceback.print_exc()
-            return {"status": "error", "message": str(e)}
-
     # ==================== Common MCP Handlers ====================
-
-    def _cmd_execute_python_code(self, code: str, session_id: str = "default", persistent: bool = False) -> Dict[str, Any]:
-        """Execute Python code in Isaac Sim's environment.
-
-        When persistent=True, variables from the execution are saved in-memory
-        and restored on the next call with the same session_id. This avoids
-        redundant recomputation across sequential calls. Since everything is
-        in-process, functions, prim references, numpy arrays all survive.
-
-        Args:
-            code: Python code to execute
-            session_id: Session identifier for persistent execution
-            persistent: If True, variables persist across calls
-
-        Returns:
-            Dictionary with execution result.
-        """
-        # Built-in namespace symbols — not user-defined, don't save
-        _builtin_keys = {"omni", "carb", "Usd", "UsdGeom", "Sdf", "Gf", "__builtins__"}
-
-        try:
-            # Create exec namespace with commonly used modules
-            exec_globals = {
-                "omni": omni, "carb": carb,
-                "Usd": Usd, "UsdGeom": UsdGeom, "Sdf": Sdf, "Gf": Gf,
-                "__builtins__": __builtins__,
-            }
-
-            # Restore persistent session variables if requested
-            if persistent and session_id in self._python_sessions:
-                exec_globals.update(self._python_sessions[session_id])
-
-            # Capture stdout — same pattern as Fusion
-            old_stdout = sys.stdout
-            sys.stdout = capture = io.StringIO()
-            try:
-                exec(code, exec_globals)
-                output = capture.getvalue()
-            except Exception as e:
-                # Preserve partial stdout + append error (Fusion pattern)
-                output = capture.getvalue()
-                output += f"ERROR: {e}\n{traceback.format_exc()}"
-                carb.log_error(f"Error executing code: {e}")
-                return {
-                    "status": "error",
-                    "message": str(e),
-                    "output": output,
-                    "traceback": traceback.format_exc(),
-                }
-            finally:
-                sys.stdout = old_stdout
-
-            # Save session state if persistent
-            if persistent:
-                saved = {}
-                for k, v in exec_globals.items():
-                    if k.startswith("_") or k in _builtin_keys:
-                        continue
-                    saved[k] = v
-                self._python_sessions[session_id] = saved
-
-            # Check for a result variable
-            result = exec_globals.get("result", None)
-
-            response = {
-                "status": "success",
-                "message": "Code executed successfully",
-                "output": output,
-                "result": result,
-            }
-            if persistent:
-                response["session_id"] = session_id
-                response["session_vars"] = list(self._python_sessions.get(session_id, {}).keys())
-            return response
-        except Exception as e:
-            carb.log_error(f"Error executing code: {e}")
-            traceback.print_exc()
-            return {
-                "status": "error",
-                "message": str(e),
-                "traceback": traceback.format_exc()
-            }
 
     async def _cmd_play_scene(self) -> Dict[str, Any]:
         """Start/resume the simulation timeline."""
@@ -6255,7 +5944,8 @@ class DigitalTwin(omni.ext.IExt):
                 timeline.stop()
 
             # Clear Python-side caches
-            self._python_sessions.clear()
+            if self._mcp is not None:
+                self._mcp.clear_sessions()
             self._hidden_objects.clear()
 
             # Clear extension instance references to old stage objects
@@ -6522,8 +6212,9 @@ class DigitalTwin(omni.ext.IExt):
         self._teardown_log_redirect()
         print("[DigitalTwin] Digital Twin shutdown")
 
-        # Stop MCP socket server
-        self._stop_mcp_server()
+        # Stop MCP socket server (owned by the shared bridge)
+        if self._mcp is not None:
+            self._mcp.stop()
 
         # Stop physics-rate callbacks
         self._stop_force_publish()

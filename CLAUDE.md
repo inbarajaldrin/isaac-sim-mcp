@@ -65,7 +65,7 @@ Raw equivalent: `~/env_isaaclab/bin/isaacsim --ext-folder ~/Documents/isaac-sim-
 
 **2. Sanity-check the socket** (returns the tool registry):
 ```bash
-python3 ~/.claude/skills/isaac-sim-extension-dev/scripts/mcp_test.py 8766 list_available_tools
+python3 ~/.claude/skills/isaac-sim-extension-dev/scripts/mcp_test.py 8766 list_tools
 ```
 
 ### Viewing the sim — **WEBRTC WORKS on dual-a4500. It was NEVER broken** (read this before "fixing" it)

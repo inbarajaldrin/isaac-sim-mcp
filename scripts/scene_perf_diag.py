@@ -3,7 +3,7 @@
 bench + Simple Room, by rebuilding the scene in stages and measuring each.
 
 All waiting happens HERE (between socket calls) so Kit's main loop runs freely —
-sleeping inside execute_python_code freezes the loop and zeroes sim-time.
+sleeping inside run_python freezes the loop and zeroes sim-time.
 """
 import socket, json, time
 
@@ -22,7 +22,7 @@ def call(cmd, params=None, timeout=300):
     s.close(); return json.loads(data.decode())
 
 def pcode(code):
-    return call("execute_python_code", {"code": code}).get("result", {}).get("result")
+    return call("run_python", {"code": code}).get("result", {}).get("result")
 
 READ_FPS = r'''
 from omni.kit.viewport.utility import get_active_viewport
