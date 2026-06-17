@@ -416,17 +416,22 @@ MCP_TOOL_REGISTRY = {
         "parameters": {}
     },
     "start_ros_driver": {
-        "description": "Bring the ROS2 robot driver up/down (shells out to scripts/sim_bringup.sh). action='up' in sim mode starts URSim + ur_robot_driver hands-free — no PolyScope clicks — until /joint_states is live and the driver reports 'Ready to receive control commands'. Blocks until ready (~110s). real mode is NOT yet enabled (needs in-lab verification). Use this once at startup so robot-motion tools (ros-mcp-server move_home/move_to_grasp/...) have a driver to talk to.",
+        "description": "Bring the ROS2 robot driver up/down/status so robot-motion tools (ros-mcp-server move_home/move_to_grasp/...) have a driver to talk to. Two backends: backend='fake' (default) uses scripts/launch_ur_fake.sh — the apt ur_robot_driver with fake/mock hardware, no Docker and no ~/ros2_ws needed, ready in a few seconds (sim only); backend='ursim' uses scripts/sim_bringup.sh — URSim docker + ur_bringup, hands-free no PolyScope clicks, ~110s, and is the path that supports mode='real' (lab UR5e, not yet enabled). Both end at /joint_states live + scaled_joint_trajectory_controller accepting FollowJointTrajectory, on the same DDS island (domain 7, Cyclone, localhost-only). Use once at startup.",
         "parameters": {
             "mode": {
                 "type": "string",
                 "enum": ["sim", "real"],
-                "description": "'sim' (URSim docker, default) or 'real' (lab UR5e — not yet enabled)."
+                "description": "'sim' (default) or 'real' (lab UR5e — not yet enabled; requires backend='ursim')."
             },
             "action": {
                 "type": "string",
                 "enum": ["up", "down", "status"],
                 "description": "'up' (default) brings the driver up, 'down' tears it down, 'status' reports state."
+            },
+            "backend": {
+                "type": "string",
+                "enum": ["fake", "ursim"],
+                "description": "'fake' (default) = apt ur_robot_driver fake hardware via launch_ur_fake.sh (lightweight, sim only); 'ursim' = URSim docker via sim_bringup.sh (needs Docker + ~/ros2_ws; required for mode='real')."
             }
         }
     },
@@ -5901,13 +5906,22 @@ class DigitalTwin(omni.ext.IExt):
                 "traceback": traceback.format_exc()
             }
 
-    def _cmd_start_ros_driver(self, mode: str = "sim", action: str = "up") -> Dict[str, Any]:
-        """Bring the ROS2 robot driver up/down/status via scripts/sim_bringup.sh.
+    def _cmd_start_ros_driver(self, mode: str = "sim", action: str = "up",
+                              backend: str = "fake") -> Dict[str, Any]:
+        """Bring the ROS2 robot driver up/down/status.
+
+        Two backends, both ending at the same controllers/topics (joint_state_broadcaster
+        -> /joint_states, scaled_joint_trajectory_controller -> FollowJointTrajectory):
+          backend='fake'  (default) -> scripts/launch_ur_fake.sh — apt ur_robot_driver with
+                          use_fake_hardware:=true. No Docker, no ~/ros2_ws. sim only.
+          backend='ursim'           -> scripts/sim_bringup.sh — URSim docker + ur_bringup.
+                          Needs Docker + a ~/ros2_ws ur_bringup install. Supports mode='real'.
 
         Runs in the MCP client worker thread (not Kit's main loop) and touches no
-        USD/OmniGraph state — it's a pure host subprocess (docker + ros2) — so it
+        USD/OmniGraph state — it's a pure host subprocess (ros2 / docker) — so it
         is safe to block here until the driver is ready. The socket read timeout
-        is 300s; bring-up normally takes ~110s, so we cap the subprocess at 240s.
+        is 300s; bring-up normally takes a few s (fake) / ~110s (ursim), so we cap
+        the subprocess at 240s.
         """
         import os
         import subprocess
@@ -5917,19 +5931,35 @@ class DigitalTwin(omni.ext.IExt):
             return {"status": "error", "message": f"invalid mode '{mode}' (expected sim|real)"}
         if action not in ("up", "down", "status"):
             return {"status": "error", "message": f"invalid action '{action}' (expected up|down|status)"}
+        if backend not in ("fake", "ursim"):
+            return {"status": "error", "message": f"invalid backend '{backend}' (expected fake|ursim)"}
 
         # extension.py -> ur5e_dt -> ur5e-dt -> exts -> <repo root>
-        script = Path(__file__).resolve().parents[3] / "scripts" / "sim_bringup.sh"
+        repo_root = Path(__file__).resolve().parents[3]
+
+        if backend == "fake":
+            if mode == "real":
+                return {"status": "error",
+                        "message": "backend='fake' is sim-only; use backend='ursim' mode='real' for the lab UR5e"}
+            script = repo_root / "scripts" / "launch_ur_fake.sh"
+            cmd = ["bash", str(script), action]          # fake script takes only the action
+            label = f"launch_ur_fake.sh {action}"
+        else:  # ursim
+            script = repo_root / "scripts" / "sim_bringup.sh"
+            cmd = ["bash", str(script), action, mode]
+            label = f"sim_bringup.sh {action} {mode}"
         if not script.exists():
-            return {"status": "error", "message": f"sim_bringup.sh not found at {script}"}
+            return {"status": "error", "message": f"{script.name} not found at {script}"}
 
         # Run in a sanitized env. Isaac Sim's process carries its own ROS2 /
         # python (env_isaaclab) setup — AMENT_PREFIX_PATH, PYTHONPATH,
         # LD_LIBRARY_PATH, RMW_* — that conflicts with the system ROS2 the script
         # sources. Inheriting it makes `ros2 topic echo`/`ros2 launch` misbehave
         # (false "no /joint_states" → the script reaps a healthy driver). A clean
-        # slate lets the script's own `source /opt/ros/humble` + ros2_ws be
-        # authoritative. ROS_DOMAIN_ID must match every ROS client (see CLAUDE.md).
+        # slate lets the script's own `source /opt/ros/humble` (+ config/ros_dds.env
+        # / ros2_ws) be authoritative. ROS_DOMAIN_ID must match every ROS client
+        # (see CLAUDE.md); both scripts source config/ros_dds.env for the rest of
+        # the DDS profile (Cyclone + localhost-only).
         env = {
             "HOME": os.environ.get("HOME", str(Path.home())),
             "USER": os.environ.get("USER", ""),
@@ -5940,13 +5970,12 @@ class DigitalTwin(omni.ext.IExt):
 
         try:
             proc = subprocess.run(
-                ["bash", str(script), action, mode],
-                capture_output=True, text=True, timeout=timeout, env=env,
+                cmd, capture_output=True, text=True, timeout=timeout, env=env,
             )
         except subprocess.TimeoutExpired as e:
             return {
                 "status": "error",
-                "message": f"sim_bringup.sh {action} {mode} timed out after {timeout}s",
+                "message": f"{label} timed out after {timeout}s",
                 "output": (e.output or "")[-2000:],
             }
 
@@ -5954,13 +5983,13 @@ class DigitalTwin(omni.ext.IExt):
         if proc.returncode == 0:
             return {
                 "status": "success",
-                "message": f"ros driver {action} ({mode}) completed",
+                "message": f"ros driver {action} ({backend}/{mode}) completed",
                 "ros_domain_id": env["ROS_DOMAIN_ID"],
                 "output": output,
             }
         return {
             "status": "error",
-            "message": f"sim_bringup.sh {action} {mode} exited {proc.returncode}",
+            "message": f"{label} exited {proc.returncode}",
             "output": output,
         }
 
