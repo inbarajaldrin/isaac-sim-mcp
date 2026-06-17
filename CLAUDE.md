@@ -85,7 +85,27 @@ returns `{"result": "success"}` (trajectory sent → accepted → completed) und
 `save_scene_state(json_file_path=…)`/`restore_scene_state(…)`, recording tools. The `mode2_*` ablation
 `onStart` hooks call these, so a study self-loads its scene once the sim+extension are up.
 
-## Sim ROS2 driver bring-up (URSim + ur_robot_driver) — verified 2026-05-27
+## Two ways to bring up the UR driver half of the sim stack
+
+The robot-motion tools need the **UR ros2_control driver** running (it publishes `/joint_states`,
+which Isaac's ur5e-dt subscribes to and mirrors onto `/World/UR5e`, and it accepts
+`FollowJointTrajectory` on `scaled_joint_trajectory_controller`). Two interchangeable paths — both
+end at the same controllers/topics:
+
+- **Fake (mock) hardware — `scripts/launch_ur_fake.sh` (lightweight, no Docker, no `~/ros2_ws`).**
+  Uses the apt `ur_robot_driver` with `use_fake_hardware:=true`; the controllers run without URSim
+  or a real robot. Best default for a quick twin. `up` / `status` / `down`; sources `config/ros_dds.env`
+  so it shares Isaac's DDS island (Cyclone + localhost-only + domain 7). Verified 2026-06-17 on
+  `en4226769-l`: commanded a trajectory → `/joint_states` followed → the Isaac `/World/UR5e`
+  articulation mirrored it (`[0.8,-1.19,1.00,-0.50,0,0]`). Fresh-install recipe (apt + a4500
+  source-build parity, pinned commits):  `~/Desktop/fresh-install-docs/ur_robot_driver-fake-hardware.md`.
+  Modeled on a4500 `~/Documents/prismatic-manipulation/scripts/launch_ur.sh`.
+- **URSim docker — `scripts/sim_bringup.sh` (heavier; needs Docker + a `~/ros2_ws` `ur_bringup` install).**
+  Use when you need URSim-specific behavior (dashboard/program state/PolyScope parity). On a box with
+  no `~/ros2_ws` (e.g. `en4226769-l`) the URSim *container* still comes up but the `ur_bringup` launch
+  can't — use the fake-hardware path there.
+
+### URSim docker path — verified 2026-05-27
 
 Hands-free, no-browser bring-up of the **UR robot driver** half of the sim stack (the `docker run
 ursim …` + `ros2 launch ur_bringup ur5e.launch.py …` steps that previously required clicking through
