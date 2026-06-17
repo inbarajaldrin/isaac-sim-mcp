@@ -628,7 +628,10 @@ class DigitalTwin(omni.ext.IExt):
         self._object_restitution_combine_mode = "min"
 
         # Shared collision settings
-        self._sdf_resolution = 300
+        # 256 (not 300): object-mesh SDF cooking is NOT cached in DerivedDataCache, so it re-cooks on
+        # every add_objects. 300 cooks for many minutes on this host (en4226769-l); 256 is a4500's
+        # verified-working value (still seats fmb peg-in-hole assemblies). See SDF resolution cost cliff.
+        self._sdf_resolution = 256
         self._contact_offset = 0.003
 
         # Per-category prim settings (collision approximation, rest offset, angular damping)
