@@ -2619,6 +2619,13 @@ class DigitalTwin(omni.ext.IExt):
             print(f"Workspace camera created at {ws_prim_path} with resolution {ws_width}x{ws_height}")
         await app.next_update_async()
 
+        # 8.5 Disable gravity on the robot kinematic chain (position-mirrored twin). Authored BEFORE
+        #     reset_async so PhysX picks it up when it initializes the articulation views. The twin mirrors
+        #     /joint_states (which already reflect the real UR5e's gravity-compensated pose), so simulating
+        #     gravity here double-counts it and the PD drives sag (~3 mm tool droop, eats the table-clearance
+        #     margin). Objects keep gravity. Full rationale + measurements in _disable_robot_chain_gravity.
+        self._disable_robot_chain_gravity()
+
         # 9. Reset world to initialize all physics views (articulations need this)
         world = World.instance()
         if world:
@@ -2729,6 +2736,46 @@ class DigitalTwin(omni.ext.IExt):
         print("UR5e robot loaded successfully!")
 
         
+    def _disable_robot_chain_gravity(self):
+        """Disable PhysX gravity on every rigid body in the robot chain (arm + Quick-Changer + RG2).
+
+        WHY (the load-bearing reason): this ur5e-dt arm is a POSITION-MIRRORING digital twin. Its joints
+        are driven from /joint_states — published by the real (or fake) UR ros2_control driver — via the
+        ROS2 OmniGraph, and the gripper from its width command. Those upstream joint states ALREADY encode
+        the real UR5e's internally gravity-compensated configuration. Simulating gravity on the twin's own
+        links therefore DOUBLE-COUNTS it: the PD joint drives must develop a steady position error (sag) to
+        hold against a gravity torque the real robot never actually fights. Measured (dual-a4500,
+        2026-06-18): ~4 mrad sag on shoulder_lift/elbow at extended grasp poses → ~3 mm tool droop, which
+        ate into the ≥5 mm fingertip table-clearance margin.
+
+        Why NOT feed-forward gravity compensation (the textbook fix when the SIM is the authority — e.g.
+        torque control / RL): it does not work on this OmniGraph-driven twin — the ArticulationController
+        node rewrites the articulation action every physics step and zeros any joint efforts we apply
+        (verified: applied_joint_efforts stays [0,…]). Feed-forward would be right if we drove the joints
+        FROM the sim; here the path is the other way around (driver → sim), so the correct model is to stop
+        simulating a force the upstream already handled.
+
+        Gravity stays ON the manipulated objects (/World/Objects/*) — the sim IS the authority for how parts
+        fall, are held, and settle — so grasping/placing/lifting are unchanged. Verified: sag 4.06 → 0.37
+        mrad, tool droop 3.4 → 0.31 mm. Standard treatment for a kinematic/position-driven robot twin; also
+        improves sim/real F/T parity (a real wrist F/T sensor is gravity-zeroed too). Authored as a USD
+        attribute before reset_async so PhysX reads it when it initializes the articulation views.
+        """
+        import omni.usd
+        from pxr import Usd, UsdPhysics, PhysxSchema
+        stage = omni.usd.get_context().get_stage()
+        n = 0
+        for root in ("/World/UR5e", "/World/QuickChanger", "/World/RG2_Gripper"):
+            rp = stage.GetPrimAtPath(root)
+            if not rp or not rp.IsValid():
+                continue
+            for prim in Usd.PrimRange(rp):
+                if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                    PhysxSchema.PhysxRigidBodyAPI.Apply(prim).CreateDisableGravityAttr(True)
+                    n += 1
+        print(f"[gravity] disabled on {n} robot-chain rigid bodies "
+              f"(position-mirrored twin; manipulated objects keep gravity)")
+
     async def setup_action_graph(self):
         import omni.graph.core as og
         import isaacsim.core.utils.stage as stage_utils
