@@ -556,9 +556,17 @@ class LogRedirector:
         self._original.flush()
 
 
+# Module-level handle to the live extension instance, so socket-driven
+# execute_python_code can drive individual build steps (load_ur5e, import_adapter,
+# attach_rg2_to_ur5e, ...) one at a time:  from ur5e_dt import extension as E; E._EXT_INSTANCE.load_ur5e()
+_EXT_INSTANCE = None
+
+
 class DigitalTwin(omni.ext.IExt):
     def on_startup(self, ext_id):
         print("[DigitalTwin] Digital Twin startup")
+        global _EXT_INSTANCE
+        _EXT_INSTANCE = self
 
         self._main_loop = asyncio.get_event_loop()
         self._timeline = omni.timeline.get_timeline_interface()
@@ -3200,6 +3208,21 @@ class DigitalTwin(omni.ext.IExt):
             else:
                 print(f"Warning: Finger prim not found at {finger_path}")
 
+    def import_adapter(self):
+        """Reference the OnRobot Quick-Changer (15mm) adapter USD at /World/QuickChanger.
+
+        The adapter goes between the UR5e flange (wrist_3/tool0) and the RG2 base.
+        quick_changer_link frame = the flange mounting face; the body extends +15mm in
+        its local +Z (where the RG2 mounts). See attach_rg2_to_ur5e for the joint splice.
+        """
+        from isaacsim.core.utils.stage import add_reference_to_stage
+        stage = omni.usd.get_context().get_stage()
+        if stage.GetPrimAtPath("/World/QuickChanger").IsValid():
+            print("Adapter already at /World/QuickChanger, skipping.")
+            return
+        add_reference_to_stage(_local_asset("gripper/QuickChanger.usd"), "/World/QuickChanger")
+        print("Quick-Changer adapter imported at /World/QuickChanger")
+
     def attach_rg2_to_ur5e(self):
         import omni.usd
         from pxr import Usd, Sdf, UsdGeom, Gf
@@ -3210,6 +3233,15 @@ class DigitalTwin(omni.ext.IExt):
         rg2_path = "/World/RG2_Gripper"
         joint_path = "/World/UR5e/joints/robot_gripper_joint"
         rg2_base_link = "/World/RG2_Gripper/onrobot_rg2_base_link"
+
+        # OnRobot Quick-Changer (15mm) inserted between the flange and the RG2.
+        # robot_gripper_joint now drives wrist_3 -> quick_changer_link (the adapter takes
+        # the RG2's former at-flange frame), and a second joint (adapter_gripper_joint)
+        # mounts the RG2 +15mm along the adapter's +Z (toward the gripper). Verified in the
+        # ros-mcp-server studio (RViz): net tool0 -> rg2_base = old transform + 15mm in +Z.
+        self.import_adapter()
+        qc_link = "/World/QuickChanger/quick_changer_link"
+        adapter_joint_path = "/World/UR5e/joints/adapter_gripper_joint"
 
         # Skip only if joint is fully connected (both body0 and body1 set)
         joint_prim_check = stage.GetPrimAtPath(joint_path)
@@ -3266,6 +3298,15 @@ class DigitalTwin(omni.ext.IExt):
             xform.AddTranslateOp().Set(rotated_pos)
             xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(final_quat)
 
+            # Seed the Quick-Changer prim at the same flange pose so the fixed joint only
+            # nudges it (no large snap when physics resolves wrist_3 -> quick_changer).
+            qc_prim = stage.GetPrimAtPath("/World/QuickChanger")
+            if qc_prim and qc_prim.IsValid():
+                qcx = UsdGeom.Xform(qc_prim)
+                qcx.ClearXformOpOrder()
+                qcx.AddTranslateOp().Set(rotated_pos)
+                qcx.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(final_quat)
+
             print(f"RG2 position rotated to: {rotated_pos}")
             print("RG2 orientation set with fixed+180°Z rotation.")
         else:
@@ -3276,7 +3317,9 @@ class DigitalTwin(omni.ext.IExt):
         if not joint_prim:
             joint_prim = stage.DefinePrim(joint_path, "PhysicsFixedJoint")
 
-        joint_prim.CreateRelationship("physics:body1").SetTargets([Sdf.Path(rg2_base_link)])
+        # robot_gripper_joint:  wrist_3 -> quick_changer_link (the adapter takes the RG2's
+        # former at-flange frame; same localRot0/localRot1 as before).
+        joint_prim.CreateRelationship("physics:body1").SetTargets([Sdf.Path(qc_link)])
         joint_prim.CreateAttribute("physics:jointEnabled", Sdf.ValueTypeNames.Bool).Set(True)
         joint_prim.CreateAttribute("physics:excludeFromArticulation", Sdf.ValueTypeNames.Bool).Set(True)
 
@@ -3293,14 +3336,76 @@ class DigitalTwin(omni.ext.IExt):
             # Set the rotation quaternions for proper joint alignment
             quat0 = euler_to_quatf(-90, 0, -90)
             quat1 = euler_to_quatf(-180, 90, 0)
-            
+
             joint_prim.CreateAttribute("physics:localRot0", Sdf.ValueTypeNames.Quatf, custom=True).Set(quat0)
             joint_prim.CreateAttribute("physics:localRot1", Sdf.ValueTypeNames.Quatf, custom=True).Set(quat1)
-            print(" Set physics:localRot0 and localRot1 for robot_gripper_joint.")
+            print(" Set physics:localRot0 and localRot1 for robot_gripper_joint (wrist_3 -> quick_changer).")
         else:
             print(f" Joint not found at {joint_path}")
 
-        print("RG2 successfully attached to UR5e with proper orientation and joint configuration.")
+        # adapter_gripper_joint:  quick_changer_link -> rg2_base_link, RG2 mounted +15mm
+        # along the adapter's +Z (toward the gripper), identity relative rotation so the RG2
+        # keeps the orientation the old single joint gave it. The QC mesh fills 0..15mm.
+        adapter_joint = stage.GetPrimAtPath(adapter_joint_path)
+        if not adapter_joint or not adapter_joint.IsValid():
+            adapter_joint = stage.DefinePrim(adapter_joint_path, "PhysicsFixedJoint")
+        # ASSET-DRIVEN mount: read the `tool_mount` frame baked into QuickChanger.usd (a child of
+        # quick_changer_link at the +15mm gripper face) instead of hardcoding the offset. The
+        # adapter's geometry now owns the mount pose — change the adapter asset and this follows.
+        # Falls back to the literal +15mm if the frame is missing (older asset).
+        tm_prim = stage.GetPrimAtPath(qc_link + "/tool_mount")
+        if tm_prim and tm_prim.IsValid():
+            tm_local = UsdGeom.Xformable(tm_prim).GetLocalTransformation(Usd.TimeCode.Default())
+        else:
+            tm_local = Gf.Matrix4d(1.0); tm_local.SetTranslateOnly(Gf.Vec3d(0.0, 0.0, 0.015))
+            print(" WARN: tool_mount frame missing in QuickChanger.usd; using literal +15mm fallback.")
+        tm_pos = Gf.Vec3f(tm_local.ExtractTranslation())
+        _tmq = tm_local.ExtractRotationQuat()
+        tm_rot = Gf.Quatf(float(_tmq.GetReal()), Gf.Vec3f(_tmq.GetImaginary()))
+
+        adapter_joint.CreateRelationship("physics:body0").SetTargets([Sdf.Path(qc_link)])
+        adapter_joint.CreateRelationship("physics:body1").SetTargets([Sdf.Path(rg2_base_link)])
+        adapter_joint.CreateAttribute("physics:jointEnabled", Sdf.ValueTypeNames.Bool).Set(True)
+        adapter_joint.CreateAttribute("physics:excludeFromArticulation", Sdf.ValueTypeNames.Bool).Set(True)
+        adapter_joint.CreateAttribute("physics:localPos0", Sdf.ValueTypeNames.Point3f, custom=True).Set(tm_pos)
+        adapter_joint.CreateAttribute("physics:localPos1", Sdf.ValueTypeNames.Point3f, custom=True).Set(Gf.Vec3f(0.0, 0.0, 0.0))
+        adapter_joint.CreateAttribute("physics:localRot0", Sdf.ValueTypeNames.Quatf, custom=True).Set(tm_rot)
+        adapter_joint.CreateAttribute("physics:localRot1", Sdf.ValueTypeNames.Quatf, custom=True).Set(Gf.Quatf(1, 0, 0, 0))
+        print(f" Created adapter_gripper_joint (quick_changer -> RG2) from tool_mount frame {tuple(round(x,4) for x in tm_pos)}.")
+
+        # --- Pre-seat QC + RG2 at their EXACT joint-resolved world poses so timeline play()
+        # resolves both fixed joints with zero error (no visible snap). Without this the seed
+        # poses are ~15mm off and PhysX snaps them in on frame 1 ("disjointed body transforms"
+        # warning). Derived straight from the joint definitions:
+        #   qc_link_world  = Rot(quat1)^-1 * Rot(quat0) * wrist_3_world      (robot_gripper_joint, 0 pos)
+        #   rg2_base_world = Trans(0,0,0.015) * qc_link_world                (adapter_gripper_joint)
+        # then backed out through each link's local transform to the /World/* prim frames.
+        try:
+            w3_l2w = UsdGeom.Xformable(stage.GetPrimAtPath("/World/UR5e/wrist_3_link")
+                                       ).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+            def _rot_m(qf):
+                m = Gf.Matrix4d(1.0)
+                m.SetRotateOnly(Gf.Quatd(float(qf.GetReal()), Gf.Vec3d(qf.GetImaginary())))
+                return m
+            qc_link_l2w = _rot_m(quat1).GetInverse() * _rot_m(quat0) * w3_l2w
+            # rg2_base = tool_mount frame (read from the asset) applied in the quick_changer_link frame
+            rg2_base_l2w = tm_local * qc_link_l2w
+            qc_link_local = UsdGeom.Xformable(stage.GetPrimAtPath(qc_link)).GetLocalTransformation()
+            rg2_base_local = UsdGeom.Xformable(stage.GetPrimAtPath(rg2_base_link)).GetLocalTransformation()
+            seeds = {
+                "/World/QuickChanger": qc_link_local.GetInverse() * qc_link_l2w,
+                "/World/RG2_Gripper":  rg2_base_local.GetInverse() * rg2_base_l2w,
+            }
+            for prim_path, M in seeds.items():
+                xf = UsdGeom.Xform(stage.GetPrimAtPath(prim_path))
+                xf.ClearXformOpOrder()
+                xf.AddTranslateOp().Set(M.ExtractTranslation())
+                xf.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(M.ExtractRotationQuat())
+            print(" Pre-seated QuickChanger + RG2 at joint-resolved poses (no play-time snap).")
+        except Exception as _seed_err:
+            print(f" Pre-seat skipped ({_seed_err}); bodies will snap on play.")
+
+        print("RG2 successfully attached to UR5e via the 15mm Quick-Changer adapter.")
 
     def import_realsense_camera(self):
         """Import Intel RealSense D455 camera"""
