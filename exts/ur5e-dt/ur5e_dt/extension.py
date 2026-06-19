@@ -235,8 +235,16 @@ class _ViewportCameraPublisher:
 
         self._ensure_node()
 
-        pub = self._node.create_publisher(Image, f"/{topic_name}", 10)
         viewport = vp_utils.get_active_viewport()
+        if viewport is None:
+            # Headless / no-window: there is no viewport to capture. subscribe_to_frame_change +
+            # capture_viewport_to_buffer on a None/absent viewport HANGS the build (and under webrtc the
+            # off-thread capture during the reset storm crashes — same omni.ui-off-main-thread class as
+            # the log-redirect crash). The workspace-camera ROS stream is a visualization nicety the
+            # grasp loop does not need, so skip it cleanly when there's no viewport.
+            print("[ViewportPub] No active viewport (headless) — skipping viewport frame publisher.")
+            return
+        pub = self._node.create_publisher(Image, f"/{topic_name}", 10)
 
         entry = {
             "pub": pub,
@@ -2624,6 +2632,27 @@ class DigitalTwin(omni.ext.IExt):
         print("--- Setting up Gripper Action Graph ---")
         self.setup_gripper_action_graph()
         await app.next_update_async()
+
+        # 8. Workspace camera + viewport publisher — HEADLESS GUARD.
+        # In a --no-window/headless launch there is NO active viewport, and the viewport publisher's
+        # frame-change capture (and _apply_active_viewport_camera) either HANG the build or, under
+        # webrtc, crash off-thread during the reset storm (same omni.ui-off-main-thread class as the
+        # log-redirect crash). The workspace camera is a visualization nicety the grasp/data loop does
+        # not need, so when headless we skip the whole camera+viewport block and go straight to
+        # gravity-off -> reset -> play. (Windowed/webrtc keeps the camera; for webrtc the viewport
+        # callbacks should additionally be deferred to the main thread — see _run_on_main_thread.)
+        import omni.kit.viewport.utility as _vp_utils
+        if _vp_utils.get_active_viewport() is None:
+            print("--- Headless (no active viewport): skipping workspace camera + viewport publisher ---")
+            self._disable_robot_chain_gravity()
+            world = World.instance()
+            if world:
+                await world.reset_async()
+            await app.next_update_async()
+            self._timeline.play()
+            await app.next_update_async()
+            print("=== Quick Start Complete (headless) ===")
+            return
 
         # 8. Create workspace camera at 1280x720
         print("--- Creating Workspace Camera (1280x720) ---")
