@@ -64,12 +64,29 @@ def euler_to_quatf(x, y, z):
     return rx * ry * rz
 
 
-def pad_gap_mm(stage):
+TIP_BELOW_FACE_MM = 14.9  # fingertip protrusion below the pad contact face (config.py)
+
+
+def pad_world(stage):
     lt = UsdGeom.Xformable(stage.GetPrimAtPath(L_FINGER)).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
     rt = UsdGeom.Xformable(stage.GetPrimAtPath(R_FINGER)).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
-    lw = lt.Transform(PAD_L)
-    rw = rt.Transform(PAD_R)
+    return lt.Transform(PAD_L), rt.Transform(PAD_R)
+
+
+def pad_gap_mm(stage):
+    lw, rw = pad_world(stage)
     return (lw - rw).GetLength() * 1000.0
+
+
+def tool0_to_padface_depth_mm(stage):
+    """Depth from tool0 origin to the grasp centre (pad contact face midpoint), projected
+    onto tool0's reach (+Z) axis — the descent quantity config.py's SIM_FINGERTIP_MM feeds."""
+    lw, rw = pad_world(stage)
+    center = (lw + rw) * 0.5
+    t = UsdGeom.Xformable(stage.GetPrimAtPath(RG2_TOOL0)).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+    origin = t.ExtractTranslation()
+    zaxis = Gf.Vec3d(t[2][0], t[2][1], t[2][2]).GetNormalized()  # tool0 +Z in world (row-major)
+    return float(Gf.Dot(center - origin, zaxis)) * 1000.0
 
 
 def main():
@@ -161,11 +178,12 @@ def main():
         simulation_app.close()
         return
 
-    # --- SWEEP ---
+    # --- SWEEP (gap parity + descent-depth curve for config.py) ---
     lines.append("\n=== CONTACT-WIDTH PARITY SWEEP ===")
     lines.append(f"{'cmd_mm':>7} {'theta':>8} {'cad_contact':>12} {'meas_gap':>10} "
                  f"{'|cmd-meas|':>11} {'resid_L_deg':>12} {'resid_R_deg':>12} {'pass':>6}")
     worst = 0.0
+    depth_rows = []
     for cmd in CONTACT_CMDS_MM:
         theta = arc.theta_of_contact(float(cmd))
         settle_to(theta)
@@ -176,8 +194,28 @@ def main():
         rL, rR = math.degrees(resid(L_MIMIC)), math.degrees(resid(R_MIMIC))
         lines.append(f"{cmd:7d} {theta:+8.4f} {cad_c:12.2f} {meas:10.2f} {err:11.2f} "
                      f"{rL:12.4f} {rR:12.4f} {'OK' if err <= 1.0 else 'OVER':>6}")
+        # descent depth: tool0->pad-face (measured) ; tool0->fingertip = +14.9 ; CAD flange->tip = arc.depth
+        padface = tool0_to_padface_depth_mm(stage)
+        tip = padface + TIP_BELOW_FACE_MM
+        cad_flange_tip = arc.depth_mm(theta)
+        depth_rows.append((cmd, padface, tip, cad_flange_tip))
     lines.append(f"\nworst |cmd-meas| = {worst:.2f}mm  -> "
                  f"{'PASS (<=1mm everywhere)' if worst <= 1.0 else 'FAIL'}")
+
+    # --- DESCENT-DEPTH CURVE (for config.py SIM_FINGERTIP_MM = tool0->fingertip) ---
+    # const = tool0->fingertip(meas) - flange->tip(CAD); should be ~constant (= tool0 vs flange frame).
+    lines.append("\n=== DESCENT DEPTH (config.py SIM_FINGERTIP_MM rebuild) ===")
+    lines.append(f"{'W_mm':>6} {'tool0_padface':>14} {'tool0_tip':>10} {'cad_flange_tip':>15} {'const(tip-cad)':>15}")
+    consts = []
+    for cmd, padface, tip, cad in depth_rows:
+        consts.append(tip - cad)
+        lines.append(f"{cmd:6d} {padface:14.2f} {tip:10.2f} {cad:15.2f} {tip - cad:15.2f}")
+    cmean = sum(consts) / len(consts)
+    cspread = max(consts) - min(consts)
+    lines.append(f"\ntool0->flange const: mean {cmean:.2f}mm, spread {cspread:.2f}mm "
+                 f"({'OK <=1mm (CAD curve + const single-sources depth)' if cspread <= 1.0 else 'SPREAD >1mm — frame issue'})")
+    lines.append("SIM_FINGERTIP_MM (new husarion twin, tool0->fingertip mm):")
+    lines.append("  " + ", ".join(f"({cmd:.2f}, {tip:.2f})" for cmd, _, tip, _ in depth_rows))
     _write(args.out, lines)
     print(f"[parity] wrote {args.out}")
     simulation_app.close()
