@@ -235,15 +235,17 @@ class _ViewportCameraPublisher:
 
         self._ensure_node()
 
-        viewport = vp_utils.get_active_viewport()
-        if viewport is None:
-            # Headless / no-window: there is no viewport to capture. subscribe_to_frame_change +
-            # capture_viewport_to_buffer on a None/absent viewport HANGS the build (and under webrtc the
-            # off-thread capture during the reset storm crashes — same omni.ui-off-main-thread class as
-            # the log-redirect crash). The workspace-camera ROS stream is a visualization nicety the
-            # grasp loop does not need, so skip it cleanly when there's no viewport.
-            print("[ViewportPub] No active viewport (headless) — skipping viewport frame publisher.")
+        # Headless / no-window: capture_viewport_to_buffer + subscribe_to_frame_change HANG the build
+        # (they wait on presented frames that never come; under webrtc the off-thread capture during the
+        # reset storm crashes — same omni.ui-off-main-thread class as the log-redirect crash). The
+        # workspace-camera ROS stream is a visualization nicety the grasp loop does not need. DETECT
+        # headless via /app/window/enabled (False under --no-window): get_active_viewport() is NOT
+        # reliable — the full experience makes a windowless ViewportAPI even headless (non-None).
+        import carb.settings as _carb_settings
+        if not bool(_carb_settings.get_settings().get("/app/window/enabled")):
+            print("[ViewportPub] Headless (/app/window/enabled=False) — skipping viewport frame publisher.")
             return
+        viewport = vp_utils.get_active_viewport()
         pub = self._node.create_publisher(Image, f"/{topic_name}", 10)
 
         entry = {
@@ -2634,16 +2636,20 @@ class DigitalTwin(omni.ext.IExt):
         await app.next_update_async()
 
         # 8. Workspace camera + viewport publisher — HEADLESS GUARD.
-        # In a --no-window/headless launch there is NO active viewport, and the viewport publisher's
-        # frame-change capture (and _apply_active_viewport_camera) either HANG the build or, under
-        # webrtc, crash off-thread during the reset storm (same omni.ui-off-main-thread class as the
-        # log-redirect crash). The workspace camera is a visualization nicety the grasp/data loop does
-        # not need, so when headless we skip the whole camera+viewport block and go straight to
-        # gravity-off -> reset -> play. (Windowed/webrtc keeps the camera; for webrtc the viewport
-        # callbacks should additionally be deferred to the main thread — see _run_on_main_thread.)
-        import omni.kit.viewport.utility as _vp_utils
-        if _vp_utils.get_active_viewport() is None:
-            print("--- Headless (no active viewport): skipping workspace camera + viewport publisher ---")
+        # Under --no-window the viewport publisher's frame-change capture (capture_viewport_to_buffer)
+        # HANGS the build (it waits on presented frames that never come), and under webrtc the off-thread
+        # capture crashes during the reset storm (same omni.ui-off-main-thread class as the log-redirect
+        # crash). The workspace camera is a visualization nicety the grasp/data loop does not need, so when
+        # headless we skip the whole camera+viewport block and go straight to gravity-off -> reset -> play.
+        # DETECTION: use the /app/window/enabled carb setting (False under --no-window). get_active_viewport()
+        # is NOT reliable — the full experience creates a *windowless* ViewportAPI object even headless
+        # (returns non-None), so the camera path would wrongly run and the capture publisher would hang.
+        # The documented headless camera path is Replicator render_product + annotators (see
+        # scripts/render_husarion_twin.py), not viewport capture.
+        import carb.settings as _carb_settings
+        _headless = not bool(_carb_settings.get_settings().get("/app/window/enabled"))
+        if _headless:
+            print("--- Headless (/app/window/enabled=False): skipping workspace camera + viewport publisher ---")
             self._disable_robot_chain_gravity()
             world = World.instance()
             if world:
