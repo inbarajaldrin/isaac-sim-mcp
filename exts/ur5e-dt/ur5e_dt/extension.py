@@ -1011,6 +1011,16 @@ class DigitalTwin(omni.ext.IExt):
         self._active_log_tab = "extension"
         self._ext_log_lines = []
         self._sys_log_lines = []
+        self._log_dirty = False
+        # One per-frame, main-thread drain of the log buffers into the UI panels (see
+        # _append_*/_drain_log_buffer). Subscribed BEFORE _setup_log_redirect installs the producers
+        # so the very first captured line is drained safely on the next frame, never inline.
+        try:
+            import omni.kit.app
+            self._log_drain_sub = omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(
+                self._drain_log_buffer, name="ur5e_dt_log_drain")
+        except Exception:
+            self._log_drain_sub = None
         self._setup_log_redirect()
 
         # Re-subscribe physics callbacks if action graphs already exist (e.g. after hot-reload)
@@ -1135,29 +1145,60 @@ class DigitalTwin(omni.ext.IExt):
                          height=0)
 
     def _run_on_main_thread(self, fn):
-        """Schedule fn to run on the main thread, safe from any thread."""
-        if threading.current_thread() is threading.main_thread():
-            fn()
-        else:
-            self._main_loop.call_soon_threadsafe(fn)
+        """Schedule fn to run on the main thread on the NEXT loop tick — NEVER synchronously.
 
+        Running fn() synchronously here re-enters omni.ui from inside whatever is currently on the
+        stack. The fatal case: a carb-log callback (_on_carb_log) or the stdout LogRedirector fires
+        on the MAIN thread from inside world.reset()/the first physics step — PhysX logs its
+        articulation-init warnings synchronously there — so the synchronous branch mutated omni.ui
+        mid-articulation-creation and crashed the process (silent C++ death at the first physics
+        step). Reproduced + isolated 2026-06-19: disabling the log redirect makes the full live
+        ur5e-dt build (UR5e + husarion mimic gripper + graphs + weld) survive reset/play; this was
+        misdiagnosed for a long time as an env/PhysX instability. Always deferring via
+        call_soon_threadsafe (safe from the main thread AND from PhysX worker threads) moves the UI
+        mutation off the physics-step stack to the next tick, killing the re-entrancy in every mode
+        while keeping the log panel working."""
+        try:
+            self._main_loop.call_soon_threadsafe(fn)
+        except Exception:
+            pass
+
+    # Log capture is a producer/consumer queue, NOT per-line UI scheduling. The producers
+    # (_on_carb_log + the stdout/stderr LogRedirector) can fire from ANY thread — including PhysX
+    # worker threads AND the main thread synchronously inside world.reset()/the first physics step.
+    # They must therefore touch ZERO omni.ui (touching omni.ui off-frame/off-main-thread crashed the
+    # process — see _run_on_main_thread). So they only append to a list (GIL-atomic) and flip a dirty
+    # flag; the single per-frame _drain_log_buffer (subscribed to the app update stream, runs on the
+    # main thread between frames) rebuilds the capped UI. This also avoids scheduling thousands of
+    # call_soon callbacks during the reset log-storm.
     def _append_ext_log(self, text):
         self._ext_log_lines.append(text)
         if len(self._ext_log_lines) > 500:
             self._ext_log_lines = self._ext_log_lines[-500:]
-            self._run_on_main_thread(lambda: self._rebuild_log_vstack(self._ext_log_vstack, self._ext_log_lines))
-            return
-        if hasattr(self, "_ext_log_vstack") and self._ext_log_vstack:
-            self._run_on_main_thread(lambda: self._add_log_label(self._ext_log_vstack, self._ext_log_scroll, text))
+        self._log_dirty = True
 
     def _append_sys_log(self, text):
         self._sys_log_lines.append(text)
         if len(self._sys_log_lines) > 500:
             self._sys_log_lines = self._sys_log_lines[-500:]
-            self._run_on_main_thread(lambda: self._rebuild_log_vstack(self._sys_log_vstack, self._sys_log_lines))
+        self._log_dirty = True
+
+    def _drain_log_buffer(self, _event=None):
+        """Main-thread, once-per-frame: rebuild the log panels from the buffers if dirty."""
+        if not getattr(self, "_log_dirty", False):
             return
-        if hasattr(self, "_sys_log_vstack") and self._sys_log_vstack:
-            self._run_on_main_thread(lambda: self._add_log_label(self._sys_log_vstack, self._sys_log_scroll, text))
+        self._log_dirty = False
+        try:
+            if getattr(self, "_ext_log_vstack", None):
+                self._rebuild_log_vstack(self._ext_log_vstack, self._ext_log_lines)
+                if getattr(self, "_ext_log_scroll", None):
+                    self._ext_log_scroll.scroll_y = self._ext_log_scroll.scroll_y_max + 100
+            if getattr(self, "_sys_log_vstack", None):
+                self._rebuild_log_vstack(self._sys_log_vstack, self._sys_log_lines)
+                if getattr(self, "_sys_log_scroll", None):
+                    self._sys_log_scroll.scroll_y = self._sys_log_scroll.scroll_y_max + 100
+        except Exception:
+            pass
 
     def _switch_log_tab(self, tab):
         self._active_log_tab = tab
@@ -3210,7 +3251,11 @@ class DigitalTwin(omni.ext.IExt):
             print("RG2 Gripper already exists at /World/RG2_Gripper, skipping import.")
             return
 
-        rg2_usd_path = _local_asset("gripper/husarion_rg2/husarion_rg2.usd")
+        # husarion_rg2_fixed.usd: the rewired self-contained asset (geometry+materials reparented
+        # UNDER the links; the raw importer output orphaned them in sibling /visuals,/colliders scopes
+        # so the multi-layer husarion_rg2.usd composes to a geometry-less skeleton). See
+        # scripts/rewire_husarion_rg2_usd.py + .local/design-notes/husarion-rg2-live-crash-FORENSICS.md.
+        rg2_usd_path = _local_asset("gripper/husarion_rg2/husarion_rg2_fixed.usd")
         add_reference_to_stage(rg2_usd_path, "/World/RG2_Gripper")
         print("Husarion RG2 Gripper imported at /World/RG2_Gripper")
 
