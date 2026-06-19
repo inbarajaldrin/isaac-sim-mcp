@@ -5,6 +5,12 @@ with an extension, the ROS domain rule, and the **open ROS2-driver gap** that cu
 fully-automated robot motion. Extend the TODO section as the driver-spawn method is figured out —
 the goal is to drive it from isaac-sim-mcp itself.
 
+> **⚠️ ALSO READ `.local/context.md`.** This repo is now being driven for the **GRASP LOOP**
+> (manipulation: move_to_grasp / close / lift, with the 15 mm Quick-Changer adapter in the chain) in
+> collaboration with the **aruco-runner** Mac session — a use beyond this repo's original twin-loading
+> purpose. `.local/context.md` is the operational guide for launching + driving that grasp stack and
+> the open grasp-offset task. Read **both** files. (Latest session handoff: `.local/handoff/`.)
+
 ## What this repo is
 
 MCP server (`isaac_mcp/server.py`) + Isaac Sim Kit extensions (`exts/`) exposing robot digital twins
@@ -237,3 +243,26 @@ in THIS repo (consumer-side fixes live in ros-mcp-server):
   slip out of the gripper mid-motion. Stop+play re-registers them. (0445657)
 - **`ROBOT_BASE_Z = 0.0`** — Isaac convention: ground plane + robot base both at z=0. Do NOT
   raise it; the consumer (ros-mcp-server) is mode-aware to match this in sim. (c545bde)
+
+## 2026-06-18 — gravity is DISABLED on the robot chain (position-mirrored twin) (commit ea282c2)
+
+**First-class DT fact, bigger than it sounds.** `quick_start` now authors
+`physxRigidBody:disableGravity=True` on all 16 robot-chain bodies (UR5e arm + Quick-Changer + RG2),
+while the manipulated objects (`/World/Objects/*`) keep gravity. **Do NOT re-enable arm/gripper gravity.**
+
+Why: the ur5e-dt arm is a **position-mirroring twin** — its joints come FROM `/joint_states` (the
+real/fake UR driver), which already encode the real UR5e's *gravity-compensated* pose. Simulating gravity
+on the twin's own links **double-counts** it: the PD joint drives must sag to hold a torque the real robot
+never fights. The sag is **pose-dependent** — ~0 at home/balanced poses but **~4 mrad on
+shoulder_lift/elbow → ~3 mm tool droop at extended reach** (grasp/place/insert poses). It was silently
+costing mm-scale accuracy on *every* extended-reach motion (retroactively explains prior real-vs-sim drift
+at reach); it first surfaced as the grasp table-clearance residual eating the ≥5 mm fingertip margin.
+
+Isolated by joint-space attribution (`r_ik=0`, `r_model=0`, payload negligible → pure `r_pipeline` sag);
+verified 4.06 → **0.00 mrad** at the grasp config via hot-reload + fresh `quick_start`. Feed-forward
+gravity-comp via `set_joint_efforts` does NOT work here — the ROS2 OmniGraph `ArticulationController` zeros
+applied efforts every physics step (feed-forward is the right fix only when the SIM drives the joints; here
+the path is driver → sim, so the upstream already handled gravity). See `_disable_robot_chain_gravity` in
+`exts/ur5e-dt/ur5e_dt/extension.py` for the full rationale, and the **`robot-joint-residual-attribution`**
+skill for the reusable diagnosis method (`r_total = r_ik + r_ref + r_pipeline + r_model`, joint-space as
+ground truth — works sim AND real).

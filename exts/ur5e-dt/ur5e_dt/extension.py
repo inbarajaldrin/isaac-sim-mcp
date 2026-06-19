@@ -1197,6 +1197,8 @@ class DigitalTwin(omni.ext.IExt):
         if stage.GetPrimAtPath(gripper_graph):
             self._gripper_graph_path = gripper_graph
             self._gripper_sub_attr_path = f"{gripper_graph}/target_sub.outputs:data"
+            self._gripper_state_name_attr = f"{gripper_graph}/state_pub.inputs:name"
+            self._gripper_state_pos_attr = f"{gripper_graph}/state_pub.inputs:position"
             self._gripper_articulation = None
             self._gripper_act_dof_idx = None
             self._gripper_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
@@ -2884,11 +2886,18 @@ class DigitalTwin(omni.ext.IExt):
           - SUBSCRIBES std_msgs/Float64 on /rg2_sim/joint_target — the actuated joint angle (rad);
             a physics-rate callback applies it to rg2_gripper_joint (clamped to the URDF stops).
             The 5 mimic joints follow via PhysxMimicJointAPI — nothing to drive.
-          - PUBLISHES sensor_msgs/JointState on /rg2_sim/joint_state (ROS2PublishJointState over
-            the gripper articulation) so the backend reads rg2_gripper_joint BY NAME and derives
-            contact/raw/depth + the compat /gripper_width_sim itself.
-        Removed: the old String /gripper_command parse, the linear width→angle map, the 0..100
-        cap, and the width/effort/asymmetry publishers (the backend owns those semantics now).
+          - PUBLISHES sensor_msgs/JointState on /rg2_sim/joint_state via a PLAIN ROS2Publisher
+            whose name[]/position[] fields the physics callback fills (rg2_gripper_joint, theta)
+            so the backend reads the joint BY NAME and derives contact/raw/depth + /gripper_width_sim.
+        Removed: the old String /gripper_command parse, the linear width→angle map, the 0..100 cap,
+        and the width/effort/asymmetry publishers (the backend owns those semantics now).
+
+        WHY a plain ROS2Publisher + callback (NOT isaacsim.ros2.bridge.ROS2PublishJointState):
+        the articulation-introspecting JointState publisher WEDGES the main thread in C++ at
+        timeline.play() on this welded gripper articulation (isolated 2026-06-19 by stepping the
+        build: every USD step is fine; play wedges iff this graph carries ROS2PublishJointState,
+        and a fresh play without it is clean). The force publisher uses this same proven plain-
+        publisher pattern (see setup_force_publish_action_graph / _on_physics_step_force).
         """
         import omni.physx
 
@@ -2909,39 +2918,40 @@ class DigitalTwin(omni.ext.IExt):
         if stage.GetPrimAtPath(graph_path):
             stage.RemovePrim(graph_path)
 
-        art_root = f"/World/RG2_Gripper/{RG2_ART_ROOT_REL}"
         (graph, nodes, _, _) = og.Controller.edit(
             {"graph_path": graph_path, "evaluator_name": "execution"},
             {
                 keys.CREATE_NODES: [
                     ("tick", "omni.graph.action.OnPlaybackTick"),
                     ("context", "isaacsim.ros2.bridge.ROS2Context"),
-                    ("read_time", "isaacsim.core.nodes.IsaacReadSimulationTime"),
                     ("target_sub", "isaacsim.ros2.bridge.ROS2Subscriber"),
-                    ("state_pub", "isaacsim.ros2.bridge.ROS2PublishJointState"),
+                    ("state_pub", "isaacsim.ros2.bridge.ROS2Publisher"),
                 ],
                 keys.SET_VALUES: [
                     # actuated-joint target in (rad)
                     ("target_sub.inputs:messageName", "Float64"),
                     ("target_sub.inputs:messagePackage", "std_msgs"),
                     ("target_sub.inputs:topicName", RG2_JOINT_TARGET_TOPIC),
-                    # joint state out (sensor_msgs/JointState over the gripper articulation)
+                    # joint state out — plain JointState publisher; callback fills name[]/position[]
+                    ("state_pub.inputs:messageName", "JointState"),
+                    ("state_pub.inputs:messagePackage", "sensor_msgs"),
                     ("state_pub.inputs:topicName", RG2_JOINT_STATE_TOPIC),
-                    ("state_pub.inputs:targetPrim", art_root),
                 ],
                 keys.CONNECT: [
                     ("tick.outputs:tick", "target_sub.inputs:execIn"),
                     ("tick.outputs:tick", "state_pub.inputs:execIn"),
                     ("context.outputs:context", "target_sub.inputs:context"),
                     ("context.outputs:context", "state_pub.inputs:context"),
-                    ("read_time.outputs:simulationTime", "state_pub.inputs:timeStamp"),
                 ],
             }
         )
 
-        # Store attribute paths for the physics callback (Float64 target → rg2_gripper_joint)
+        # Store attribute paths for the physics callback (Float64 target → rg2_gripper_joint;
+        # callback fills the JointState name[]/position[] on state_pub each step).
         self._gripper_graph_path = graph_path
         self._gripper_sub_attr_path = f"{graph_path}/target_sub.outputs:data"
+        self._gripper_state_name_attr = f"{graph_path}/state_pub.inputs:name"
+        self._gripper_state_pos_attr = f"{graph_path}/state_pub.inputs:position"
         self._gripper_articulation = None
         self._gripper_act_dof_idx = None
 
@@ -2953,20 +2963,24 @@ class DigitalTwin(omni.ext.IExt):
 
         print(f"Gripper Action Graph created at {graph_path}")
         print(f"  sub {RG2_JOINT_TARGET_TOPIC} (Float64 rad) -> {RG2_ACT_JOINT}")
-        print(f"  pub {RG2_JOINT_STATE_TOPIC} (JointState over {art_root})")
+        print(f"  pub {RG2_JOINT_STATE_TOPIC} (JointState; callback fills name/position)")
 
     def _on_physics_step_gripper(self, dt):
-        """Physics step callback — apply the Float64 /rg2_sim/joint_target (rad) to rg2_gripper_joint.
+        """Physics step callback — apply the Float64 /rg2_sim/joint_target (rad) to rg2_gripper_joint
+        AND publish the actual joint angle as a sensor_msgs/JointState (name[]/position[]).
 
-        Pure actuator: joint_state is published by the OmniGraph ROS2PublishJointState node, not
-        here. The mimic joints follow the actuated joint via PhysxMimicJointAPI.
+        Both directions live here (proven plain-publisher pattern; the introspecting
+        ROS2PublishJointState node wedges play). The 5 mimic joints follow via PhysxMimicJointAPI.
         """
         import numpy as np
         from isaacsim.core.utils.types import ArticulationActions
 
         try:
+            # Drive via the gripper PRIM-ROOT path (the proven control surface the old RG2 rig
+            # used), not the articulation-root child — ArticulationView resolves the husarion
+            # articulation under it the same way the old gripper was rigged.
             artic = self._lazy_init_articulation(
-                '_gripper_articulation', f'/World/RG2_Gripper/{RG2_ART_ROOT_REL}',
+                '_gripper_articulation', '/World/RG2_Gripper',
                 'gripper_ctrl', '_gripper_warmup')
             if artic is None:
                 return
@@ -2981,21 +2995,30 @@ class DigitalTwin(omni.ext.IExt):
                 self._gripper_act_dof_idx = names.index(RG2_ACT_JOINT)
             gidx = self._gripper_act_dof_idx
 
-            # Read the Float64 joint target (rad) from the subscriber
+            # Read the Float64 joint target (rad) from the subscriber and apply it
             try:
                 raw = og.Controller.get(og.Controller.attribute(self._gripper_sub_attr_path))
             except Exception:
                 raw = None
-            if raw is None:
-                return
-            try:
-                theta = float(raw)
-            except (TypeError, ValueError):
-                return
-            theta = float(np.clip(theta, RG2_THETA_MIN, RG2_THETA_MAX))
-            artic.apply_action(ArticulationActions(
-                joint_positions=np.array([[theta]]),
-                joint_indices=np.array([gidx])))
+            if raw is not None:
+                try:
+                    theta = float(np.clip(float(raw), RG2_THETA_MIN, RG2_THETA_MAX))
+                    artic.apply_action(ArticulationActions(
+                        joint_positions=np.array([[theta]]),
+                        joint_indices=np.array([gidx])))
+                except (TypeError, ValueError):
+                    pass
+
+            # Publish the ACTUAL actuated-joint angle as JointState (name + position) for the
+            # control-pkg backend (which selects rg2_gripper_joint BY NAME).
+            qpos = artic.get_joint_positions()
+            if qpos is not None and qpos.shape[1] > gidx:
+                actual = float(qpos[0, gidx])
+                try:
+                    og.Controller.attribute(self._gripper_state_name_attr).set([RG2_ACT_JOINT])
+                    og.Controller.attribute(self._gripper_state_pos_attr).set([actual])
+                except Exception:
+                    pass
         except Exception as e:
             print(f"[Gripper callback] {e}")
 
