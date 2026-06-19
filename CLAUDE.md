@@ -49,6 +49,30 @@ Raw equivalent: `~/env_isaaclab/bin/isaacsim --ext-folder ~/Documents/isaac-sim-
 python3 ~/.claude/skills/isaac-sim-extension-dev/scripts/mcp_test.py 8766 list_available_tools
 ```
 
+### Viewing the sim — **WEBRTC WORKS on dual-a4500. It was NEVER broken** (read this before "fixing" it)
+
+`VIEW=webrtc bash scripts/launch_sim.sh launch ur5e-dt` → streams the active viewport to the Mac's
+Isaac WebRTC client at **`<tailscale-ip>:49100`** (verified end-to-end 2026-06-19: srcObject:true,
+readyState:4, 1920-wide, currentTime advancing). The **isaac-sim-watchdog** Mac session owns the client
+(`/send-to-agent` → `isaac-sim-watchdog`); ask it to `switch set dual-a4500` and read back `<video>` state.
+WebRTC streams **whatever the active viewport camera shows** — change `vp.camera_path` and it appears
+live, no reconnect. Multiple sessions have burned hours wrongly concluding "webrtc is broken on 5.1." The
+actual gotchas (all fixed/known now):
+- **Stale-launcher "already running" (FIXED).** `isaacsim_launch.sh:is_running()` used `pgrep -f
+  "bin/isaacsim"`, which false-matched launcher bash wrappers / the agent's own grep → spurious "Isaac
+  Sim already running" → the launch silently never started. Now pidfile-based (`kill -0`). If you still
+  see "already running" with no real sim, kill stray `bin/isaacsim` PIDs + `rm /tmp/isaacsim.pid`.
+- **Wait for FULL load before `quick_start`.** The socket answers at ~3 s but the app isn't ready until
+  `grep "Isaac Sim Full App is loaded" /tmp/isaacsim.log` (~17 s). Calling `quick_start` early crashes
+  the process (→ next socket connect = refused, looks like "webrtc crashed").
+- **Camera-ordering crash (webrtc only).** A persisted/invalid session camera + the StageAxis handler →
+  `adjust_session_camera` → `NoneType.do()` hard-crash on `quick_start`'s stage edits. Fix: set
+  `get_active_viewport().camera_path = "/OmniverseKit_Persp"` (built-in persp) BEFORE `quick_start`, build
+  the scene (creates `/World/workspace_camera_sim`), THEN point the viewport at the scene cam.
+- **Display is `:1`, not `:0`** on dual-a4500 (`VIEW=window` needs `DISPLAY=:1`). Headless offscreen
+  capture (Camera/render_product) returns EMPTY without `enable_cameras`; for a still use webrtc or a
+  standalone `SimulationApp` render (`scripts/render_husarion_twin.py`), not live-headless capture.
+
 ## ROS domain rule (important)
 
 Set `ROS_DOMAIN_ID` **identically** on the sim launch AND on every ROS-side client (the
