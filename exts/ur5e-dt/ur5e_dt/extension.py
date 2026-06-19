@@ -3431,6 +3431,13 @@ class DigitalTwin(omni.ext.IExt):
             return rx * ry * rz  # XYZ order
         quat0 = euler_to_quatf(-90, 0, -90)
         quat1 = euler_to_quatf(-180, 90, 0)
+        # +90 yaw CLOSING-AXIS FIX: the husarion-swap quat0/quat1 placed the gripper with jaw-separation
+        # along flange Y, but every grasp candidate's approach_quaternion (aruco's generator,
+        # Q_CONV=Ry(180)) AND move_to_grasp assume jaw-sep along flange X. Masked by the crash, then by
+        # the QC-drop miss; exposed once the QC fix let grasps reach the part (hex jam / U-part graze =
+        # wrong-axis close). +90 about the flange/approach Z flips jaw-sep Y->X (live-verified; the prior
+        # twin convention is "reach +Z, jaw-sep -X", a4f3dcb1). Sign-agnostic: +-90 are the same jaw plane.
+        quat0 = euler_to_quatf(0, 0, 90) * quat0
 
         # === OnRobot Quick-Changer (asset-driven +15mm) restored between flange and gripper ===
         # REGRESSION FIX: commit 3c9002d dropped aa16f0c's QC splice on the false assumption the 15mm
