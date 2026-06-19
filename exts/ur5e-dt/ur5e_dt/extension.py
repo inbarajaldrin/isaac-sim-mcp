@@ -3373,20 +3373,23 @@ class DigitalTwin(omni.ext.IExt):
         print("Quick-Changer adapter imported at /World/QuickChanger")
 
     def attach_rg2_to_ur5e(self):
-        """Weld the husarion RG2 (tool0 ≡ UR flange) to the UR5e with ONE fixed joint.
+        """Weld the husarion RG2 to the UR5e through the OnRobot Quick-Changer (TWO fixed joints).
 
-        The husarion USD authors the whole gripper relative to its `tool0` link with the +90°
-        yaw AND the 15mm Quick-Changer baked into the tool0 → quick_changer → base fixed chain
-        (lab-verified reach +Z / jaws flange-X). So the mount is a SINGLE fixed weld putting
-        husarion tool0 at the UR flange frame — no separate QuickChanger.usd splice, no +15mm
-        adapter joint (both obsolete; the 15mm is inside the gripper USD now).
+        REGRESSION FIX (this method): the husarion USD does NOT bake in the 15mm Quick-Changer
+        (its tool0→base = 0), contrary to the prior assumption — so a single zero-offset weld mounted
+        the gripper ~15mm too close to the flange (tool0→tip 209.9 vs CAD 226.9). The real robot
+        physically has the QC, so this regressed sim/real parity and made grasps land ~15mm high.
+        We restore the asset-driven QC splice (as aa16f0c had it, before 3c9002d dropped it):
+          robot_gripper_joint :  wrist_3 → quick_changer_link   (flange face, verified quat0/quat1)
+          adapter_gripper_joint: quick_changer_link[tool_mount, +15mm asset frame] → husarion tool0
+        The +15mm comes from QuickChanger.usd's `tool_mount` frame (single source — the consumer must
+        set COUPLING→0 / read the corrected chain, NOT re-add it). The QC mesh+mass fill 0..15mm.
 
-        Frame math reuses the VERIFIED at-flange rotation: the husarion tool0 frame == the old
-        quick_changer_link frame (both are the flange face), so the same quat0/quat1 that placed
-        the old at-flange frame place husarion tool0:  tool0_world = Rot(quat1)⁻¹·Rot(quat0)·wrist3_world.
-        USD joint frames are body-relative (NOT world — GPT plan-gate), so we author body-relative
-        localRot0/localRot1, pre-seat /World/RG2_Gripper so tool0 lands at that frame, then GATE on
-        a <0.1mm / <0.1° world-delta before returning (catches any frame error pre-play).
+        Frame math: J = Rot(quat1)⁻¹·Rot(quat0)·wrist3_world is the flange frame (quick_changer_link
+        lands here); husarion tool0 lands at tm_local·J (the tool_mount world frame). We pre-seat both
+        /World/QuickChanger and /World/RG2_Gripper so the joints only nudge, then GATE tool0 vs that
+        target pre-play. Both joints are excludeFromArticulation=True (UR5e and gripper stay separate
+        articulations, with the free QC rigid body welded between).
         """
         import omni.usd
         from pxr import Usd, Sdf, UsdGeom, Gf
@@ -3429,50 +3432,100 @@ class DigitalTwin(omni.ext.IExt):
         quat0 = euler_to_quatf(-90, 0, -90)
         quat1 = euler_to_quatf(-180, 90, 0)
 
-        # robot_gripper_joint: wrist_3_link -> husarion tool0. Fixed, excludeFromArticulation=True
-        # (joins two SEPARATE articulations — UR5e and the gripper — and breaks the would-be loop).
+        # === OnRobot Quick-Changer (asset-driven +15mm) restored between flange and gripper ===
+        # REGRESSION FIX: commit 3c9002d dropped aa16f0c's QC splice on the false assumption the 15mm
+        # was baked into the husarion USD. It is NOT (husarion tool0->base = 0), so the gripper mounted
+        # ~15mm too close to the flange -> tool0->tip 209.9 vs CAD 226.9 -> grasps landed ~15mm high ->
+        # the table-clearance SHIFT (keyed on the CAD fingertip-Z that assumes the QC) pushed them ABOVE
+        # the part -> close-on-empty. We re-introduce the REAL QuickChanger.usd link (mesh + ~0.41kg mass)
+        # and mount husarion tool0 on its asset-driven `tool_mount` frame (+15mm), so the coupling is
+        # MODELED + single-sourced from the asset geometry — NOT a hardcoded constant (operator-gated).
+        self.import_adapter()
+        qc_link_path = "/World/QuickChanger/quick_changer_link"
+        tool_mount_path = qc_link_path + "/tool_mount"
+        adapter_joint_path = "/World/UR5e/joints/adapter_gripper_joint"
+        qc_root_prim = stage.GetPrimAtPath("/World/QuickChanger")
+        qc_link_prim = stage.GetPrimAtPath(qc_link_path)
+        tm_prim = stage.GetPrimAtPath(tool_mount_path)
+        if not (qc_link_prim and qc_link_prim.IsValid()):
+            print("Error: QuickChanger quick_changer_link not found — import_adapter failed.")
+            return
+
+        def _rot_m(qf):
+            m = Gf.Matrix4d(1.0)
+            m.SetRotateOnly(Gf.Quatd(float(qf.GetReal()), Gf.Vec3d(qf.GetImaginary())))
+            return m
+
+        # Asset-driven tool_mount offset (the real +15mm gripper face, read from QuickChanger.usd —
+        # single source of the coupling; the consumer must NOT re-add it).
+        if tm_prim and tm_prim.IsValid():
+            tm_local = UsdGeom.Xformable(tm_prim).GetLocalTransformation(Usd.TimeCode.Default())
+        else:
+            tm_local = Gf.Matrix4d(1.0); tm_local.SetTranslateOnly(Gf.Vec3d(0.0, 0.0, 0.015))
+            print(" WARN: tool_mount frame missing in QuickChanger.usd; using literal +15mm fallback.")
+        _tmq = tm_local.ExtractRotationQuat()
+        tm_pos = Gf.Vec3f(tm_local.ExtractTranslation())
+        tm_rot = Gf.Quatf(float(_tmq.GetReal()), Gf.Vec3f(_tmq.GetImaginary()))
+
+        # Joint 1 — robot_gripper_joint: wrist_3 -> quick_changer_link (flange face; the verified
+        # at-flange rotation quat0/quat1). The QC takes the gripper's former at-flange frame.
         if not (joint_prim and joint_prim.IsValid()):
             joint_prim = stage.DefinePrim(joint_path, "PhysicsFixedJoint")
         joint_prim.CreateRelationship("physics:body0").SetTargets([Sdf.Path(wrist3_path)])
-        joint_prim.CreateRelationship("physics:body1").SetTargets([Sdf.Path(rg2_tool0)])
+        joint_prim.CreateRelationship("physics:body1").SetTargets([Sdf.Path(qc_link_path)])
         joint_prim.CreateAttribute("physics:jointEnabled", Sdf.ValueTypeNames.Bool).Set(True)
         joint_prim.CreateAttribute("physics:excludeFromArticulation", Sdf.ValueTypeNames.Bool).Set(True)
         joint_prim.CreateAttribute("physics:localPos0", Sdf.ValueTypeNames.Point3f, custom=True).Set(Gf.Vec3f(0, 0, 0))
         joint_prim.CreateAttribute("physics:localPos1", Sdf.ValueTypeNames.Point3f, custom=True).Set(Gf.Vec3f(0, 0, 0))
         joint_prim.CreateAttribute("physics:localRot0", Sdf.ValueTypeNames.Quatf, custom=True).Set(quat0)
         joint_prim.CreateAttribute("physics:localRot1", Sdf.ValueTypeNames.Quatf, custom=True).Set(quat1)
-        print("robot_gripper_joint: wrist_3 -> husarion tool0 (single fixed weld; QC + yaw baked in).")
 
-        # Pre-seat /World/RG2_Gripper so tool0 lands at its joint-resolved world frame J
-        # (no play-time snap). J = Rot(quat1)⁻¹ · Rot(quat0) · wrist_3_world  (the verified formula).
-        def _rot_m(qf):
-            m = Gf.Matrix4d(1.0)
-            m.SetRotateOnly(Gf.Quatd(float(qf.GetReal()), Gf.Vec3d(qf.GetImaginary())))
-            return m
+        # Joint 2 — adapter_gripper_joint: quick_changer_link[tool_mount, +15mm] -> husarion tool0.
+        # Identity relative rotation; the +15mm is the asset's tool_mount frame (the QC mesh fills 0..15).
+        adapter_joint = stage.GetPrimAtPath(adapter_joint_path)
+        if not (adapter_joint and adapter_joint.IsValid()):
+            adapter_joint = stage.DefinePrim(adapter_joint_path, "PhysicsFixedJoint")
+        adapter_joint.CreateRelationship("physics:body0").SetTargets([Sdf.Path(qc_link_path)])
+        adapter_joint.CreateRelationship("physics:body1").SetTargets([Sdf.Path(rg2_tool0)])
+        adapter_joint.CreateAttribute("physics:jointEnabled", Sdf.ValueTypeNames.Bool).Set(True)
+        adapter_joint.CreateAttribute("physics:excludeFromArticulation", Sdf.ValueTypeNames.Bool).Set(True)
+        adapter_joint.CreateAttribute("physics:localPos0", Sdf.ValueTypeNames.Point3f, custom=True).Set(tm_pos)
+        adapter_joint.CreateAttribute("physics:localPos1", Sdf.ValueTypeNames.Point3f, custom=True).Set(Gf.Vec3f(0, 0, 0))
+        adapter_joint.CreateAttribute("physics:localRot0", Sdf.ValueTypeNames.Quatf, custom=True).Set(tm_rot)
+        adapter_joint.CreateAttribute("physics:localRot1", Sdf.ValueTypeNames.Quatf, custom=True).Set(Gf.Quatf(1, 0, 0, 0))
+        print(f"QC restored: wrist_3 -> quick_changer_link -> [tool_mount {tm_pos[2]*1000:.1f}mm] -> husarion tool0.")
+
+        # Pre-seat both bodies so the joints only nudge (no play-time snap).
         w3_l2w = UsdGeom.Xformable(w3_prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
-        J = _rot_m(quat1).GetInverse() * _rot_m(quat0) * w3_l2w
+        J = _rot_m(quat1).GetInverse() * _rot_m(quat0) * w3_l2w   # flange frame (quick_changer_link lands here)
+        # QC root: place /World/QuickChanger so quick_changer_link lands at J.
+        qc_link_local = UsdGeom.Xformable(qc_link_prim).GetLocalTransformation()
+        qc_seed = qc_link_local.GetInverse() * J
+        qxf = UsdGeom.Xform(qc_root_prim); qxf.ClearXformOpOrder()
+        qxf.AddTranslateOp().Set(qc_seed.ExtractTranslation())
+        qxf.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(qc_seed.ExtractRotationQuat())
+        # Gripper: husarion tool0 lands at the tool_mount world frame (tm_local · J = J shifted +15mm).
+        tool0_target = tm_local * J
         tool0_local = UsdGeom.Xformable(tool0_prim).GetLocalTransformation()
-        root_seed = tool0_local.GetInverse() * J
-        xf = UsdGeom.Xform(rg2_prim)
-        xf.ClearXformOpOrder()
+        root_seed = tool0_local.GetInverse() * tool0_target
+        xf = UsdGeom.Xform(rg2_prim); xf.ClearXformOpOrder()
         xf.AddTranslateOp().Set(root_seed.ExtractTranslation())
         xf.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(root_seed.ExtractRotationQuat())
 
-        # GATE: verify tool0 now resolves to J within tight tolerance (catches frame bugs pre-play).
+        # GATE: husarion tool0 must resolve to tool0_target (the +15mm tool_mount frame) within tol.
         tool0_now = UsdGeom.Xformable(tool0_prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
-        dpos_mm = (tool0_now.ExtractTranslation() - J.ExtractTranslation()).GetLength() * 1000.0
+        dpos_mm = (tool0_now.ExtractTranslation() - tool0_target.ExtractTranslation()).GetLength() * 1000.0
         q_now = tool0_now.ExtractRotationQuat().GetNormalized()
-        q_des = J.ExtractRotationQuat().GetNormalized()
+        q_des = tool0_target.ExtractRotationQuat().GetNormalized()
         q_rel = q_des.GetInverse() * q_now
         dang_deg = math.degrees(2.0 * math.acos(min(1.0, abs(q_rel.GetReal()))))
         if dpos_mm < 0.1 and dang_deg < 0.1:
-            print(f"[attach] weld delta OK: dpos={dpos_mm:.4f}mm dang={dang_deg:.4f}deg (gated <0.1/<0.1).")
+            print(f"[attach] QC weld delta OK: dpos={dpos_mm:.4f}mm dang={dang_deg:.4f}deg (gated <0.1/<0.1).")
         else:
-            print(f"[attach] !! WELD DELTA OUT OF TOL: dpos={dpos_mm:.4f}mm dang={dang_deg:.4f}deg "
-                  f"(want <0.1mm/<0.1deg) — husarion tool0 frame differs from the at-flange "
-                  f"assumption. DO NOT trust the mount; inspect frames before play.")
+            print(f"[attach] !! QC WELD DELTA OUT OF TOL: dpos={dpos_mm:.4f}mm dang={dang_deg:.4f}deg "
+                  f"— inspect frames before play; do NOT trust the mount.")
 
-        print("Husarion RG2 attached to UR5e (single fixed weld, tool0 ≡ flange).")
+        print("Husarion RG2 attached to UR5e via the 15mm OnRobot Quick-Changer (asset-driven, restored).")
 
     def import_realsense_camera(self):
         """Import Intel RealSense D455 camera"""
