@@ -78,6 +78,41 @@ SIMPLE_ROOM_PRIM_PATH = "/World/SimpleRoom"
 SIMPLE_ROOM_ASSET_REL = "/Isaac/Environments/Simple_Room/simple_room.usd"
 SIMPLE_ROOM_Z = -0.11
 
+# --- Husarion-native OnRobot RG2 gripper (CAD-exact twin; see import_rg2_gripper) ---
+# The converted USD (scripts/convert_husarion_rg2_urdf.py) has defaultPrim /onrobot_rg2 ->
+# /World/RG2_Gripper, articulation root tool0, joints under /World/RG2_Gripper/joints/.
+RG2_USD_REL = "gripper/husarion_rg2/husarion_rg2.usd"
+RG2_ART_ROOT_REL = "tool0"                       # articulation root under /World/RG2_Gripper
+RG2_ACT_JOINT = "rg2_gripper_joint"              # the single actuated revolute (axis Z)
+RG2_MIMIC_JOINTS = (                             # the 5 PhysxMimicJointAPI-coupled finger joints
+    "rg2_l_finger_2_joint", "rg2_l_finger_passive_joint",
+    "rg2_r_finger_1_joint", "rg2_r_finger_2_joint", "rg2_r_finger_passive_joint",
+)
+RG2_FINGER_LINKS = ("rg2_l_finger_link", "rg2_r_finger_link")  # fingertip links (pad carriers)
+# Mimic-spring rigidity: the importer authors a weak spring (nf=25Hz, damp=0.005 → ~5.3° lag).
+# Measured sweep (scripts/test_husarion_rg2_mimic_rigidity.py): nf=1000/damp=1.0 → ~0.005° lag,
+# 0 ring. Tunes the constraint's OWN spring (NOT a fighting DriveAPI).
+RG2_MIMIC_NAT_FREQ = 1000.0
+RG2_MIMIC_DAMPING = 1.0
+# Actuated-joint position drive. The importer's gains were sized for the WEAK default mimic
+# spring; with the stiffened mimic the actuated joint needs real authority to drive the coupled
+# parallelogram across the full range. Validated (scripts/test_husarion_rg2_mount.py): tracks
+# theta to ~0.001 rad with mimic residual ≤0.09° across [-0.45, 0.78]. NOTE: this is a
+# POSITION-mirroring gripper — grasp firmness comes from holding the commanded width; if the
+# grasp loop later needs softer/force-limited contact, lower RG2_ACT_MAXFORCE (trades a little
+# position accuracy at the extremes).
+RG2_ACT_STIFFNESS = 10000.0
+RG2_ACT_DAMPING = 1000.0
+RG2_ACT_MAXFORCE = 1000.0
+# Actuated-joint hard stops (URDF limit on rg2_gripper_joint). The extension is a PURE joint
+# actuator: it clamps the commanded /rg2_sim/joint_target to these physical limits only — the
+# contact-width↔theta mapping + CAD operational range live in the control-pkg sim backend.
+RG2_THETA_MIN = -0.45
+RG2_THETA_MAX = 1.0
+# Topics for the migrated gripper seam (control pkg <-> twin); rad, sensor_msgs/JointState.
+RG2_JOINT_TARGET_TOPIC = "/rg2_sim/joint_target"   # std_msgs/Float64, actuated joint angle (rad)
+RG2_JOINT_STATE_TOPIC = "/rg2_sim/joint_state"     # sensor_msgs/JointState (backend selects by name)
+
 # Per-environment Z offset to align each env's floor surface to z=0.
 # Most envs already author their floor at z=0 — only the legacy gridroom assets need correction.
 ENVIRONMENT_Z_OFFSETS = {
@@ -1157,14 +1192,13 @@ class DigitalTwin(omni.ext.IExt):
         if stage is None:
             return
 
-        # Gripper action graph
+        # Gripper action graph (joint actuator: Float64 target_sub -> rg2_gripper_joint)
         gripper_graph = "/Graph/ActionGraph_RG2"
         if stage.GetPrimAtPath(gripper_graph):
             self._gripper_graph_path = gripper_graph
-            self._gripper_sub_attr_path = f"{gripper_graph}/subscriber.outputs:data"
-            self._gripper_pub_attr_path = f"{gripper_graph}/ros2_publisher.inputs:data"
-            self._gripper_effort_pub_attr_path = f"{gripper_graph}/effort_publisher.inputs:data"
-            self._gripper_asym_pub_attr_path = f"{gripper_graph}/asymmetry_publisher.inputs:data"
+            self._gripper_sub_attr_path = f"{gripper_graph}/target_sub.outputs:data"
+            self._gripper_articulation = None
+            self._gripper_act_dof_idx = None
             self._gripper_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
                 self._on_physics_step_gripper
             )
@@ -2843,18 +2877,23 @@ class DigitalTwin(omni.ext.IExt):
         print("ROS 2 Action Graph setup complete.")
 
     def setup_gripper_action_graph(self):
-        """Setup gripper action graph for ROS2 control.
+        """Pure JOINT-ACTUATOR seam for the husarion RG2 (migration a).
 
-        Uses the same pattern as the force publisher: a pure OmniGraph action
-        graph for ROS2 communication and an extension-level physics callback
-        for ArticulationView control. No ScriptNodes — the extension owns
-        the ArticulationView lifecycle so stop/play works without refresh.
+        The twin no longer owns any width↔joint math: that moved UP into the control-package
+        sim backend (ros-mcp-server onrobot_rg2_sim_control). This graph just:
+          - SUBSCRIBES std_msgs/Float64 on /rg2_sim/joint_target — the actuated joint angle (rad);
+            a physics-rate callback applies it to rg2_gripper_joint (clamped to the URDF stops).
+            The 5 mimic joints follow via PhysxMimicJointAPI — nothing to drive.
+          - PUBLISHES sensor_msgs/JointState on /rg2_sim/joint_state (ROS2PublishJointState over
+            the gripper articulation) so the backend reads rg2_gripper_joint BY NAME and derives
+            contact/raw/depth + the compat /gripper_width_sim itself.
+        Removed: the old String /gripper_command parse, the linear width→angle map, the 0..100
+        cap, and the width/effort/asymmetry publishers (the backend owns those semantics now).
         """
         import omni.physx
 
-        print("Setting up Gripper Action Graph...")
+        print("Setting up Gripper Action Graph (joint actuator)...")
 
-        # Check that RG2 gripper exists before creating graph
         stage_check = omni.usd.get_context().get_stage()
         if not stage_check.GetPrimAtPath("/World/RG2_Gripper"):
             print("Error: RG2 gripper not found at /World/RG2_Gripper. Import and attach gripper first.")
@@ -2866,168 +2905,97 @@ class DigitalTwin(omni.ext.IExt):
         graph_path = "/Graph/ActionGraph_RG2"
         keys = og.Controller.Keys
 
-        # Delete existing graph
         stage = omni.usd.get_context().get_stage()
         if stage.GetPrimAtPath(graph_path):
             stage.RemovePrim(graph_path)
 
-        # Create graph with ROS2 nodes — width publisher + effort publisher
+        art_root = f"/World/RG2_Gripper/{RG2_ART_ROOT_REL}"
         (graph, nodes, _, _) = og.Controller.edit(
             {"graph_path": graph_path, "evaluator_name": "execution"},
             {
                 keys.CREATE_NODES: [
                     ("tick", "omni.graph.action.OnPlaybackTick"),
                     ("context", "isaacsim.ros2.bridge.ROS2Context"),
-                    ("subscriber", "isaacsim.ros2.bridge.ROS2Subscriber"),
-                    ("ros2_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
-                    ("effort_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
-                    ("asymmetry_publisher", "isaacsim.ros2.bridge.ROS2Publisher"),
+                    ("read_time", "isaacsim.core.nodes.IsaacReadSimulationTime"),
+                    ("target_sub", "isaacsim.ros2.bridge.ROS2Subscriber"),
+                    ("state_pub", "isaacsim.ros2.bridge.ROS2PublishJointState"),
                 ],
                 keys.SET_VALUES: [
-                    ("subscriber.inputs:messageName", "String"),
-                    ("subscriber.inputs:messagePackage", "std_msgs"),
-                    ("subscriber.inputs:topicName", "gripper_command"),
-                    ("ros2_publisher.inputs:messageName", "Float64"),
-                    ("ros2_publisher.inputs:messagePackage", "std_msgs"),
-                    ("ros2_publisher.inputs:topicName", "gripper_width_sim"),
-                    ("effort_publisher.inputs:messageName", "Float64"),
-                    ("effort_publisher.inputs:messagePackage", "std_msgs"),
-                    ("effort_publisher.inputs:topicName", "gripper_effort_sim"),
-                    ("asymmetry_publisher.inputs:messageName", "Float64"),
-                    ("asymmetry_publisher.inputs:messagePackage", "std_msgs"),
-                    ("asymmetry_publisher.inputs:topicName", "gripper_asymmetry_sim"),
+                    # actuated-joint target in (rad)
+                    ("target_sub.inputs:messageName", "Float64"),
+                    ("target_sub.inputs:messagePackage", "std_msgs"),
+                    ("target_sub.inputs:topicName", RG2_JOINT_TARGET_TOPIC),
+                    # joint state out (sensor_msgs/JointState over the gripper articulation)
+                    ("state_pub.inputs:topicName", RG2_JOINT_STATE_TOPIC),
+                    ("state_pub.inputs:targetPrim", art_root),
                 ],
                 keys.CONNECT: [
-                    ("tick.outputs:tick", "subscriber.inputs:execIn"),
-                    ("tick.outputs:tick", "ros2_publisher.inputs:execIn"),
-                    ("tick.outputs:tick", "effort_publisher.inputs:execIn"),
-                    ("tick.outputs:tick", "asymmetry_publisher.inputs:execIn"),
-                    ("context.outputs:context", "subscriber.inputs:context"),
-                    ("context.outputs:context", "ros2_publisher.inputs:context"),
-                    ("context.outputs:context", "effort_publisher.inputs:context"),
-                    ("context.outputs:context", "asymmetry_publisher.inputs:context"),
+                    ("tick.outputs:tick", "target_sub.inputs:execIn"),
+                    ("tick.outputs:tick", "state_pub.inputs:execIn"),
+                    ("context.outputs:context", "target_sub.inputs:context"),
+                    ("context.outputs:context", "state_pub.inputs:context"),
+                    ("read_time.outputs:simulationTime", "state_pub.inputs:timeStamp"),
                 ],
             }
         )
 
-        # Create custom data attributes on publishers
-        publisher_prim = stage.GetPrimAtPath(f"{graph_path}/ros2_publisher")
-        publisher_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
-        effort_prim = stage.GetPrimAtPath(f"{graph_path}/effort_publisher")
-        effort_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
-        asym_prim = stage.GetPrimAtPath(f"{graph_path}/asymmetry_publisher")
-        asym_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
-
-        # Store attribute paths for the physics callback
+        # Store attribute paths for the physics callback (Float64 target → rg2_gripper_joint)
         self._gripper_graph_path = graph_path
-        self._gripper_sub_attr_path = f"{graph_path}/subscriber.outputs:data"
-        self._gripper_pub_attr_path = f"{graph_path}/ros2_publisher.inputs:data"
-        self._gripper_effort_pub_attr_path = f"{graph_path}/effort_publisher.inputs:data"
-        self._gripper_asym_pub_attr_path = f"{graph_path}/asymmetry_publisher.inputs:data"
+        self._gripper_sub_attr_path = f"{graph_path}/target_sub.outputs:data"
         self._gripper_articulation = None
+        self._gripper_act_dof_idx = None
 
-        # Subscribe to physics step events — gripper control runs at physics rate
+        # Subscribe to physics step events — joint target applied at physics rate
         self._gripper_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
             self._on_physics_step_gripper
         )
         self._gripper_publish_active = True
 
         print(f"Gripper Action Graph created at {graph_path}")
-        print("Gripper control runs at physics rate via extension callback (no ScriptNodes)")
-        print("\nTest commands:")
-        print("ros2 topic pub /gripper_command std_msgs/String 'data: \"open\"'")
-        print("ros2 topic pub /gripper_command std_msgs/String 'data: \"close\"'")
-        print("ros2 topic pub /gripper_command std_msgs/String 'data: \"1100\"'")
-        print("ros2 topic pub /gripper_command std_msgs/String 'data: \"550\"'")
-        print("\nMonitor gripper:")
-        print("ros2 topic echo /gripper_width_sim")
-        print("ros2 topic echo /gripper_effort_sim")
-        print("ros2 topic echo /gripper_asymmetry_sim")
+        print(f"  sub {RG2_JOINT_TARGET_TOPIC} (Float64 rad) -> {RG2_ACT_JOINT}")
+        print(f"  pub {RG2_JOINT_STATE_TOPIC} (JointState over {art_root})")
 
     def _on_physics_step_gripper(self, dt):
-        """Physics step callback — read ROS2 command, apply to gripper, publish state."""
+        """Physics step callback — apply the Float64 /rg2_sim/joint_target (rad) to rg2_gripper_joint.
+
+        Pure actuator: joint_state is published by the OmniGraph ROS2PublishJointState node, not
+        here. The mimic joints follow the actuated joint via PhysxMimicJointAPI.
+        """
         import numpy as np
-        from isaacsim.core.prims import Articulation as ArticulationView
         from isaacsim.core.utils.types import ArticulationActions
 
         try:
             artic = self._lazy_init_articulation(
-                '_gripper_articulation', '/World/RG2_Gripper',
+                '_gripper_articulation', f'/World/RG2_Gripper/{RG2_ART_ROOT_REL}',
                 'gripper_ctrl', '_gripper_warmup')
             if artic is None:
                 return
             self._gripper_articulation = artic
 
-            # --- Read command from ROS2 subscriber ---
+            # Cache the actuated-joint DOF index (dof_names is DOF-aligned; joint_names also
+            # lists the 3 fixed joints, which are not DOFs).
+            if getattr(self, '_gripper_act_dof_idx', None) is None:
+                names = list(getattr(artic, 'dof_names', None) or artic.joint_names)
+                if RG2_ACT_JOINT not in names:
+                    return
+                self._gripper_act_dof_idx = names.index(RG2_ACT_JOINT)
+            gidx = self._gripper_act_dof_idx
+
+            # Read the Float64 joint target (rad) from the subscriber
             try:
                 raw = og.Controller.get(og.Controller.attribute(self._gripper_sub_attr_path))
-                input_str = str(raw).strip() if raw else ""
             except Exception:
-                input_str = ""
-
-            # Parse command
-            if input_str and input_str not in ("", "None", "0"):
-                if input_str == "open":
-                    width_mm = 100.0
-                elif input_str == "close":
-                    width_mm = 0.0
-                else:
-                    try:
-                        width_mm = float(input_str) / 10.0
-                    except ValueError:
-                        width_mm = None
-
-                if width_mm is not None:
-                    width_mm = float(np.clip(width_mm, 0.0, 100.0))
-                    ratio = width_mm / 100.0
-                    joint_angle = -np.pi / 4 + ratio * (np.pi / 4 + np.pi / 9)
-                    target = np.array([joint_angle, joint_angle])
-                    action = ArticulationActions(
-                        joint_positions=target,
-                        joint_indices=np.array([0, 1])
-                    )
-                    self._gripper_articulation.apply_action(action)
-
-            # --- Read gripper state and publish ---
-            joint_positions = self._gripper_articulation.get_joint_positions()
-            if joint_positions is not None and joint_positions.shape[1] >= 2:
-                left_angle = float(joint_positions[0, 0])
-                right_angle = float(joint_positions[0, 1])
-
-                def _angle_to_mm(angle):
-                    ratio = (angle + np.pi / 4) / (np.pi / 4 + np.pi / 9)
-                    return ratio * 100.0
-
-                left_mm = _angle_to_mm(left_angle)
-                right_mm = _angle_to_mm(right_angle)
-                asymmetry = abs(left_mm - right_mm)
-
-                # Width topic: always publish real average width
-                avg = (left_mm + right_mm) / 2.0
-                publish_value = float(np.clip(avg, 0.0, 100.0))
-
-                og.Controller.set(
-                    og.Controller.attribute(self._gripper_pub_attr_path),
-                    publish_value
-                )
-
-                # Asymmetry topic: publish raw asymmetry in mm
-                og.Controller.set(
-                    og.Controller.attribute(self._gripper_asym_pub_attr_path),
-                    float(asymmetry)
-                )
-
-                # Effort topic: always publish total measured effort
-                measured_efforts = self._gripper_articulation.get_measured_joint_efforts()
-                if measured_efforts is not None and measured_efforts.shape[1] >= 2:
-                    total_effort = abs(float(measured_efforts[0, 0])) + abs(float(measured_efforts[0, 1]))
-                else:
-                    total_effort = 0.0
-
-                og.Controller.set(
-                    og.Controller.attribute(self._gripper_effort_pub_attr_path),
-                    total_effort
-                )
+                raw = None
+            if raw is None:
+                return
+            try:
+                theta = float(raw)
+            except (TypeError, ValueError):
+                return
+            theta = float(np.clip(theta, RG2_THETA_MIN, RG2_THETA_MAX))
+            artic.apply_action(ArticulationActions(
+                joint_positions=np.array([[theta]]),
+                joint_indices=np.array([gidx])))
         except Exception as e:
             print(f"[Gripper callback] {e}")
 
@@ -3196,6 +3164,20 @@ class DigitalTwin(omni.ext.IExt):
                                     '_force_publish_active', '_force_warmup')
 
     def import_rg2_gripper(self):
+        """Reference the CAD-exact husarion-native OnRobot RG2 USD at /World/RG2_Gripper.
+
+        This is the digital twin of the REAL RG2 linkage (husarion description, CAD-verified
+        R=55 parallelogram): one actuated revolute `rg2_gripper_joint` plus 5 mimic finger
+        joints coupled via PhysxMimicJointAPI. It REPLACES the former Robotiq-2F-relabeled
+        RG2.usd (two independent joints, wrong linkage) so that the commanded contact width →
+        achieved rubber gap is physically CAD-exact. The 15mm Quick-Changer + the +90° yaw
+        mount are BAKED INTO this USD (tool0 → quick_changer → base fixed chain), so there is
+        no separate QuickChanger splice (see attach_rg2_to_ur5e).
+
+        Built by scripts/convert_husarion_rg2_urdf.py (Isaac 5.1 URDF importer, parse_mimic=True).
+        Structure: defaultPrim /onrobot_rg2 (→ /World/RG2_Gripper), articulation root tool0,
+        joints under /World/RG2_Gripper/joints/. metersPerUnit 1.0.
+        """
         from isaacsim.core.utils.stage import add_reference_to_stage
 
         # Skip if RG2 already loaded
@@ -3205,27 +3187,47 @@ class DigitalTwin(omni.ext.IExt):
             print("RG2 Gripper already exists at /World/RG2_Gripper, skipping import.")
             return
 
-        rg2_usd_path = _local_asset("gripper/RG2.usd")
+        rg2_usd_path = _local_asset("gripper/husarion_rg2/husarion_rg2.usd")
         add_reference_to_stage(rg2_usd_path, "/World/RG2_Gripper")
-        print("RG2 Gripper imported at /World/RG2_Gripper")
+        print("Husarion RG2 Gripper imported at /World/RG2_Gripper")
 
-        # Configure gripper joint drives
         stage = omni.usd.get_context().get_stage()
-        base_link = "/World/RG2_Gripper/onrobot_rg2_base_link"
-        gripper_joints = [
-            f"{base_link}/finger_joint",
-            f"{base_link}/right_outer_knuckle_joint",
-        ]
-        for joint_path in gripper_joints:
-            joint_prim = stage.GetPrimAtPath(joint_path)
-            if not joint_prim.IsValid():
-                print(f"Warning: Gripper joint not found at {joint_path}")
+        joints_scope = "/World/RG2_Gripper/joints"
+
+        # --- Actuated joint: set an explicit strong angular position drive (the imported gains
+        # were sized for the weak default mimic and stall mid-range once the mimic is stiffened). ---
+        act_path = f"{joints_scope}/{RG2_ACT_JOINT}"
+        act_prim = stage.GetPrimAtPath(act_path)
+        if act_prim and act_prim.IsValid():
+            drive = UsdPhysics.DriveAPI.Get(act_prim, "angular") or \
+                UsdPhysics.DriveAPI.Apply(act_prim, "angular")
+            drive.CreateStiffnessAttr().Set(RG2_ACT_STIFFNESS)
+            drive.CreateDampingAttr().Set(RG2_ACT_DAMPING)
+            drive.CreateMaxForceAttr().Set(RG2_ACT_MAXFORCE)
+            print(f"Actuated {RG2_ACT_JOINT}: stiffness={RG2_ACT_STIFFNESS} "
+                  f"damping={RG2_ACT_DAMPING} maxForce={RG2_ACT_MAXFORCE}")
+        else:
+            print(f"Warning: actuated joint not found at {act_path}")
+
+        # --- Mimic joints: stiffen the PhysxMimicJointAPI spring so the 5 finger joints
+        # track the actuated joint RIGIDLY. The importer authors a weakly-damped spring
+        # (naturalFrequency=25Hz, dampingRatio=0.005 → ~5.3° lag/ring at open). We do NOT
+        # add a fixed-target DriveAPI (it would fight the gearing*ref+offset=0 constraint
+        # everywhere except that pose — GPT plan-gate). naturalFrequency=1000/dampingRatio=1.0
+        # was measured to give ~0.005° steady lag, 0 ring (scripts/test_husarion_rg2_mimic_rigidity.py).
+        for jn in RG2_MIMIC_JOINTS:
+            jp = stage.GetPrimAtPath(f"{joints_scope}/{jn}")
+            if not (jp and jp.IsValid()):
+                print(f"Warning: mimic joint not found: {jn}")
                 continue
-            drive_api = UsdPhysics.DriveAPI.Apply(joint_prim, "angular")
-            drive_api.GetMaxForceAttr().Set(self._gripper_max_force)
-            drive_api.GetStiffnessAttr().Set(self._gripper_stiffness)
-            drive_api.GetDampingAttr().Set(self._gripper_damping)
-            print(f"Set {joint_path}: maxForce=1, stiffness=0.1, damping=0.05")
+            nf = jp.GetAttribute("physxMimicJoint:rotZ:naturalFrequency")
+            dr = jp.GetAttribute("physxMimicJoint:rotZ:dampingRatio")
+            if nf:
+                nf.Set(float(RG2_MIMIC_NAT_FREQ))
+            if dr:
+                dr.Set(float(RG2_MIMIC_DAMPING))
+        print(f"Set mimic spring on {len(RG2_MIMIC_JOINTS)} joints: "
+              f"naturalFrequency={RG2_MIMIC_NAT_FREQ} dampingRatio={RG2_MIMIC_DAMPING}")
 
         # Configure gripper physics material
         gripper_mat_path = "/World/RG2_Gripper/PhysicsMaterial"
@@ -3239,13 +3241,10 @@ class DigitalTwin(omni.ext.IExt):
         gripper_physx_mat_api.CreateRestitutionCombineModeAttr().Set(self._gripper_restitution_combine_mode)
         print(f"Created gripper physics material at {gripper_mat_path}")
 
-        # Bind physics material to finger body prims
+        # Bind physics material to the fingertip links (and any collider children — material
+        # binding inherits down, but bind at the link so finger contact uses these frictions).
         gripper_mat_sdf_path = Sdf.Path(gripper_mat_path)
-        gripper_root = "/World/RG2_Gripper"
-        finger_prims = [
-            f"{gripper_root}/left_inner_finger",
-            f"{gripper_root}/right_inner_finger",
-        ]
+        finger_prims = [f"/World/RG2_Gripper/{ln}" for ln in RG2_FINGER_LINKS]
         for finger_path in finger_prims:
             finger_prim = stage.GetPrimAtPath(finger_path)
             if finger_prim and finger_prim.IsValid():
@@ -3271,188 +3270,106 @@ class DigitalTwin(omni.ext.IExt):
         print("Quick-Changer adapter imported at /World/QuickChanger")
 
     def attach_rg2_to_ur5e(self):
+        """Weld the husarion RG2 (tool0 ≡ UR flange) to the UR5e with ONE fixed joint.
+
+        The husarion USD authors the whole gripper relative to its `tool0` link with the +90°
+        yaw AND the 15mm Quick-Changer baked into the tool0 → quick_changer → base fixed chain
+        (lab-verified reach +Z / jaws flange-X). So the mount is a SINGLE fixed weld putting
+        husarion tool0 at the UR flange frame — no separate QuickChanger.usd splice, no +15mm
+        adapter joint (both obsolete; the 15mm is inside the gripper USD now).
+
+        Frame math reuses the VERIFIED at-flange rotation: the husarion tool0 frame == the old
+        quick_changer_link frame (both are the flange face), so the same quat0/quat1 that placed
+        the old at-flange frame place husarion tool0:  tool0_world = Rot(quat1)⁻¹·Rot(quat0)·wrist3_world.
+        USD joint frames are body-relative (NOT world — GPT plan-gate), so we author body-relative
+        localRot0/localRot1, pre-seat /World/RG2_Gripper so tool0 lands at that frame, then GATE on
+        a <0.1mm / <0.1° world-delta before returning (catches any frame error pre-play).
+        """
         import omni.usd
         from pxr import Usd, Sdf, UsdGeom, Gf
         import math
 
         stage = omni.usd.get_context().get_stage()
-        ur5e_gripper_path = "/World/UR5e/Gripper"
-        rg2_path = "/World/RG2_Gripper"
+        rg2_root = "/World/RG2_Gripper"
+        rg2_tool0 = f"{rg2_root}/{RG2_ART_ROOT_REL}"      # husarion articulation root = flange frame
+        wrist3_path = "/World/UR5e/wrist_3_link"
         joint_path = "/World/UR5e/joints/robot_gripper_joint"
-        rg2_base_link = "/World/RG2_Gripper/onrobot_rg2_base_link"
 
-        # OnRobot Quick-Changer (15mm) inserted between the flange and the RG2.
-        # robot_gripper_joint now drives wrist_3 -> quick_changer_link (the adapter takes
-        # the RG2's former at-flange frame), and a second joint (adapter_gripper_joint)
-        # mounts the RG2 +15mm along the adapter's +Z (toward the gripper). Verified in the
-        # ros-mcp-server studio (RViz): net tool0 -> rg2_base = old transform + 15mm in +Z.
-        self.import_adapter()
-        qc_link = "/World/QuickChanger/quick_changer_link"
-        adapter_joint_path = "/World/UR5e/joints/adapter_gripper_joint"
+        rg2_prim = stage.GetPrimAtPath(rg2_root)
+        w3_prim = stage.GetPrimAtPath(wrist3_path)
+        tool0_prim = stage.GetPrimAtPath(rg2_tool0)
+        if not (rg2_prim and rg2_prim.IsValid()):
+            print(f"Error: RG2 gripper not found at {rg2_root}. Import gripper first.")
+            return
+        if not (w3_prim and w3_prim.IsValid()):
+            print(f"Error: {wrist3_path} not found. Load UR5e first.")
+            return
+        if not (tool0_prim and tool0_prim.IsValid()):
+            print(f"Error: husarion articulation root not found at {rg2_tool0}.")
+            return
 
-        # Skip only if joint is fully connected (both body0 and body1 set)
-        joint_prim_check = stage.GetPrimAtPath(joint_path)
-        if joint_prim_check and joint_prim_check.IsValid():
-            _jnt = UsdPhysics.FixedJoint(joint_prim_check)
+        # Skip if already fully connected (both bodies set)
+        joint_prim = stage.GetPrimAtPath(joint_path)
+        if joint_prim and joint_prim.IsValid():
+            _jnt = UsdPhysics.FixedJoint(joint_prim)
             if _jnt.GetBody0Rel().GetTargets() and _jnt.GetBody1Rel().GetTargets():
                 print(f"Gripper already attached at {joint_path}, skipping.")
                 return
 
-        ur5e_prim = stage.GetPrimAtPath(ur5e_gripper_path)
-        rg2_prim = stage.GetPrimAtPath(rg2_path)
-        joint_prim = stage.GetPrimAtPath(joint_path)
+        # The verified at-flange rotation (same quat0/quat1 the old mount used to place the
+        # quick_changer frame; husarion tool0 IS that frame).
+        def euler_to_quatf(x_deg, y_deg, z_deg):
+            rx = Gf.Quatf(math.cos(math.radians(x_deg) / 2), Gf.Vec3f(1, 0, 0) * math.sin(math.radians(x_deg) / 2))
+            ry = Gf.Quatf(math.cos(math.radians(y_deg) / 2), Gf.Vec3f(0, 1, 0) * math.sin(math.radians(y_deg) / 2))
+            rz = Gf.Quatf(math.cos(math.radians(z_deg) / 2), Gf.Vec3f(0, 0, 1) * math.sin(math.radians(z_deg) / 2))
+            return rx * ry * rz  # XYZ order
+        quat0 = euler_to_quatf(-90, 0, -90)
+        quat1 = euler_to_quatf(-180, 90, 0)
 
-        if not ur5e_prim or not ur5e_prim.IsValid():
-            print("Error: UR5e gripper prim not found at /World/UR5e/Gripper. Load UR5e first.")
-            return
-        if not rg2_prim or not rg2_prim.IsValid():
-            print("Error: RG2 gripper not found at /World/RG2_Gripper. Import gripper first.")
-            return
-
-        # Copy transforms from UR5e gripper to RG2
-        translate_attr = ur5e_prim.GetAttribute("xformOp:translate")
-        orient_attr = ur5e_prim.GetAttribute("xformOp:orient")
-
-        if translate_attr.IsValid() and orient_attr.IsValid():
-            rg2_prim.CreateAttribute("xformOp:translate", Sdf.ValueTypeNames.Double3).Set(translate_attr.Get())
-            rg2_prim.CreateAttribute("xformOp:orient", Sdf.ValueTypeNames.Quatd).Set(orient_attr.Get())
-
-        print("Setting RG2 gripper orientation with 180° Z offset and rotated position...")
-
-        from isaacsim.core.utils.numpy.rotations import euler_angles_to_quats
-        import numpy as np
-
-        if rg2_prim.IsValid():
-            # === 1. Apply rotated position ===
-            original_pos = translate_attr.Get()
-            # Get the UR5e root translate to account for its world position offset
-            ur5e_root = stage.GetPrimAtPath("/World/UR5e")
-            ur5e_translate = ur5e_root.GetAttribute("xformOp:translate").Get() if ur5e_root.IsValid() else Gf.Vec3d(0, 0, 0)
-            x, y, z = original_pos[0], original_pos[1], original_pos[2]
-            rotated_pos = Gf.Vec3d(-x + ur5e_translate[0], -y + ur5e_translate[1], z + ur5e_translate[2])
-
-            # === 2. Apply combined orientation ===
-            fixed_quat = Gf.Quatd(0.70711, Gf.Vec3d(-0.70711, 0.0, 0.0))
-            offset_rpy_deg = np.array([0.0, 0.0, 180.0])
-            offset_rpy_rad = np.deg2rad(offset_rpy_deg)
-            offset_quat_arr = euler_angles_to_quats(offset_rpy_rad)
-            offset_quat = Gf.Quatd(offset_quat_arr[0], offset_quat_arr[1], offset_quat_arr[2], offset_quat_arr[3])
-            final_quat = offset_quat * fixed_quat
-
-            # === 3. Apply to prim ===
-            xform = UsdGeom.Xform(rg2_prim)
-            xform.ClearXformOpOrder()
-            xform.AddTranslateOp().Set(rotated_pos)
-            xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(final_quat)
-
-            # Seed the Quick-Changer prim at the same flange pose so the fixed joint only
-            # nudges it (no large snap when physics resolves wrist_3 -> quick_changer).
-            qc_prim = stage.GetPrimAtPath("/World/QuickChanger")
-            if qc_prim and qc_prim.IsValid():
-                qcx = UsdGeom.Xform(qc_prim)
-                qcx.ClearXformOpOrder()
-                qcx.AddTranslateOp().Set(rotated_pos)
-                qcx.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(final_quat)
-
-            print(f"RG2 position rotated to: {rotated_pos}")
-            print("RG2 orientation set with fixed+180°Z rotation.")
-        else:
-            print(f"Gripper not found at {rg2_path}")
-
-
-        # Create or update the physics joint
-        if not joint_prim:
+        # robot_gripper_joint: wrist_3_link -> husarion tool0. Fixed, excludeFromArticulation=True
+        # (joins two SEPARATE articulations — UR5e and the gripper — and breaks the would-be loop).
+        if not (joint_prim and joint_prim.IsValid()):
             joint_prim = stage.DefinePrim(joint_path, "PhysicsFixedJoint")
-
-        # robot_gripper_joint:  wrist_3 -> quick_changer_link (the adapter takes the RG2's
-        # former at-flange frame; same localRot0/localRot1 as before).
-        joint_prim.CreateRelationship("physics:body1").SetTargets([Sdf.Path(qc_link)])
+        joint_prim.CreateRelationship("physics:body0").SetTargets([Sdf.Path(wrist3_path)])
+        joint_prim.CreateRelationship("physics:body1").SetTargets([Sdf.Path(rg2_tool0)])
         joint_prim.CreateAttribute("physics:jointEnabled", Sdf.ValueTypeNames.Bool).Set(True)
         joint_prim.CreateAttribute("physics:excludeFromArticulation", Sdf.ValueTypeNames.Bool).Set(True)
+        joint_prim.CreateAttribute("physics:localPos0", Sdf.ValueTypeNames.Point3f, custom=True).Set(Gf.Vec3f(0, 0, 0))
+        joint_prim.CreateAttribute("physics:localPos1", Sdf.ValueTypeNames.Point3f, custom=True).Set(Gf.Vec3f(0, 0, 0))
+        joint_prim.CreateAttribute("physics:localRot0", Sdf.ValueTypeNames.Quatf, custom=True).Set(quat0)
+        joint_prim.CreateAttribute("physics:localRot1", Sdf.ValueTypeNames.Quatf, custom=True).Set(quat1)
+        print("robot_gripper_joint: wrist_3 -> husarion tool0 (single fixed weld; QC + yaw baked in).")
 
-        # Set localRot0 and localRot1 for joint
-        print("Setting joint rotation parameters...")
-        if joint_prim.IsValid():
-            def euler_to_quatf(x_deg, y_deg, z_deg):
-                """Convert Euler angles (XYZ order, degrees) to Gf.Quatf"""
-                rx = Gf.Quatf(math.cos(math.radians(x_deg) / 2), Gf.Vec3f(1, 0, 0) * math.sin(math.radians(x_deg) / 2))
-                ry = Gf.Quatf(math.cos(math.radians(y_deg) / 2), Gf.Vec3f(0, 1, 0) * math.sin(math.radians(y_deg) / 2))
-                rz = Gf.Quatf(math.cos(math.radians(z_deg) / 2), Gf.Vec3f(0, 0, 1) * math.sin(math.radians(z_deg) / 2))
-                return rx * ry * rz  # Apply in XYZ order
+        # Pre-seat /World/RG2_Gripper so tool0 lands at its joint-resolved world frame J
+        # (no play-time snap). J = Rot(quat1)⁻¹ · Rot(quat0) · wrist_3_world  (the verified formula).
+        def _rot_m(qf):
+            m = Gf.Matrix4d(1.0)
+            m.SetRotateOnly(Gf.Quatd(float(qf.GetReal()), Gf.Vec3d(qf.GetImaginary())))
+            return m
+        w3_l2w = UsdGeom.Xformable(w3_prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        J = _rot_m(quat1).GetInverse() * _rot_m(quat0) * w3_l2w
+        tool0_local = UsdGeom.Xformable(tool0_prim).GetLocalTransformation()
+        root_seed = tool0_local.GetInverse() * J
+        xf = UsdGeom.Xform(rg2_prim)
+        xf.ClearXformOpOrder()
+        xf.AddTranslateOp().Set(root_seed.ExtractTranslation())
+        xf.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(root_seed.ExtractRotationQuat())
 
-            # Set the rotation quaternions for proper joint alignment
-            quat0 = euler_to_quatf(-90, 0, -90)
-            quat1 = euler_to_quatf(-180, 90, 0)
-
-            joint_prim.CreateAttribute("physics:localRot0", Sdf.ValueTypeNames.Quatf, custom=True).Set(quat0)
-            joint_prim.CreateAttribute("physics:localRot1", Sdf.ValueTypeNames.Quatf, custom=True).Set(quat1)
-            print(" Set physics:localRot0 and localRot1 for robot_gripper_joint (wrist_3 -> quick_changer).")
+        # GATE: verify tool0 now resolves to J within tight tolerance (catches frame bugs pre-play).
+        tool0_now = UsdGeom.Xformable(tool0_prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        dpos_mm = (tool0_now.ExtractTranslation() - J.ExtractTranslation()).GetLength() * 1000.0
+        q_now = tool0_now.ExtractRotationQuat().GetNormalized()
+        q_des = J.ExtractRotationQuat().GetNormalized()
+        q_rel = q_des.GetInverse() * q_now
+        dang_deg = math.degrees(2.0 * math.acos(min(1.0, abs(q_rel.GetReal()))))
+        if dpos_mm < 0.1 and dang_deg < 0.1:
+            print(f"[attach] weld delta OK: dpos={dpos_mm:.4f}mm dang={dang_deg:.4f}deg (gated <0.1/<0.1).")
         else:
-            print(f" Joint not found at {joint_path}")
+            print(f"[attach] !! WELD DELTA OUT OF TOL: dpos={dpos_mm:.4f}mm dang={dang_deg:.4f}deg "
+                  f"(want <0.1mm/<0.1deg) — husarion tool0 frame differs from the at-flange "
+                  f"assumption. DO NOT trust the mount; inspect frames before play.")
 
-        # adapter_gripper_joint:  quick_changer_link -> rg2_base_link, RG2 mounted +15mm
-        # along the adapter's +Z (toward the gripper), identity relative rotation so the RG2
-        # keeps the orientation the old single joint gave it. The QC mesh fills 0..15mm.
-        adapter_joint = stage.GetPrimAtPath(adapter_joint_path)
-        if not adapter_joint or not adapter_joint.IsValid():
-            adapter_joint = stage.DefinePrim(adapter_joint_path, "PhysicsFixedJoint")
-        # ASSET-DRIVEN mount: read the `tool_mount` frame baked into QuickChanger.usd (a child of
-        # quick_changer_link at the +15mm gripper face) instead of hardcoding the offset. The
-        # adapter's geometry now owns the mount pose — change the adapter asset and this follows.
-        # Falls back to the literal +15mm if the frame is missing (older asset).
-        tm_prim = stage.GetPrimAtPath(qc_link + "/tool_mount")
-        if tm_prim and tm_prim.IsValid():
-            tm_local = UsdGeom.Xformable(tm_prim).GetLocalTransformation(Usd.TimeCode.Default())
-        else:
-            tm_local = Gf.Matrix4d(1.0); tm_local.SetTranslateOnly(Gf.Vec3d(0.0, 0.0, 0.015))
-            print(" WARN: tool_mount frame missing in QuickChanger.usd; using literal +15mm fallback.")
-        tm_pos = Gf.Vec3f(tm_local.ExtractTranslation())
-        _tmq = tm_local.ExtractRotationQuat()
-        tm_rot = Gf.Quatf(float(_tmq.GetReal()), Gf.Vec3f(_tmq.GetImaginary()))
-
-        adapter_joint.CreateRelationship("physics:body0").SetTargets([Sdf.Path(qc_link)])
-        adapter_joint.CreateRelationship("physics:body1").SetTargets([Sdf.Path(rg2_base_link)])
-        adapter_joint.CreateAttribute("physics:jointEnabled", Sdf.ValueTypeNames.Bool).Set(True)
-        adapter_joint.CreateAttribute("physics:excludeFromArticulation", Sdf.ValueTypeNames.Bool).Set(True)
-        adapter_joint.CreateAttribute("physics:localPos0", Sdf.ValueTypeNames.Point3f, custom=True).Set(tm_pos)
-        adapter_joint.CreateAttribute("physics:localPos1", Sdf.ValueTypeNames.Point3f, custom=True).Set(Gf.Vec3f(0.0, 0.0, 0.0))
-        adapter_joint.CreateAttribute("physics:localRot0", Sdf.ValueTypeNames.Quatf, custom=True).Set(tm_rot)
-        adapter_joint.CreateAttribute("physics:localRot1", Sdf.ValueTypeNames.Quatf, custom=True).Set(Gf.Quatf(1, 0, 0, 0))
-        print(f" Created adapter_gripper_joint (quick_changer -> RG2) from tool_mount frame {tuple(round(x,4) for x in tm_pos)}.")
-
-        # --- Pre-seat QC + RG2 at their EXACT joint-resolved world poses so timeline play()
-        # resolves both fixed joints with zero error (no visible snap). Without this the seed
-        # poses are ~15mm off and PhysX snaps them in on frame 1 ("disjointed body transforms"
-        # warning). Derived straight from the joint definitions:
-        #   qc_link_world  = Rot(quat1)^-1 * Rot(quat0) * wrist_3_world      (robot_gripper_joint, 0 pos)
-        #   rg2_base_world = Trans(0,0,0.015) * qc_link_world                (adapter_gripper_joint)
-        # then backed out through each link's local transform to the /World/* prim frames.
-        try:
-            w3_l2w = UsdGeom.Xformable(stage.GetPrimAtPath("/World/UR5e/wrist_3_link")
-                                       ).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
-            def _rot_m(qf):
-                m = Gf.Matrix4d(1.0)
-                m.SetRotateOnly(Gf.Quatd(float(qf.GetReal()), Gf.Vec3d(qf.GetImaginary())))
-                return m
-            qc_link_l2w = _rot_m(quat1).GetInverse() * _rot_m(quat0) * w3_l2w
-            # rg2_base = tool_mount frame (read from the asset) applied in the quick_changer_link frame
-            rg2_base_l2w = tm_local * qc_link_l2w
-            qc_link_local = UsdGeom.Xformable(stage.GetPrimAtPath(qc_link)).GetLocalTransformation()
-            rg2_base_local = UsdGeom.Xformable(stage.GetPrimAtPath(rg2_base_link)).GetLocalTransformation()
-            seeds = {
-                "/World/QuickChanger": qc_link_local.GetInverse() * qc_link_l2w,
-                "/World/RG2_Gripper":  rg2_base_local.GetInverse() * rg2_base_l2w,
-            }
-            for prim_path, M in seeds.items():
-                xf = UsdGeom.Xform(stage.GetPrimAtPath(prim_path))
-                xf.ClearXformOpOrder()
-                xf.AddTranslateOp().Set(M.ExtractTranslation())
-                xf.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(M.ExtractRotationQuat())
-            print(" Pre-seated QuickChanger + RG2 at joint-resolved poses (no play-time snap).")
-        except Exception as _seed_err:
-            print(f" Pre-seat skipped ({_seed_err}); bodies will snap on play.")
-
-        print("RG2 successfully attached to UR5e via the 15mm Quick-Changer adapter.")
+        print("Husarion RG2 attached to UR5e (single fixed weld, tool0 ≡ flange).")
 
     def import_realsense_camera(self):
         """Import Intel RealSense D455 camera"""
