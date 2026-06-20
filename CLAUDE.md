@@ -290,3 +290,28 @@ the path is driver → sim, so the upstream already handled gravity). See `_disa
 `exts/ur5e-dt/ur5e_dt/extension.py` for the full rationale, and the **`robot-joint-residual-attribution`**
 skill for the reusable diagnosis method (`r_total = r_ik + r_ref + r_pipeline + r_model`, joint-space as
 ground truth — works sim AND real).
+
+## 2026-06-19 — RG2 grip is FORCE-LIMITED AUTO-STOP; `maxForce` is the grip-force cap (commit b34bea4)
+
+**First-class DT fact (peer to gravity-disable).** The RG2 is a **force-limited auto-stop** gripper, by
+design and for **sim/real parity**. The grasp command is just **`close`** (the actuated `rg2_gripper_joint`
+targets its full-close hard stop); the drive closes until it contacts the part and **stalls at
+`RG2_ACT_MAXFORCE`**. That `maxForce` IS the grip-force cap — exactly how the real RG2 firmware stops on
+contact. **Do NOT "fix" a too-hard grip with a hard width target or a close-to-contact-then-hold policy —
+that breaks parity. The only knob is the cap.**
+
+`RG2_ACT_MAXFORCE = 1.0` (== the old force-drive `RG2.usd` value). The bug was purely the cap being set too
+high: at 1000 the drive crushed parts **through** their collision mesh (u_brown settled 12.6 mm vs a true
+24.5 mm wall); even 5 left a 16 mm hex at 12.4 mm. At 1.0 the hold is gentle (u_green wrap −0.25 N·m; the
+worst-case hex friction grasp stalls at the ~1.0 cap, gap ~14.3 mm near the true surface) and **both wrap
+and friction grasps still lift clean + level**. Free-air close still reaches the stop even at `maxForce=0.5`,
+so the stiffened mimic does **not** block low-force closing — keep the strong ACCELERATION drive (it needs
+the position-term authority to drag the parallelogram) AND the low cap (gentle contact); the two are
+separable. Also `RG2_MAX_JOINT_VEL = 114.59` deg/s clamps the importer's ~1e6 (unclamped → jaws slam).
+
+**Caveat:** `/rg2_sim/contact_width` is computed from the **actuated** joint angle, which over-rotates past
+the part-blocked fingers under load → it publishes `actuated_width`, not the true finger gap (reads ~3.6 mm
+on a hex while the fingers are physically at ~12.4 mm). For grasp-success use the **physical finger gap**,
+not that topic (open item on the consumer `rg2_sim_backend` side). Calibrate the cap by **reading the joint
+parity** (actuated vs mimic angle vs physical gap vs measured effort, free-air vs loaded) — method in the
+**`isaac-urdf-import`** skill (`verify.md` §5), operational notes in **`drive-ur5e-grasp-sim`**.
