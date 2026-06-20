@@ -103,7 +103,26 @@ RG2_MIMIC_DAMPING = 1.0
 # position accuracy at the extremes).
 RG2_ACT_STIFFNESS = 10000.0
 RG2_ACT_DAMPING = 1000.0
-RG2_ACT_MAXFORCE = 1000.0
+# 2026-06-19: maxForce 1000 → 5 → 1.0. The operator saw the gripper "closing too hard".
+# This is a FORCE-LIMITED AUTO-STOP gripper, by design and for sim/real PARITY: the command is
+# just "close" (target = full-close stop) and maxForce is the grip-force cap, so the drive closes
+# until it contacts the part and stalls at maxForce — exactly like the real RG2 firmware and the
+# old force-drive RG2.usd (maxForce=1.0). Do NOT command a hard width target (that would break
+# parity). The bug was purely the cap value: at 1000 the drive crushed parts THROUGH their
+# collision mesh (inverted_u_brown settled at 12.56mm against a true ~24.5mm wall); even at 5 the
+# hex settled at 12.4mm (true ~16). Measured the cap DOWN (free-air close still reaches the stop
+# even at 0.5, so the stiffened mimic does NOT block low-force closing): at maxForce=1.0 the
+# holding effort is gentle (u_green wrap −0.24 N·m; hex friction stalls at the ~1.0 cap, gap
+# 14.33mm near the true surface) and BOTH a wrap grasp and the worst-case friction grasp still
+# lift clean. 1.0 == the old RG2.usd value. We keep the ACCELERATION drive (not force) because the
+# stiffened mimic needs the position-term authority to drive the parallelogram closed reliably;
+# the maxForce cap makes the contact gentle regardless of drive type. Raise only if a part slips
+# ("increase from there only if required"). hex sits at the cap, so 1.0 is about the floor.
+RG2_ACT_MAXFORCE = 1.0
+# Cap finger joint velocity. The URDF importer leaves maxJointVelocity at ~1e6 deg/s (effectively
+# unlimited) on the mimic finger joints → the jaws SLAM shut (the other half of "closing too hard").
+# 114.59 deg/s (= 2 rad/s) is the value the old RG2.usd used and a realistic RG2 closing speed.
+RG2_MAX_JOINT_VEL = 114.59
 # Actuated-joint hard stops (URDF limit on rg2_gripper_joint). The extension is a PURE joint
 # actuator: it clamps the commanded /rg2_sim/joint_target to these physical limits only — the
 # contact-width↔theta mapping + CAD operational range live in the control-pkg sim backend.
@@ -3307,8 +3326,13 @@ class DigitalTwin(omni.ext.IExt):
             drive.CreateStiffnessAttr().Set(RG2_ACT_STIFFNESS)
             drive.CreateDampingAttr().Set(RG2_ACT_DAMPING)
             drive.CreateMaxForceAttr().Set(RG2_ACT_MAXFORCE)
+            act_pj = PhysxSchema.PhysxJointAPI.Get(stage, act_prim.GetPath()) or \
+                PhysxSchema.PhysxJointAPI.Apply(act_prim)
+            (act_pj.GetMaxJointVelocityAttr() or act_pj.CreateMaxJointVelocityAttr()).Set(
+                float(RG2_MAX_JOINT_VEL))
             print(f"Actuated {RG2_ACT_JOINT}: stiffness={RG2_ACT_STIFFNESS} "
-                  f"damping={RG2_ACT_DAMPING} maxForce={RG2_ACT_MAXFORCE}")
+                  f"damping={RG2_ACT_DAMPING} maxForce={RG2_ACT_MAXFORCE} "
+                  f"maxJointVel={RG2_MAX_JOINT_VEL}")
         else:
             print(f"Warning: actuated joint not found at {act_path}")
 
@@ -3329,8 +3353,14 @@ class DigitalTwin(omni.ext.IExt):
                 nf.Set(float(RG2_MIMIC_NAT_FREQ))
             if dr:
                 dr.Set(float(RG2_MIMIC_DAMPING))
+            # Clamp the importer's ~1e6 deg/s maxJointVelocity so the fingers can't slam shut.
+            mimic_pj = PhysxSchema.PhysxJointAPI.Get(stage, jp.GetPath()) or \
+                PhysxSchema.PhysxJointAPI.Apply(jp)
+            (mimic_pj.GetMaxJointVelocityAttr() or mimic_pj.CreateMaxJointVelocityAttr()).Set(
+                float(RG2_MAX_JOINT_VEL))
         print(f"Set mimic spring on {len(RG2_MIMIC_JOINTS)} joints: "
-              f"naturalFrequency={RG2_MIMIC_NAT_FREQ} dampingRatio={RG2_MIMIC_DAMPING}")
+              f"naturalFrequency={RG2_MIMIC_NAT_FREQ} dampingRatio={RG2_MIMIC_DAMPING} "
+              f"maxJointVel={RG2_MAX_JOINT_VEL}")
 
         # Configure gripper physics material
         gripper_mat_path = "/World/RG2_Gripper/PhysicsMaterial"
