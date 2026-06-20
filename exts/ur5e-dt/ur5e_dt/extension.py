@@ -131,6 +131,11 @@ RG2_THETA_MAX = 1.0
 # Topics for the migrated gripper seam (control pkg <-> twin); rad, sensor_msgs/JointState.
 RG2_JOINT_TARGET_TOPIC = "/rg2_sim/joint_target"   # std_msgs/Float64, actuated joint angle (rad)
 RG2_JOINT_STATE_TOPIC = "/rg2_sim/joint_state"     # sensor_msgs/JointState (backend selects by name)
+# Measured pad-to-pad gap (the TRUE contact gap, not arc(theta)). The backend republishes this as
+# /rg2_sim/contact_width and demotes the arc(theta) value to /rg2_sim/actuated_width. Computed from
+# the inner-most finger-pad collision-mesh point per finger, projected on the live closing axis —
+# arc(theta) under-reports under contact-stall load (verify §5a / gotchas §8 of isaac-urdf-import).
+RG2_PAD_GAP_TOPIC = "/rg2_sim/pad_gap_m"           # std_msgs/Float64, meters (RG2_FINGER_LINKS above)
 
 # Per-environment Z offset to align each env's floor surface to z=0.
 # Most envs already author their floor at z=0 — only the legacy gridroom assets need correction.
@@ -3021,6 +3026,7 @@ class DigitalTwin(omni.ext.IExt):
                     ("context", "isaacsim.ros2.bridge.ROS2Context"),
                     ("target_sub", "isaacsim.ros2.bridge.ROS2Subscriber"),
                     ("state_pub", "isaacsim.ros2.bridge.ROS2Publisher"),
+                    ("pad_pub", "isaacsim.ros2.bridge.ROS2Publisher"),
                 ],
                 keys.SET_VALUES: [
                     # actuated-joint target in (rad)
@@ -3031,12 +3037,18 @@ class DigitalTwin(omni.ext.IExt):
                     ("state_pub.inputs:messageName", "JointState"),
                     ("state_pub.inputs:messagePackage", "sensor_msgs"),
                     ("state_pub.inputs:topicName", RG2_JOINT_STATE_TOPIC),
+                    # measured pad-to-pad gap (m) — plain Float64 publisher; callback fills data
+                    ("pad_pub.inputs:messageName", "Float64"),
+                    ("pad_pub.inputs:messagePackage", "std_msgs"),
+                    ("pad_pub.inputs:topicName", RG2_PAD_GAP_TOPIC),
                 ],
                 keys.CONNECT: [
                     ("tick.outputs:tick", "target_sub.inputs:execIn"),
                     ("tick.outputs:tick", "state_pub.inputs:execIn"),
+                    ("tick.outputs:tick", "pad_pub.inputs:execIn"),
                     ("context.outputs:context", "target_sub.inputs:context"),
                     ("context.outputs:context", "state_pub.inputs:context"),
+                    ("context.outputs:context", "pad_pub.inputs:context"),
                 ],
             }
         )
@@ -3047,6 +3059,8 @@ class DigitalTwin(omni.ext.IExt):
         self._gripper_sub_attr_path = f"{graph_path}/target_sub.outputs:data"
         self._gripper_state_name_attr = f"{graph_path}/state_pub.inputs:name"
         self._gripper_state_pos_attr = f"{graph_path}/state_pub.inputs:position"
+        self._gripper_pad_attr = f"{graph_path}/pad_pub.inputs:data"   # std_msgs/Float64 data (m)
+        self._pad_local = None   # cached inner-most pad point per finger (link-local), filled lazily
         self._gripper_articulation = None
         self._gripper_act_dof_idx = None
 
@@ -3114,8 +3128,70 @@ class DigitalTwin(omni.ext.IExt):
                     og.Controller.attribute(self._gripper_state_pos_attr).set([actual])
                 except Exception:
                     pass
+
+            # Publish the MEASURED pad-to-pad gap (m) — the TRUE contact gap (NOT arc(theta), which
+            # under-reports under contact-stall). Nested try so it can NEVER break the joint drive.
+            try:
+                gap = self._compute_pad_gap_m()
+                if gap is not None:
+                    og.Controller.attribute(self._gripper_pad_attr).set(float(gap))
+            except Exception:
+                pass
         except Exception as e:
             print(f"[Gripper callback] {e}")
+
+    def _compute_pad_gap_m(self):
+        """Measured pad-to-pad gap (m): inner-most finger-pad collision-mesh point per finger,
+        projected on the live closing axis. The inner points are fixed on the rigid pads, so cache
+        them in each finger-link's LOCAL frame ONCE (find the extreme-inner collision vertex), then
+        per-frame just world-transform the two cached points + project — ~4 transforms, no mesh scan.
+        """
+        from pxr import Usd, UsdGeom, Gf
+        stage = omni.usd.get_context().get_stage()
+        base = "/World/RG2_Gripper"
+        lL, lR = RG2_FINGER_LINKS
+        def link_xform(link):
+            p = stage.GetPrimAtPath(f"{base}/{link}")
+            if not (p and p.IsValid()):
+                return None
+            return UsdGeom.Xformable(p).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        xL, xR = link_xform(lL), link_xform(lR)
+        if xL is None or xR is None:
+            return None
+        # live closing axis from the finger markers (37.9, ∓18.98, 0) mm in each link frame
+        mL = Gf.Vec3d(xL.Transform(Gf.Vec3d(0.0379, -0.01898, 0.0)))
+        mR = Gf.Vec3d(xR.Transform(Gf.Vec3d(0.0379, 0.01898, 0.0)))
+        ex = mL - mR
+        n = ex.GetLength()
+        if n < 1e-9:
+            return None
+        ex = ex / n
+        if self._pad_local is None:
+            # find the extreme-inner collision vertex per finger, cache in LINK-LOCAL frame
+            def inner_local(link, xf, want_min):
+                col = stage.GetPrimAtPath(f"{base}/{link}/collisions")
+                mesh = next((UsdGeom.Mesh(pr) for pr in Usd.PrimRange(col)
+                             if pr.GetTypeName() == "Mesh"), None)
+                if mesh is None:
+                    return None
+                mw = UsdGeom.Xformable(mesh).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+                best_w, best_p = None, None
+                for p in mesh.GetPointsAttr().Get():
+                    w = Gf.Vec3d(mw.Transform(Gf.Vec3d(p)))
+                    d = Gf.Dot(w, ex)
+                    if best_p is None or (d < best_p if want_min else d > best_p):
+                        best_p, best_w = d, w
+                if best_w is None:
+                    return None
+                return xf.GetInverse().Transform(best_w)   # back to link-local (fixed on the pad)
+            pl = inner_local(lL, xL, want_min=True)    # L is +ex side → inner = min projection
+            pr = inner_local(lR, xR, want_min=False)   # R is -ex side → inner = max projection
+            if pl is None or pr is None:
+                return None
+            self._pad_local = (pl, pr)
+        wL = Gf.Vec3d(xL.Transform(self._pad_local[0]))
+        wR = Gf.Vec3d(xR.Transform(self._pad_local[1]))
+        return Gf.Dot(wL - wR, ex)
 
     def _stop_physics_callback(self, sub_attr, artic_attr, active_attr, warmup_attr):
         """Stop a physics callback and clean up its resources."""
