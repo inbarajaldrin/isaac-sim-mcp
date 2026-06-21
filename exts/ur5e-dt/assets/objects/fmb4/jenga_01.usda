@@ -34,22 +34,16 @@ def Xform "Root"
         }
 
         def Mesh "jenga_01" (
-            apiSchemas = ["MaterialBindingAPI", "PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI", "PhysicsMeshCollisionAPI", "PhysxCollisionAPI", "PhysxSDFMeshCollisionAPI", "PhysxRigidBodyAPI"]
+            apiSchemas = ["MaterialBindingAPI", "PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMeshCollisionAPI", "PhysxCollisionAPI", "PhysxSDFMeshCollisionAPI"]
         )
         {
             float3[] extent = [(-0.012, -0.036, -0.0069999998), (0.012, 0.036, 0.0069999998)]
             int[] faceVertexCounts = [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
             int[] faceVertexIndices = [1, 3, 0, 4, 1, 0, 0, 3, 2, 2, 4, 0, 1, 7, 3, 5, 1, 4, 5, 7, 1, 3, 7, 2, 6, 4, 2, 2, 7, 6, 6, 5, 4, 7, 5, 6]
             rel material:binding = </Root/jenga_01/Looks/Plastic>
-            rel material:binding:physics = </Root/jenga_01/PhysicsMaterial> (
-                bindMaterialAs = "weakerThanDescendants"
-            )
             uniform token physics:approximation = "sdf"
             bool physics:collisionEnabled = 1
-            float physics:mass = 0.02
             bool physics:rigidBodyEnabled = 1
-            custom float physxCollision:restOffset = 0
-            custom float physxRigidBody:angularDamping = 30
             custom int physxSDFMeshCollision:sdfResolution = 256
             point3f[] points = [(-0.012, -0.036, -0.0069999998), (-0.012, -0.036, 0.0069999998), (-0.012, 0.036, -0.0069999998), (-0.012, 0.036, 0.0069999998), (0.012, -0.036, -0.0069999998), (0.012, -0.036, 0.0069999998), (0.012, 0.036, -0.0069999998), (0.012, 0.036, 0.0069999998)]
             uniform token subdivisionScheme = "none"
@@ -57,15 +51,6 @@ def Xform "Root"
             float3 xformOp:scale = (1, 1, 1)
             double3 xformOp:translate = (0, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
-        }
-
-        def Material "PhysicsMaterial" (
-            apiSchemas = ["PhysicsMaterialAPI", "PhysxMaterialAPI"]
-        )
-        {
-            float physics:dynamicFriction = 5
-            float physics:restitution = 0.1
-            float physics:staticFriction = 5
         }
     }
 }
