@@ -5078,17 +5078,11 @@ class DigitalTwin(omni.ext.IExt):
             # Load object type map from assembly file
             type_map = self._load_object_type_map()
 
-            # Create single common physics material for all objects
-            physics_mat_path = f"{target_path}/PhysicsMaterial"
-            material = UsdShade.Material.Define(stage, physics_mat_path)
-            physics_mat_api = UsdPhysics.MaterialAPI.Apply(material.GetPrim())
-            physics_mat_api.CreateDynamicFrictionAttr().Set(self._object_dynamic_friction)
-            physics_mat_api.CreateRestitutionAttr().Set(self._object_restitution)
-            physics_mat_api.CreateStaticFrictionAttr().Set(self._object_static_friction)
-            physx_mat_api = PhysxSchema.PhysxMaterialAPI.Apply(material.GetPrim())
-            physx_mat_api.CreateFrictionCombineModeAttr().Set(self._object_friction_combine_mode)
-            physx_mat_api.CreateRestitutionCombineModeAttr().Set(self._object_restitution_combine_mode)
-            print(f"Created common physics material at {physics_mat_path}")
+            # STRIPPED 2026-06-21: no common physics material. Objects run on PhysX-default friction/
+            # restitution — the validated-correct setting (jenga 6/6, fmb2 grasp insertion). The old
+            # override (friction 0.1, restitution 0) was unnecessary. Only the sdf collider is authored
+            # below; everything else physics falls to PhysX default. Object-specific physics is baked in
+            # the USD or in sim when required.
 
             # Import each USD file with positioning
             for i, usd_file in enumerate(usd_files):
@@ -5170,63 +5164,36 @@ class DigitalTwin(omni.ext.IExt):
                         parent_xf.AddTranslateOp().Set(Gf.Vec3d(x_position, self._y_offset, self._z_offset))
                     print(f"Added {usd_file_path} to {prim_path} at position ({x_position}, {self._y_offset}, {self._z_offset})")
 
-            # Bind common physics material and apply per-category prim settings
-            from omni.physx.scripts import physicsUtils
-            physics_mat_sdf_path = Sdf.Path(physics_mat_path)
+            # STRIPPED 2026-06-21: author ONLY the per-category sdf collider — NO physics material,
+            # restOffset/contactOffset, or angularDamping. Objects run on PhysX defaults; that IS the
+            # validated-correct setting (jenga 6/6, fmb2 grasp insertion). The old overrides
+            # (friction 0.1, restOffset -0.5, angularDamping 30/50) were unnecessary, restOffset -0.5 was
+            # harmful (L2-yaw), and the high damping MASKED the physically-correct tip-over of small
+            # standing parts (a hex on its tiny footprint SHOULD fail an unsupported place-down -> use a
+            # workspace fixture, not damping). Anything object-specific is baked in the USD (aruco's
+            # cad->usd stripped export) or in sim when required. NB this collider-apply is a safety net;
+            # the stripped USDs already bake the sdf collider + rigid body.
             objects_prim = stage.GetPrimAtPath(target_path)
             if objects_prim.IsValid():
                 for child in objects_prim.GetChildren():
                     child_name = child.GetName()
                     if child_name == "PhysicsMaterial":
                         continue
-                    # Determine category from assembly file (board/block/peg/socket)
                     category = type_map.get(child_name, 'block')
-                    prim_params = self._get_prim_params(category)
-                    # Walk all descendants and bind common material to prims with CollisionAPI
-                    bound_count = 0
-                    for desc in Usd.PrimRange(child):
-                        if desc.HasAPI(UsdPhysics.CollisionAPI):
-                            physicsUtils.add_physics_material_to_prim(stage, desc, physics_mat_sdf_path)
-                            bound_count += 1
-                            print(f"  Bound physics material to collision prim: {desc.GetPath()}")
-                    # Set per-category prim settings on the mesh prim: {name}/{name}/{name}
+                    approx = self._get_prim_params(category)["collision_approximation"]
                     mesh_path = self._get_prim_path(child_name, target_path)
                     mesh_prim = stage.GetPrimAtPath(mesh_path)
                     if mesh_prim and mesh_prim.IsValid():
-                        approx = prim_params["collision_approximation"]
                         UsdPhysics.CollisionAPI.Apply(mesh_prim)
-                        mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
+                        mc = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
                         if approx == "sdf":
-                            mesh_collision_api.CreateApproximationAttr(PhysxSchema.Tokens.sdf)
-                            sdf_api = PhysxSchema.PhysxSDFMeshCollisionAPI.Apply(mesh_prim)
-                            sdf_api.CreateSdfResolutionAttr(self._sdf_resolution)
-                            print(f"  Set SDF mesh (resolution={self._sdf_resolution}) on {mesh_path} [{category}]")
+                            mc.CreateApproximationAttr(PhysxSchema.Tokens.sdf)
+                            PhysxSchema.PhysxSDFMeshCollisionAPI.Apply(mesh_prim).CreateSdfResolutionAttr(self._sdf_resolution)
                         else:
-                            mesh_collision_api.CreateApproximationAttr(approx)
-                            print(f"  Set {approx} collision on {mesh_path} [{category}]")
-                        # Set contact/rest offset
-                        rest_offset = prim_params["rest_offset"]
-                        physx_collision_api = PhysxSchema.PhysxCollisionAPI.Apply(mesh_prim)
-                        physx_collision_api.CreateContactOffsetAttr().Set(self._contact_offset)
-                        physx_collision_api.CreateRestOffsetAttr().Set(rest_offset)
-                        print(f"  Set contactOffset={self._contact_offset}, restOffset={rest_offset} on {mesh_path} [{category}]")
-                        # Apply angular damping
-                        angular_damping = prim_params["angular_damping"]
-                        physx_rb_api = PhysxSchema.PhysxRigidBodyAPI.Apply(mesh_prim)
-                        physx_rb_api.CreateAngularDampingAttr().Set(angular_damping)
-                        print(f"  Set angularDamping={angular_damping} on {mesh_path} [{category}]")
+                            mc.CreateApproximationAttr(approx)
+                        print(f"  {approx} collider on {mesh_path} [{category}] (all other physics = PhysX default)")
                     else:
                         print(f"  Warning: Mesh prim not found at {mesh_path}")
-
-                    if bound_count == 0:
-                        # No collision prims found, bind to the nested child directly
-                        nested_path = f"{target_path}/{child_name}/{child_name}"
-                        nested_prim = stage.GetPrimAtPath(nested_path)
-                        if nested_prim and nested_prim.IsValid():
-                            physicsUtils.add_physics_material_to_prim(stage, nested_prim, physics_mat_sdf_path)
-                            print(f"  Bound physics material to {nested_path} (no collision prims found)")
-                    else:
-                        print(f"Bound physics material to {bound_count} collision prim(s) under {child_name} [{category}]")
         else:
             print(f"No USD files found in {folder_path}")
 
