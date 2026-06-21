@@ -383,7 +383,16 @@ ASSEMBLIES = {
         "folder": "objects/fmb3",
         "assembly_file": os.path.join(_assets_dir, "fmb_assembly3.json"),
     },
+    # fmb4 = jenga (assembly_id fmb_assembly_4): 3-2-1 pyramid of authoritative 24x72x14 blocks
+    # (base4 = a static jenga-block anchor; base* prefix → randomize skips it).
+    "fmb4": {
+        "folder": "objects/fmb4",
+        "assembly_file": os.path.join(_assets_dir, "fmb_assembly4.json"),
+    },
 }
+# Aliases — the operator refers to jenga as 'fmb_jenga'/'jenga'; map both to fmb4.
+ASSEMBLIES["jenga"] = ASSEMBLIES["fmb4"]
+ASSEMBLIES["fmb_jenga"] = ASSEMBLIES["fmb4"]
 
 # =============================================================================
 # MCP TOOL REGISTRY - Single source of truth for all MCP tools
@@ -636,6 +645,25 @@ class DigitalTwin(omni.ext.IExt):
         print("[DigitalTwin] Digital Twin startup")
         global _EXT_INSTANCE
         _EXT_INSTANCE = self
+
+        # Disable UJITSO multiprocess collision cooking for the WHOLE session (root-caused
+        # 2026-06-21). UJITSO (on by default) cooks collision meshes in FORKED subprocesses;
+        # forking from this live, heavily-multithreaded Kit app deadlocks in carb.tasking ->
+        # omni.physx.cooking. That single deadlock is BOTH long-standing wedges:
+        #   - `add_objects` SDF object cook (6x jenga SDF-256 wedged; cooks in ~2s with UJITSO off)
+        #   - `quick_start`/`load_robot` COLD-CACHE robot cook (documented as "broken on 5.x",
+        #     wedged 240s+; cold-cache quick_start completes in ~3s with UJITSO off — verified).
+        # In-process cooking is fast enough here (robot ~3s cold, objects ~2s) and removes the
+        # whole DerivedDataCache cold-cook fragility (snapshot/restore is then only a speed cache,
+        # not a correctness crutch). Set here so it's in force before any cook. The per-call set in
+        # _cmd_add_objects stays as a belt-and-suspenders guard. Re-enable only to diagnose.
+        try:
+            import carb.settings
+            carb.settings.get_settings().set_bool(
+                "/physics/cooking/ujitsoCollisionCooking", False)
+            print("[DigitalTwin] UJITSO collision cooking disabled (in-process cook; no fork deadlock)")
+        except Exception as _e:
+            carb.log_warn(f"[DigitalTwin] could not disable UJITSO cooking at startup: {_e}")
 
         self._main_loop = asyncio.get_event_loop()
         self._timeline = omni.timeline.get_timeline_interface()
@@ -5105,11 +5133,20 @@ class DigitalTwin(omni.ext.IExt):
                         prev=None)
                     print(f"Added {usd_file_path} to {body_path} at position ({x_position}, {self._y_offset}, {self._z_offset})")
                 else:
-                    print(f"Warning: Body prim not found at {body_path}, positioning parent instead")
-                    omni.kit.commands.execute('ChangeProperty',
-                        prop_path=f"{prim_path}.xformOp:translate",
-                        value=Gf.Vec3d(x_position, self._y_offset, self._z_offset),
-                        prev=None)
+                    # Simple (non-nested) USD — e.g. the directly-built meters-native jenga blocks
+                    # (Xform -> Mesh, mesh centred at origin, no baked xformOp:translate). The triple
+                    # nested {name}/{name}/{name} body prim doesn't exist, so author the translate op
+                    # on the top prim directly. (A bare ChangeProperty here sets the attribute value but
+                    # never adds it to xformOpOrder, so the transform is ignored and objects pile at the
+                    # origin — that was the jenga "all at (0,0,0)" bug.)
+                    print(f"Simple-structure USD at {prim_path}; authoring translate op on the top prim")
+                    parent_xf = UsdGeom.Xformable(stage.GetPrimAtPath(prim_path))
+                    t_ops = [op for op in parent_xf.GetOrderedXformOps()
+                             if op.GetOpType() == UsdGeom.XformOp.TypeTranslate]
+                    if t_ops:
+                        t_ops[0].Set(Gf.Vec3d(x_position, self._y_offset, self._z_offset))
+                    else:
+                        parent_xf.AddTranslateOp().Set(Gf.Vec3d(x_position, self._y_offset, self._z_offset))
                     print(f"Added {usd_file_path} to {prim_path} at position ({x_position}, {self._y_offset}, {self._z_offset})")
 
             # Bind common physics material and apply per-category prim settings
@@ -5998,6 +6035,24 @@ class DigitalTwin(omni.ext.IExt):
                 }
 
             self._selected_assembly = assembly
+
+            # Disable UJITSO multiprocess collision cooking for the object cook (root-caused
+            # 2026-06-21). UJITSO (on by default) cooks collision meshes in FORKED subprocesses;
+            # forking from the live, heavily-multithreaded Kit app (MCP socket-server thread +
+            # render + physics) deadlocks in carb.tasking -> omni.physx.cooking — the long-standing
+            # "add_objects wedge". The IDENTICAL SDF-256 mesh cooks in ~1.3s in a standalone
+            # SimulationApp (clean process, fork OK) and over the socket once UJITSO is off (cook
+            # runs in-process). This is robot-INDEPENDENT (a single block wedges with no robot) and
+            # keeps the accurate baked SDF collider — no mesh downgrade, no prebake needed. The
+            # setting is non-persistent (resets each app reboot) so we set it here per call. We do
+            # NOT touch the cached robot load (already cooked into DerivedDataCache by quick_start).
+            try:
+                import carb.settings
+                carb.settings.get_settings().set_bool(
+                    "/physics/cooking/ujitsoCollisionCooking", False)
+            except Exception as _e:
+                carb.log_warn(f"add_objects: could not disable UJITSO cooking: {_e}")
+
             self.add_objects()
 
             # Rebuild PhysX tensor views: adding rigid bodies to a PLAYING sim
@@ -6013,6 +6068,23 @@ class DigitalTwin(omni.ext.IExt):
             await _app.next_update_async()
             _tl.play()
             await _app.next_update_async()
+
+            # Isaac 5.1: collider cooking continues in the BACKGROUND after play(). Returning (or any
+            # further stage mutation) while a cook is in flight can wedge the Kit main thread — wait
+            # for it to finish. With UJITSO disabled above the cook runs in-process and completes fast
+            # even for 6x jenga SDF-256 (verified 2026-06-21: add_objects('fmb4') returns in ~2s with
+            # the robot present, blocks settle, socket stays live). The earlier "heavy SDF wedge" was
+            # NOT a cook-cost cliff and NOT articulation contention — it was UJITSO forking subprocesses
+            # from the live multithreaded Kit app (see the disable above).
+            try:
+                from isaacsim.core.simulation_manager import SimulationManager
+                for _ in range(1800):  # up to ~30s at 60Hz — generous safety margin
+                    await _app.next_update_async()
+                    if not SimulationManager._warmup_needed:
+                        break
+            except Exception:
+                import asyncio
+                await asyncio.sleep(2.0)  # blind fallback if the warmup flag is unavailable
 
             return {
                 "status": "success",

@@ -315,3 +315,45 @@ on a hex while the fingers are physically at ~12.4 mm). For grasp-success use th
 not that topic (open item on the consumer `rg2_sim_backend` side). Calibrate the cap by **reading the joint
 parity** (actuated vs mimic angle vs physical gap vs measured effort, free-air vs loaded) — method in the
 **`isaac-urdf-import`** skill (`verify.md` §5), operational notes in **`drive-ur5e-grasp-sim`**.
+
+## 2026-06-21 — BOTH cooking wedges are one bug: UJITSO multiprocess-fork deadlock (fix: disable UJITSO session-wide)
+
+**Root cause, finally pinned — it overturns the old "SDF cost cliff" AND "cold-cache cooking broken on
+5.x" lore, which are the SAME bug.** Cooking wedges (socket dies, Isaac alive at low CPU,
+`futex_wait`/`carb.tasking` → `omni.physx.cooking` per gdb) are **UJITSO** — Isaac's *default* collision
+cooker, which forks **subprocesses** to cook meshes (`/physics/cooking/ujitsoCollisionCooking`, on by
+default; `ujitsoCookingMaxProcessCount`). Forking from the live, heavily-multithreaded Kit app (MCP
+socket-server thread + render + physics) deadlocks. **Fix: set
+`/physics/cooking/ujitsoCollisionCooking=False`** → cooking runs in-process → no fork → no wedge.
+
+Done in **`on_startup`** (`exts/ur5e-dt/ur5e_dt/extension.py`) so it's in force session-wide before any
+cook (the setting is non-persistent; `_cmd_add_objects` also sets it as a belt-and-suspenders guard).
+**One disable fixes both long-standing wedges (both verified live 2026-06-21):**
+- **Object cook** — `add_objects('fmb4')` (6× jenga **SDF-256**, robot present): wedged indefinitely →
+  now **~2 s**, blocks settle, socket live.
+- **Robot COLD-CACHE cook** — `quick_start`/`load_robot` with an empty `DerivedDataCache` (the
+  "broken on 5.x", 240 s+ wedge): → now **~3 s**, robot built + articulated + playing. In-process
+  cooking is fast enough that the **`DerivedDataCache` snapshot/restore dance is now just a speed cache,
+  not a correctness crutch** — cold cooking simply works with UJITSO off. (Disciplined test: snapshot →
+  move cache aside → cold launch → cook → restore. Cache untouched after.)
+
+What this corrects (the A/B is decisive — each prior hypothesis was tested and failed):
+- **NOT an SDF-resolution cost cliff.** The identical 6× SDF-256 set cooks in **1.3 s** in a robot-free
+  standalone `SimulationApp` (clean process → the UJITSO fork is fine) and in **2 s** over MCP once UJITSO
+  is off. The old "lower `SdfResolution` (300→256)" remedy only ever *shrank the fork-deadlock window* (a
+  lighter/shorter cook is less likely to deadlock) — an incidental workaround, not the real lever.
+- **NOT the robot articulation.** A *single* block, no robot, minimal scene, wedges too — robot-independent.
+- **NOT rendering / play-state.** Headless (no webrtc) and a stop→add→play reorder both still wedged.
+- **Collider is UNCHANGED.** UJITSO is only the cooking *backend* (how the shape is computed); the cooked
+  SDF-256 collision shape and runtime collision are identical. Verified live: blocks rest on the table
+  (`z_min≈0`) and a physics raycast hits every block's cooked SDF collider. **Do NOT downgrade box-like
+  parts to `boundingCube` to "fix" this — keep the authored SDF.**
+- Object-mesh SDF cooks still do **not** populate `DerivedDataCache`, and cooked data does **not** persist
+  into the USD on a normal cook (no `PhysxCookedDataAPI` authored) — so "prebake into the USD / cache" is
+  not a path; disabling UJITSO is.
+
+Diagnostics in `.local/scripts/`: `load_fmb4_standalone.py` (robot-free cook benchmark, `--collider`/
+`--sdf-res`), `min_add_jenga_noujitso_snip.py` (minimal socket add with UJITSO off). **Still untested:**
+the `aic-dt` `--enable <ext>` boot-time cooking deadlock (a different trigger path — cooking during Kit's
+startup boot, not a runtime MCP call) likely shares the UJITSO cause; the postload-launcher workaround can
+probably be replaced by the same disable, but verify on `aic-dt` before removing it.
