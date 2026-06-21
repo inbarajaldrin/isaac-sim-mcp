@@ -4425,11 +4425,32 @@ class DigitalTwin(omni.ext.IExt):
 
         z_values = [info["current_z"] for info in object_info]
 
-        poses = self._sample_non_overlapping_objects(
-            num_objects=len(object_info),
-            z_values=z_values,
-            fixed_positions=board_positions
-        )
+        # Auto-relax min_sep so dense / large-footprint sets still place. The 0.18 default is
+        # tuned for the small fmb parts; 5+ jenga blocks (72 mm long) + base4 in the 0.5x0.2 m
+        # workspace overflow it and the placer hard-fails. fmb succeeds on the first try (0.18 →
+        # identical behavior); jenga steps down until it fits. Floor 0.08 > a jenga block's 76 mm
+        # overlap threshold, so non-overlap is still guaranteed. (graceful, not a silent fallback —
+        # the used value is logged.)
+        poses = None
+        min_sep = 0.18
+        while min_sep >= 0.08 - 1e-9:
+            try:
+                poses = self._sample_non_overlapping_objects(
+                    num_objects=len(object_info),
+                    z_values=z_values,
+                    fixed_positions=board_positions,
+                    min_sep=min_sep,
+                )
+                if min_sep < 0.18:
+                    print(f"[randomize] placed with relaxed min_sep={min_sep:.3f} m "
+                          f"({len(object_info)} objects)")
+                break
+            except RuntimeError:
+                min_sep *= 0.8
+        if poses is None:
+            raise RuntimeError(
+                f"Could not place {len(object_info)} objects even at min_sep=0.08 m — "
+                f"workspace too small for this set; reduce count or enlarge the workspace.")
 
         # Apply randomized poses
         for obj_info, pose in zip(object_info, poses):
