@@ -2687,32 +2687,18 @@ class DigitalTwin(omni.ext.IExt):
         self.setup_gripper_action_graph()
         await app.next_update_async()
 
-        # 8. Workspace camera + viewport publisher — HEADLESS GUARD.
-        # Under --no-window the viewport publisher's frame-change capture (capture_viewport_to_buffer)
-        # HANGS the build (it waits on presented frames that never come), and under webrtc the off-thread
-        # capture crashes during the reset storm (same omni.ui-off-main-thread class as the log-redirect
-        # crash). The workspace camera is a visualization nicety the grasp/data loop does not need, so when
-        # headless we skip the whole camera+viewport block and go straight to gravity-off -> reset -> play.
-        # DETECTION: use the /app/window/enabled carb setting (False under --no-window). get_active_viewport()
-        # is NOT reliable — the full experience creates a *windowless* ViewportAPI object even headless
-        # (returns non-None), so the camera path would wrongly run and the capture publisher would hang.
-        # The documented headless camera path is Replicator render_product + annotators (see
-        # scripts/render_husarion_twin.py), not viewport capture.
-        import carb.settings as _carb_settings
-        _headless = not bool(_carb_settings.get_settings().get("/app/window/enabled"))
-        if _headless:
-            print("--- Headless (/app/window/enabled=False): skipping workspace camera + viewport publisher ---")
-            self._disable_robot_chain_gravity()
-            world = World.instance()
-            if world:
-                await world.reset_async()
-            await app.next_update_async()
-            self._timeline.play()
-            await app.next_update_async()
-            print("=== Quick Start Complete (headless) ===")
-            return
+        # 8. Workspace camera + viewport switch — ALWAYS run (no headless early-return).
+        # Creating the camera and pointing the active viewport at it is what makes the webrtc stream show
+        # the workspace view: get_active_viewport() returns a real (windowless under webrtc/--no-window)
+        # ViewportAPI and viewport.camera_path is a main-thread USD op, safe with or without an X window.
+        # The only off-main-thread op is the viewport-frame ROS *publisher* (capture_viewport_to_buffer),
+        # which self-guards on /app/window/enabled inside _ViewportCameraPublisher.start() and no-ops under
+        # webrtc/headless — so the publisher is skipped WITHOUT skipping the camera + viewport switch.
+        # (The earlier blanket headless skip rested on a false "capture hangs/crashes" premise; the real
+        # cause of those wedges was the UJITSO cooking fork-deadlock, fixed by disabling UJITSO in
+        # on_startup — see CLAUDE.md 2026-06-21.)
 
-        # 8. Create workspace camera at 1280x720
+        # 8a. Create workspace camera at 1280x720
         print("--- Creating Workspace Camera (1280x720) ---")
         stage = omni.usd.get_context().get_stage()
         ws_prim_path = "/World/workspace_camera_sim"
