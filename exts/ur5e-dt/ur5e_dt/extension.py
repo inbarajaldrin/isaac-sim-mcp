@@ -566,11 +566,33 @@ MCP_TOOL_REGISTRY = {
         "description": "Same as quick_start, then loads the Vention workstation bench AND the Simple Room backdrop. One call builds the full robot+scene, the bench under the robot, and the room around it. quick_start itself is unchanged.",
         "parameters": {}
     },
+    "set_object_pose": {
+        "description": "Teleport a scene object under /World/Objects to an EXACT world pose. Use to set up controlled scenes — e.g. placing two parts close together to exercise neighbour-aware grasp gating. Applies via the same xformOp path randomize uses, so it persists under physics (object stays put on play). Mirror it with setup_pose_publisher so /objects_poses_sim reflects the new pose.",
+        "parameters": {
+            "object_name": {
+                "type": "string",
+                "description": "Object name under /World/Objects (e.g. 'u_brown')."
+            },
+            "position": {
+                "type": "array",
+                "description": "[x, y, z] world position in METERS."
+            },
+            "orientation": {
+                "type": "array",
+                "description": "Optional [w, x, y, z] quaternion. If given, overrides yaw_deg."
+            },
+            "yaw_deg": {
+                "type": "number",
+                "description": "Optional yaw rotation about world z in degrees (used when orientation is omitted). Default 0 (identity)."
+            }
+        }
+    },
 }
 
 # Handler method names for each tool (maps to self._cmd_<name> methods)
 MCP_HANDLERS = {
     "execute_python_code": "_cmd_execute_python_code",
+    "set_object_pose": "_cmd_set_object_pose",
     "play_scene": "_cmd_play_scene",
     "stop_scene": "_cmd_stop_scene",
     "assemble_objects": "_cmd_assemble_objects",
@@ -4527,6 +4549,36 @@ class DigitalTwin(omni.ext.IExt):
 
         print(f"[randomize_single] Placed '{object_name}' at world ({pose['position'][0]:.3f}, {pose['position'][1]:.3f}, {pose['position'][2]:.4f}), yaw={pose['yaw_deg']:.1f}°")
 
+    def set_object_pose(self, object_name, position, orientation=None, yaw_deg=None, folder_path="/World/Objects"):
+        """Teleport an object to an EXACT world pose. Mirrors randomize_single_object's apply path
+        (resolve parent-local pose, set xformOp:translate/orient via _set_obj_prim_pose) so the pose
+        persists under physics. Orientation precedence: orientation=[w,x,y,z] quat > yaw_deg about z >
+        identity. position is [x,y,z] in METERS (world). Returns the applied world position."""
+        import numpy as np
+        from scipy.spatial.transform import Rotation as R
+        stage = omni.usd.get_context().get_stage()
+        target_child_path = self._get_prim_path(object_name, folder_path)
+        target_child_prim = stage.GetPrimAtPath(target_child_path)
+        if not target_child_prim or not target_child_prim.IsValid():
+            raise ValueError(f"Object '{object_name}' not found at {target_child_path}")
+
+        # Resolve the world target into the child's parent-local frame (matches randomize_single_object).
+        parent_xform = UsdGeom.Xformable(target_child_prim.GetParent())
+        parent_world_transform = parent_xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        target_world = Gf.Vec3d(float(position[0]), float(position[1]), float(position[2]))
+        local_pos = parent_world_transform.GetInverse().Transform(target_world)
+
+        if orientation is not None:
+            quat_wxyz = np.array([float(q) for q in orientation], dtype=float)  # [w,x,y,z]
+        else:
+            yaw = float(yaw_deg) if yaw_deg is not None else 0.0
+            quat_xyzw = R.from_euler("xyz", [0.0, 0.0, yaw], degrees=True).as_quat()
+            quat_wxyz = np.roll(quat_xyzw, 1)
+
+        self._set_obj_prim_pose(target_child_path, local_pos, quat_wxyz)
+        print(f"[set_object_pose] '{object_name}' -> world ({target_world[0]:.3f}, {target_world[1]:.3f}, {target_world[2]:.4f})")
+        return target_world
+
     def sync_real_poses(self):
         """Subscribe to /objects_poses_real and update sim object poses to match."""
         import rclpy
@@ -5820,6 +5872,23 @@ class DigitalTwin(omni.ext.IExt):
         except Exception as e:
             traceback.print_exc()
             return {"status": "error", "message": f"Failed to randomize '{object_name}': {str(e)}"}
+
+    def _cmd_set_object_pose(self, object_name: str = None, position=None,
+                             orientation=None, yaw_deg=None) -> Dict[str, Any]:
+        """MCP handler: teleport an object under /World/Objects to an exact world pose."""
+        if not object_name:
+            return {"status": "error", "message": "object_name is required"}
+        if position is None or len(position) != 3:
+            return {"status": "error", "message": "position [x, y, z] (meters, world) is required"}
+        try:
+            world = self.set_object_pose(object_name, position, orientation=orientation, yaw_deg=yaw_deg)
+            return {
+                "status": "success",
+                "message": f"Set '{object_name}' to world ({float(world[0]):.3f}, {float(world[1]):.3f}, {float(world[2]):.4f})"
+            }
+        except Exception as e:
+            traceback.print_exc()
+            return {"status": "error", "message": f"Failed to set pose for '{object_name}': {str(e)}"}
 
     def _cmd_save_scene_state(self, json_file_path: str = None, output_dir: str = None) -> Dict[str, Any]:
         """Save scene state (object poses) to a JSON file.
