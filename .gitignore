@@ -86,3 +86,26 @@ resources/
 .codex
 .tug/
 exts/ur5e-dt/videos/
+
+# Working backups / regen artifacts (object-USD edit scratch — not source)
+*.geobak
+*.approxbak
+*.prebake
+*.bak
+*.bak-*
+*.sdf256.bak
+
+# NVIDIA streamer trace logs
+*.etli
+
+# rosbags (large; regenerated)
+exts/ur5e-dt/bags/
+
+# stray shell-redirect artifact
+=z_floor
+
+# Node tooling (not a JS project — stray install)
+node_modules/
+
+# Sandcastle agent-hooks / worktrees state (per-developer tooling)
+.sandcastle/

@@ -390,8 +390,11 @@ force-reload box (no re-cook)→`[]` (broken); +re-cook→3 cooked box colliders
 **Extension fix (the real fix at the source) — `add_objects()` now force-reloads cached layers** under the
 assembly folder before re-referencing (`Sdf.Layer.GetLoadedLayers()` → `Reload(force=True)` for layers whose
 `realPath` is under `folder_path`), so a stock `delete_objects`+`add_objects` picks up the latest on-disk CAD
-+ re-cooks. ⚠️ **UNVERIFIED on relaunch yet** — edit is on disk; confirm next clean launch (load CAD A →
-swap file → `delete/add` → physx probe shows CAD B). Do NOT `touch`/hot-reload mid-assembly to test it.
++ re-cooks. ✅ **VERIFIED on launch-imported code 2026-06-24** (commit `0a95aa5`): live fmb1, u_brown box-
+compound = 3 cooked boxes → drop `box_002` on disk → stock `delete_objects`+`add_objects` → omni.physx
+overlap probe shows exactly **2** cooked boxes (then restored → 3). Force-reload defeats the layer cache AND
+the stop/play re-cooks the new collider; the running process carried the patch from its launch import, not a
+hot-reload (`add_objects` introspected over the socket confirmed the force-reload + overlay blocks present).
 
 Scripts preserved (out of the ephemeral scratchpad): `.local/scripts/fmb-reload-verify/`
 (`run_fmb1_verbose2.sh` + `regrasp_verbose.sh`/`direct_verbose.sh` = the hardened per-part driver with
