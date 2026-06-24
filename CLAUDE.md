@@ -357,3 +357,42 @@ Diagnostics in `.local/scripts/`: `load_fmb4_standalone.py` (robot-free cook ben
 the `aic-dt` `--enable <ext>` boot-time cooking deadlock (a different trigger path — cooking during Kit's
 startup boot, not a runtime MCP call) likely shares the UJITSO cause; the postload-launcher workaround can
 probably be replaced by the same disable, but verify on `aic-dt` before removing it.
+
+## 2026-06-24 — USD LAYER CACHE: reloading new CAD needs force-reload + re-cook (and how to VERIFY it)
+
+**First-class operational gotcha (peer to UJITSO / gravity-disable).** Changing a part USD on disk and
+calling `delete_objects`→`add_objects` does **NOT** reliably load the new CAD. USD keeps an in-memory
+**layer registry**: `Sdf.Layer.FindOrOpen()` returns the *cached* layer instance (shared across stages), so
+the `AddReference` in `add_objects` silently re-composes **stale** content. `delete_objects` removes the
+prim/reference arc but **not** the cached layer. This is exactly the Kit **"source changed / pull latest CAD
+changes" popup** — if a human clears it, the timing of whether a programmatic `add_objects` saw old or new
+content is ambiguous. **Consequence:** any A/B that swapped USDs via `delete/add` *without* verifying the
+live load is **suspect** — several box-vs-SDF / "which CAD is wrong" verdicts this session were taken before
+this was understood and were not cleanly tested.
+
+**The reliable reload recipe (proven live 2026-06-24):**
+1. New CAD on disk → `Sdf.Layer.Reload(force=True)` on every cached layer under the assembly folder
+   (defeat the cache). `Reload(force=False)` only reloads if the mtime changed; `force=True` always re-reads.
+2. **THEN `delete_objects` + `add_objects`** (re-import + the stop/play in `_cmd_add_objects` **re-cooks** the
+   collider into PhysX). For an SDF-resolution change a fresh **relaunch** is safest.
+- **TRAP:** `Reload(force=True)` **alone** updates the USD prim live but leaves PhysX with **NO cooked
+  collider** — the recompose drops the old collision shape and nothing re-cooks the new one until step 2.
+  A USD-attribute read (e.g. `sdfResolution`) would say "works" while physics is actually broken. Always
+  follow force-reload with a re-cook.
+
+**VERIFY at the PHYSICS level, not just USD.** USD reads reflect the reloaded layer; they do **not** prove
+PhysX re-cooked. Use an `omni.physx` overlap scene-query — it returns the *cooked* collider prim(s):
+**SDF = 1 mesh collider** (`.../u_brown`), **box-compound = 3 `box_00X`** (`.../collisions/box_00X`). Probe:
+`.local/scripts/fmb-reload-verify/physx_collider_probe.py` (locate the `UsdPhysics.RigidBodyAPI` prim, get
+its world pose, `overlap_sphere` there, filter hits under the object). Verified end-to-end: SDF→1 mesh;
+force-reload box (no re-cook)→`[]` (broken); +re-cook→3 cooked box colliders.
+
+**Extension fix (the real fix at the source) — `add_objects()` now force-reloads cached layers** under the
+assembly folder before re-referencing (`Sdf.Layer.GetLoadedLayers()` → `Reload(force=True)` for layers whose
+`realPath` is under `folder_path`), so a stock `delete_objects`+`add_objects` picks up the latest on-disk CAD
++ re-cooks. ⚠️ **UNVERIFIED on relaunch yet** — edit is on disk; confirm next clean launch (load CAD A →
+swap file → `delete/add` → physx probe shows CAD B). Do NOT `touch`/hot-reload mid-assembly to test it.
+
+Scripts preserved (out of the ephemeral scratchpad): `.local/scripts/fmb-reload-verify/`
+(`run_fmb1_verbose2.sh` + `regrasp_verbose.sh`/`direct_verbose.sh` = the hardened per-part driver with
+grasp_points-publisher restart + topic gates; `reload_and_verify_fmb1.py`; `physx_collider_probe.py`).

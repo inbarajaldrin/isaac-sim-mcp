@@ -5028,22 +5028,19 @@ class DigitalTwin(omni.ext.IExt):
         mesh_path = self._get_prim_path(object_name, folder_path)
         mesh_prim = stage.GetPrimAtPath(mesh_path)
         if mesh_prim and mesh_prim.IsValid():
-            approx = prim_params["collision_approximation"]
-            UsdPhysics.CollisionAPI.Apply(mesh_prim)
-            mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
-            if approx == "sdf":
-                mesh_collision_api.CreateApproximationAttr(PhysxSchema.Tokens.sdf)
-                sdf_api = PhysxSchema.PhysxSDFMeshCollisionAPI.Apply(mesh_prim)
-                sdf_api.CreateSdfResolutionAttr(self._sdf_resolution)
-            else:
-                mesh_collision_api.CreateApproximationAttr(approx)
-            rest_offset = prim_params["rest_offset"]
-            physx_collision_api = PhysxSchema.PhysxCollisionAPI.Apply(mesh_prim)
-            physx_collision_api.CreateContactOffsetAttr().Set(self._contact_offset)
-            physx_collision_api.CreateRestOffsetAttr().Set(rest_offset)
-            angular_damping = prim_params["angular_damping"]
-            physx_rb_api = PhysxSchema.PhysxRigidBodyAPI.Apply(mesh_prim)
-            physx_rb_api.CreateAngularDampingAttr().Set(angular_damping)
+            # Safety net only — the USD is the source of truth. Don't overwrite a USD-baked collider,
+            # and don't re-author restOffset/contactOffset/angularDamping (the 2026-06-21 strip moved
+            # all object physics to the USD / PhysX defaults). Author a default sdf collider iff the
+            # USD lacks one.
+            if not mesh_prim.GetAttribute("physics:approximation").HasAuthoredValue():
+                approx = prim_params["collision_approximation"]
+                UsdPhysics.CollisionAPI.Apply(mesh_prim)
+                mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
+                if approx == "sdf":
+                    mesh_collision_api.CreateApproximationAttr(PhysxSchema.Tokens.sdf)
+                    PhysxSchema.PhysxSDFMeshCollisionAPI.Apply(mesh_prim).CreateSdfResolutionAttr(self._sdf_resolution)
+                else:
+                    mesh_collision_api.CreateApproximationAttr(approx)
 
         del self._hidden_objects[object_name]
         print(f"Unhidden (restored) object: {object_name}")
@@ -5098,6 +5095,26 @@ class DigitalTwin(omni.ext.IExt):
 
         print(f"Adding objects from local folder: {folder_path}")
 
+        # DEFEAT THE USD LAYER CACHE before re-referencing the assets. When a referenced
+        # <obj>.usd* / <obj>_physics.usd* changes on disk (e.g. a fresh CAD export, or swapping
+        # the collider overlay), Sdf keeps the OLD layer in its in-memory registry — SdfLayer.
+        # FindOrOpen returns the cached instance, so the AddReference calls below would silently
+        # re-compose STALE content (this is the Kit "source changed / pull latest CAD" prompt).
+        # delete_objects removes the prim/reference arc but NOT the cached layer, so add_objects
+        # alone is not enough. Force-reload every already-cached layer under this assembly folder
+        # so the import picks up the current on-disk CAD. This is USD-level only; the stop/play in
+        # _cmd_add_objects re-cooks the new collider into PhysX (force-reload ALONE would leave the
+        # body with no cooked collider — verified via the omni.physx overlap probe). See CLAUDE.md
+        # "USD layer cache" note and .local/scripts/fmb-reload-verify/.
+        try:
+            from pxr import Sdf
+            _folder_rp = os.path.realpath(folder_path)
+            for _lyr in Sdf.Layer.GetLoadedLayers():
+                if _lyr.realPath and os.path.realpath(_lyr.realPath).startswith(_folder_rp + os.sep):
+                    _lyr.Reload(force=True)
+        except Exception as _e:
+            carb.log_warn(f"add_objects: USD layer force-reload skipped: {_e}")
+
         # Get the current stage
         stage = omni.usd.get_context().get_stage()
 
@@ -5106,9 +5123,14 @@ class DigitalTwin(omni.ext.IExt):
         if not stage.GetPrimAtPath(target_path):
             UsdGeom.Xform.Define(stage, target_path)
 
-        # List USD files from local directory
-        usd_files = sorted([f for f in os.listdir(folder_path)
-                            if f.endswith(('.usd', '.usda', '.usdc'))])
+        # List USD files from local directory. A `<obj>_physics.usd*` sidecar is a PHYSICS OVERLAY
+        # (references the geometry asset + authors the collider/rigid-body); it is NOT a separate
+        # object. Iterate only the geometry files; the overlay is selected per-object below. This keeps
+        # the cad->usd geometry asset collider-free and the collision shape isolated in the overlay.
+        all_usd = [f for f in os.listdir(folder_path)
+                   if f.endswith(('.usd', '.usda', '.usdc'))]
+        overlay_set = {f for f in all_usd if os.path.splitext(f)[0].endswith('_physics')}
+        usd_files = sorted([f for f in all_usd if f not in overlay_set])
 
         if usd_files:
             print(f"Found {len(usd_files)} USD files")
@@ -5124,10 +5146,18 @@ class DigitalTwin(omni.ext.IExt):
 
             # Import each USD file with positioning
             for i, usd_file in enumerate(usd_files):
-                usd_file_path = "file://" + os.path.join(folder_path, usd_file)
-
                 # Create a child prim under the selected path
                 base_name = os.path.splitext(usd_file)[0]
+                ext = os.path.splitext(usd_file)[1]
+
+                # Prefer the physics overlay if one exists: it references the geometry asset and
+                # carries the collider/rigid-body, so the loaded object = geometry + tuned physics
+                # while the cad->usd geometry file stays collision-free. Falls back to the bare
+                # geometry file (legacy inline-collider assets keep working unchanged).
+                overlay_name = f"{base_name}_physics{ext}"
+                ref_file = overlay_name if overlay_name in overlay_set else usd_file
+                usd_file_path = "file://" + os.path.join(folder_path, ref_file)
+
                 prim_path = f"{target_path}/{base_name}"
 
                 # Skip if prim already exists
@@ -5218,18 +5248,25 @@ class DigitalTwin(omni.ext.IExt):
                     if child_name == "PhysicsMaterial":
                         continue
                     category = type_map.get(child_name, 'block')
-                    approx = self._get_prim_params(category)["collision_approximation"]
                     mesh_path = self._get_prim_path(child_name, target_path)
                     mesh_prim = stage.GetPrimAtPath(mesh_path)
                     if mesh_prim and mesh_prim.IsValid():
-                        UsdPhysics.CollisionAPI.Apply(mesh_prim)
-                        mc = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
-                        if approx == "sdf":
-                            mc.CreateApproximationAttr(PhysxSchema.Tokens.sdf)
-                            PhysxSchema.PhysxSDFMeshCollisionAPI.Apply(mesh_prim).CreateSdfResolutionAttr(self._sdf_resolution)
+                        # SAFETY NET ONLY. The stripped cad->usd USDs bake their own sdf collider +
+                        # resolution; the USD is the source of truth. Do NOT overwrite a USD-authored
+                        # collider (re-authoring sdfResolution here is what silently clobbered base3's
+                        # USD-set 512 back to 256). Author a default collider ONLY if the USD lacks one.
+                        if mesh_prim.GetAttribute("physics:approximation").HasAuthoredValue():
+                            print(f"  collider on {mesh_path} [{category}] = USD-baked, left untouched")
                         else:
-                            mc.CreateApproximationAttr(approx)
-                        print(f"  {approx} collider on {mesh_path} [{category}] (all other physics = PhysX default)")
+                            approx = self._get_prim_params(category)["collision_approximation"]
+                            UsdPhysics.CollisionAPI.Apply(mesh_prim)
+                            mc = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
+                            if approx == "sdf":
+                                mc.CreateApproximationAttr(PhysxSchema.Tokens.sdf)
+                                PhysxSchema.PhysxSDFMeshCollisionAPI.Apply(mesh_prim).CreateSdfResolutionAttr(self._sdf_resolution)
+                            else:
+                                mc.CreateApproximationAttr(approx)
+                            print(f"  {approx} collider AUTHORED on {mesh_path} [{category}] (USD had none)")
                     else:
                         print(f"  Warning: Mesh prim not found at {mesh_path}")
         else:

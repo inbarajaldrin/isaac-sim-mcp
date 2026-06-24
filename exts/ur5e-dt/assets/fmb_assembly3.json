@@ -25,54 +25,6 @@
       }
     },
     {
-      "name": "fork_orange",
-      "type": "object",
-      "subtype": "block",
-      "assembly_order": 3,
-      "position": {
-        "x": 0.0,
-        "y": 0.036,
-        "z": 0.036
-      },
-      "rotation": {
-        "rpy": {
-          "x": -1.5707963267948966,
-          "y": 0.017453292519943295,
-          "z": 0.0
-        },
-        "quaternion": {
-          "x": -0.707078,
-          "y": 0.006180,
-          "z": 0.006180,
-          "w": 0.707078
-        }
-      }
-    },
-    {
-      "name": "fork_yellow",
-      "type": "object",
-      "subtype": "block",
-      "assembly_order": 4,
-      "position": {
-        "x": 0.0,
-        "y": -0.036,
-        "z": 0.036
-      },
-      "rotation": {
-        "rpy": {
-          "x": -1.5707963267948966,
-          "y": 0.0,
-          "z": 0.0
-        },
-        "quaternion": {
-          "x": -0.7071067811865476,
-          "y": 0.0,
-          "z": 0.0,
-          "w": 0.7071067811865476
-        }
-      }
-    },
-    {
       "name": "line_brown",
       "type": "object",
       "subtype": "block",
@@ -80,7 +32,7 @@
       "position": {
         "x": 0.0255,
         "y": 0.0,
-        "z": 0.024
+        "z": 0.0234
       },
       "rotation": {
         "rpy": {
@@ -104,7 +56,7 @@
       "position": {
         "x": -0.0255,
         "y": 0.0,
-        "z": 0.024
+        "z": 0.0234
       },
       "rotation": {
         "rpy": {
@@ -117,6 +69,54 @@
           "y": 0.0,
           "z": 0.0,
           "w": 1.0
+        }
+      }
+    },
+    {
+      "name": "fork_orange",
+      "type": "object",
+      "subtype": "block",
+      "assembly_order": 3,
+      "position": {
+        "x": 0.0,
+        "y": 0.036,
+        "z": 0.035
+      },
+      "rotation": {
+        "rpy": {
+          "x": -1.5707963267948966,
+          "y": 0.017453292519943295,
+          "z": 0.0
+        },
+        "quaternion": {
+          "x": -0.707078,
+          "y": 0.00618,
+          "z": 0.00618,
+          "w": 0.707078
+        }
+      }
+    },
+    {
+      "name": "fork_yellow",
+      "type": "object",
+      "subtype": "block",
+      "assembly_order": 4,
+      "position": {
+        "x": 0.0,
+        "y": -0.036,
+        "z": 0.035
+      },
+      "rotation": {
+        "rpy": {
+          "x": -1.5707963267948966,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "quaternion": {
+          "x": -0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
         }
       }
     }
