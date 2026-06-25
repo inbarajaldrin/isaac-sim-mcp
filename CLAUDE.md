@@ -399,3 +399,21 @@ hot-reload (`add_objects` introspected over the socket confirmed the force-reloa
 Scripts preserved (out of the ephemeral scratchpad): `.local/scripts/fmb-reload-verify/`
 (`run_fmb1_verbose2.sh` + `regrasp_verbose.sh`/`direct_verbose.sh` = the hardened per-part driver with
 grasp_points-publisher restart + topic gates; `reload_and_verify_fmb1.py`; `physx_collider_probe.py`).
+
+## 2026-06-25 — RELEASE PHASE: use `pre_grasp` (~35mm), NOT `pre_release` (~62mm) — wide open disturbs seated parts
+
+**Consumer-side assembly-reliability fact (orthogonal to any ros-mcp-server merge).** The final per-part
+**release** step (`control_gripper --phase …` after `insert`) was using **`pre_release`**, whose DYNAMIC
+*clearance* width opens the gripper WIDE (~62mm for u_brown) to clear the assembly for retract. That wide/fast
+open **knocks the just-seated part — or a neighbour — loose**, so `verify_assembly` then reports it not-seated.
+Symptom: `run_fmb1.sh` flaky **0–1/4** at 4/4, a DIFFERENT part dropping each run (line_green / u_orange /
+inverted_u_yellow), every primitive returning `success` (it's a post-release physics disturbance, not a grasp/
+insert failure). This masquerades as a regression but is pure release-width noise.
+
+**Fix (applied):** the per-part drivers' final release now uses **`--phase pre_grasp`** (~35mm grasp-approach
+width — opens just enough to release the ~21mm-gripped part without disturbing the assembly). `.local/scripts/
+regrasp_part.sh` (~L26) + `direct_part.sh` (~L21); `run_fmb1/2/3.sh` share these drivers so all benefit. The
+hardened `*_verbose.sh` runners already used `pre_grasp` and got **3/3 4/4** on box-fmb1 AND fmb3. **Do NOT
+revert to `pre_release` for "clearance fidelity" — 35mm clears fine here and the wide open only adds noise.**
+(If a future tight assembly genuinely needs a wider retract, gate the wide open on actual clearance, don't
+blanket-widen.) Net: removes a confounding noise source — makes both A/B arms cleaner, not less faithful.
