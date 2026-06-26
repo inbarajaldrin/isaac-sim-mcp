@@ -6168,7 +6168,7 @@ class DigitalTwin(omni.ext.IExt):
             "HOME": os.environ.get("HOME", str(Path.home())),
             "USER": os.environ.get("USER", ""),
             "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "ROS_DOMAIN_ID": os.environ.get("ROS_DOMAIN_ID", "7"),
+            "ROS_DOMAIN_ID": os.environ.get("ROS_DOMAIN_ID", "0"),
         }
         timeout = 240 if action == "up" else 60
 

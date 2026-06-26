@@ -28,7 +28,7 @@ else
   ROBOT_IP="${ROBOT_IP:-192.168.56.101}"   # URSim container IP on ursim_net
 fi
 DASH_HOST="${DASH_HOST:-127.0.0.1}"        # dashboard via forwarded :29999
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-7}" # MUST match every ROS client (see CLAUDE.md)
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" # MUST match every ROS client (see CLAUDE.md)
 CONTAINER="${CONTAINER:-ursim}"
 DRIVER_LOG="${DRIVER_LOG:-/tmp/ur_driver.log}"
 DRIVER_PIDFILE="${DRIVER_PIDFILE:-/tmp/ur_driver.pgid}"
